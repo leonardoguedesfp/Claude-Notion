@@ -534,10 +534,11 @@ class DashboardPage(QWidget):
             and (self._days_remaining(str(r.get("prazo_fatal", "") or "")) or 999) <= 3
         )
 
-        self._card_processos.findChildren(QLabel)[0].setText(str(active_proc))
-        self._card_tarefas.findChildren(QLabel)[0].setText(str(tarefas_hoje))
-        self._card_criticos.findChildren(QLabel)[0].setText(str(criticos))
-        self._card_clientes.findChildren(QLabel)[0].setText(str(total_clientes))
+        # BUG-V1: use update_value() which targets the stored _val_lbl attribute
+        self._card_processos.update_value(str(active_proc))
+        self._card_tarefas.update_value(str(tarefas_hoje))
+        self._card_criticos.update_value(str(criticos))
+        self._card_clientes.update_value(str(total_clientes))
 
         # Update last-sync label from the most recent sync across all bases
         self._update_last_sync_label()

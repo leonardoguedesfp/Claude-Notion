@@ -23,6 +23,11 @@ KEYRING_USERNAME: Final = "notion_token"
 # ---------------------------------------------------------------------------
 
 DATA_SOURCES: Final[dict[str, str]] = {
+    # BUG-N3: These are data_source_ids (same UUID as the Notion database URL).
+    # They are passed directly to /data_sources/{id}/query (API 2025-09-03).
+    # Empirically validated: Processos returned 1108 pages in production.
+    # To regenerate: GET https://api.notion.com/v1/databases/{ID} → id field.
+    # See tests/test_endpoint_data_source.py for the integration smoke test.
     "Processos": os.getenv("NOTION_DB_PROCESSOS", "5e93b734-4043-4c89-a513-5e00a14081bb"),
     "Clientes":  os.getenv("NOTION_DB_CLIENTES",  "939e5dcf-51bd-4ffa-a28e-0313899fd229"),
     "Tarefas":   os.getenv("NOTION_DB_TAREFAS",   "3a8bb311-5c1b-42ac-a3b2-859b75911e91"),

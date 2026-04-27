@@ -11,6 +11,30 @@ from notion_bulk_edit.encoders import format_br_date, format_brl
 from notion_bulk_edit.schemas import PropSpec, colunas_visiveis, get_prop, is_nao_editavel
 from notion_rpadv.cache import db as cache_db
 
+# BUG-V3: title key used when resolving relation page_ids to display names
+_TITLE_KEY_BY_BASE: dict[str, str] = {
+    "Clientes": "nome",
+    "Processos": "cnj",
+    "Tarefas": "titulo",
+    "Catalogo": "titulo",
+}
+
+
+def _resolve_relation(conn: sqlite3.Connection, page_ids: list, target_base: str) -> str:
+    """BUG-V3: resolve a list of page_ids to display names via the local cache."""
+    if not page_ids or not target_base:
+        return ""
+    title_key = _TITLE_KEY_BY_BASE.get(target_base, "nome")
+    names: list[str] = []
+    for pid in page_ids[:3]:
+        rec = cache_db.get_record(conn, target_base, str(pid))
+        if rec is None:
+            names.append("—")
+        else:
+            names.append(str(rec.get(title_key) or "—"))
+    extra = f" +{len(page_ids) - 3}" if len(page_ids) > 3 else ""
+    return ", ".join(names) + extra
+
 # Background colours (ARGB strings, styled via the app palette or hard-coded).
 _COLOR_DIRTY = QColor("#FFF9C4")       # pale yellow for dirty cells
 _COLOR_ROW_ALT = QColor("#F5F5F5")    # alternating row tint
@@ -20,6 +44,9 @@ _COLOR_ROW_EVEN = QColor("#FFFFFF")
 def _display_value(spec: PropSpec, raw: Any) -> str:
     """Convert a raw Python value to a human-readable string for DisplayRole."""
     if raw is None:
+        return ""
+    # BUG-V4: empty list should render as blank, not '[]'
+    if isinstance(raw, list) and len(raw) == 0:
         return ""
     tipo = spec.tipo
     if tipo == "number":
@@ -40,6 +67,11 @@ def _display_value(spec: PropSpec, raw: Any) -> str:
     if tipo == "checkbox":
         return "✓" if raw else "✗"
     if tipo == "multi_select":
+        if isinstance(raw, list):
+            return ", ".join(str(v) for v in raw)
+        return str(raw)
+    # BUG-V3: relation — raw is list[page_id]; display is resolved in data() below
+    if tipo == "relation":
         if isinstance(raw, list):
             return ", ".join(str(v) for v in raw)
         return str(raw)
@@ -152,6 +184,9 @@ class BaseTableModel(QAbstractTableModel):
 
         if role == Qt.ItemDataRole.DisplayRole:
             if spec is not None:
+                # BUG-V3: for relation columns, resolve page_ids to readable names
+                if spec.tipo == "relation" and spec.target_base and isinstance(raw, list):
+                    return _resolve_relation(self._conn, raw, spec.target_base)
                 return _display_value(spec, raw)
             return str(raw) if raw is not None else ""
 

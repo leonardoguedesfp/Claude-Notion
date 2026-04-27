@@ -195,10 +195,12 @@ class MainWindow(QMainWindow):
             self._add_page(_PAGE_LOGS, logs)
 
         # BUG-19: pass sync_manager to ConfiguracoesPage
+        # BUG-V7: pass conn so ConfiguracoesPage can show real sync timestamps
         config = ConfiguracoesPage(
             current_theme="dark" if self._dark else "light",
             bindings=dict(DEFAULT_SHORTCUTS),
             sync_manager=self._sync_manager,
+            conn=self._conn,
             dark=self._dark,
         )
         config.theme_changed.connect(self._on_theme_changed)
@@ -256,6 +258,10 @@ class MainWindow(QMainWindow):
         # BUG-11: propagate new token to facade and sync_manager
         self._facade._token = token
         self._sync_manager._token = token
+        # BUG-N7: propagate token to all pages that cache it
+        for page in self._pages.values():
+            if hasattr(page, "_token"):
+                page._token = token  # type: ignore[union-attr]
         self._push_toast("Token atualizado com sucesso.", "success")
 
     # ------------------------------------------------------------------

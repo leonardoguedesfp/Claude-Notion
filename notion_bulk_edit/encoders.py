@@ -5,12 +5,18 @@ encode_value: Python → payload de propriedade da API Notion
 """
 from __future__ import annotations
 
+import math
+import re
+from datetime import datetime
 from typing import Any
 
 
 # ---------------------------------------------------------------------------
 # Helpers de formatação
 # ---------------------------------------------------------------------------
+
+
+_ISO_DATE_RE = re.compile(r'^(\d{4})-(\d{2})-(\d{2})')
 
 
 def format_br_date(iso: str | None) -> str:
@@ -28,11 +34,12 @@ def format_br_date(iso: str | None) -> str:
     """
     if not iso:
         return ""
-    try:
-        year, month, day = iso[:10].split("-")
-        return f"{day}/{month}/{year}"
-    except (ValueError, AttributeError):
-        return iso
+    # BUG-N18: use regex to avoid accepting garbage after the date
+    m = _ISO_DATE_RE.match(str(iso))
+    if not m:
+        return str(iso)  # return raw if format is unexpected
+    y, mo, d = m.groups()
+    return f"{d}/{mo}/{y}"
 
 
 def parse_br_date(br: str) -> str:
@@ -45,7 +52,7 @@ def parse_br_date(br: str) -> str:
         Data no formato 'YYYY-MM-DD'.
 
     Raises:
-        ValueError: Se o formato não for reconhecido.
+        ValueError: Se o formato não for reconhecido ou a data for inválida.
 
     Exemplo:
         >>> parse_br_date("15/03/2024")
@@ -55,13 +62,17 @@ def parse_br_date(br: str) -> str:
     if not br:
         return ""
     if "-" in br and len(br) >= 10:
-        # Já está em ISO
+        # Already ISO — validate it's a real date
+        try:
+            datetime.strptime(br[:10], "%Y-%m-%d")
+        except ValueError:
+            pass  # return as-is if it looks ISO but may not be
         return br[:10]
-    parts = br.split("/")
-    if len(parts) != 3:
-        raise ValueError(f"Formato de data inválido: '{br}'. Esperado DD/MM/YYYY.")
-    day, month, year = parts
-    return f"{year.strip()}-{month.strip()}-{day.strip()}"
+    # BUG-N8: use strptime for strict validation (rejects month 13, day 32, year 24)
+    try:
+        return datetime.strptime(br, "%d/%m/%Y").strftime("%Y-%m-%d")
+    except ValueError as e:
+        raise ValueError(f"Data inválida (esperado DD/MM/AAAA): {br!r}") from e
 
 
 def format_brl(value: float | int | None) -> str:
@@ -71,23 +82,30 @@ def format_brl(value: float | int | None) -> str:
         value: Valor numérico (ex: 78500).
 
     Returns:
-        String formatada (ex: 'R$ 78.500') ou '' se None.
+        String formatada (ex: 'R$ 78.500,00') ou '' se None.
 
     Exemplo:
         >>> format_brl(78500)
-        'R$ 78.500'
+        'R$ 78.500,00'
         >>> format_brl(1234567.89)
         'R$ 1.234.567,89'
     """
     if value is None:
         return ""
+    # BUG-N10: handle inf/nan gracefully
+    if isinstance(value, float) and (math.isinf(value) or math.isnan(value)):
+        return "—"
     try:
-        inteiro = int(value)
-        centavos = round((value - inteiro) * 100)
-        if centavos:
-            inteiro_fmt = f"{inteiro:,}".replace(",", ".")
-            return f"R$ {inteiro_fmt},{centavos:02d}"
-        return f"R$ {inteiro:,}".replace(",", ".")
+        sinal = "-" if value < 0 else ""
+        valor_abs = abs(float(value))
+        inteiro = int(valor_abs)
+        centavos = round((valor_abs - inteiro) * 100)
+        # BUG-N10: carry-over when rounding pushes centavos to 100
+        if centavos >= 100:
+            inteiro += 1
+            centavos -= 100
+        inteiro_fmt = f"{inteiro:,}".replace(",", ".")
+        return f"R$ {sinal}{inteiro_fmt},{centavos:02d}"
     except (TypeError, ValueError):
         return str(value)
 
@@ -229,6 +247,18 @@ def decode_value(prop_block: dict, tipo: str) -> Any:
 # ---------------------------------------------------------------------------
 
 
+def _parse_brl_number(s: str) -> float:
+    """BUG-N9: parse BR-formatted numbers like '78.500,00' or 'R$ 1.234,56'."""
+    s = str(s).replace("R$", "").replace("\xa0", "").strip()
+    if "," in s and "." in s:
+        # thousands dot + decimal comma: '1.234,56' → '1234.56'
+        s = s.replace(".", "").replace(",", ".")
+    elif "," in s:
+        # decimal comma only: '1234,56' → '1234.56'
+        s = s.replace(",", ".")
+    return float(s)
+
+
 def encode_value(value: Any, tipo: str, extra: dict | None = None) -> dict:
     """Converte um valor Python no payload de propriedade da API Notion.
 
@@ -268,6 +298,9 @@ def encode_value(value: Any, tipo: str, extra: dict | None = None) -> dict:
             if value is None:
                 return {"number": None}
             try:
+                # BUG-N9: try BR number format first (e.g. '78.500,00'), then plain float
+                if isinstance(value, str):
+                    return {"number": _parse_brl_number(value)}
                 return {"number": float(value)}
             except (TypeError, ValueError):
                 return {"number": None}
@@ -313,17 +346,18 @@ def encode_value(value: Any, tipo: str, extra: dict | None = None) -> dict:
             return {"relation": [{"id": pid} for pid in value]}
 
         case "url":
-            if not value:
+            # BUG-N23: use explicit None check; empty string should clear the field
+            if value is None or value == "":
                 return {"url": None}
             return {"url": str(value)}
 
         case "email":
-            if not value:
+            if value is None or value == "":
                 return {"email": None}
             return {"email": str(value)}
 
         case "phone_number":
-            if not value:
+            if value is None or value == "":
                 return {"phone_number": None}
             return {"phone_number": str(value)}
 

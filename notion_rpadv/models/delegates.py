@@ -16,15 +16,17 @@ from PySide6.QtWidgets import (
     QApplication,
 )
 
+from notion_bulk_edit.config import NOTION_USERS
 from notion_bulk_edit.schemas import PropSpec, get_prop
 
 # Types that cannot be edited via a delegate.
+# BUG-N11: 'people' removed — has a simple combo editor now.
+# 'relation' remains non-editable until a proper picker is built.
 _NON_EDITABLE_TIPOS = frozenset(
     {
         "rollup",
         "formula",
         "relation",
-        "people",
         "created_time",
         "last_edited_time",
         "created_by",
@@ -32,6 +34,11 @@ _NON_EDITABLE_TIPOS = frozenset(
         "files",
     }
 )
+
+# BUG-N11: people editor options derived from NOTION_USERS
+_PEOPLE_OPTIONS: list[tuple[str, str]] = [
+    (uid, info.get("name", uid)) for uid, info in NOTION_USERS.items()
+]
 
 # Fallback chip colour when cor_por_valor has no match.
 _CHIP_DEFAULT_BG = QColor("#E0E0E0")
@@ -131,6 +138,14 @@ class PropDelegate(QStyledItemDelegate):
             le.setFont(font)
             return le
 
+        # BUG-N11: simple combo editor for people fields
+        if tipo == "people":
+            combo = QComboBox(parent)
+            combo.addItem("(nenhum)", None)
+            for uid, name in _PEOPLE_OPTIONS:
+                combo.addItem(name, uid)
+            return combo
+
         return None
 
     def setEditorData(self, editor: QWidget, index: QModelIndex) -> None:
@@ -144,6 +159,17 @@ class PropDelegate(QStyledItemDelegate):
         if tipo == "select" and isinstance(editor, QComboBox):
             val = str(raw) if raw is not None else ""
             idx = editor.findText(val)
+            # BUG-N17: if value not in options (legacy), add it to avoid silent data loss
+            if idx < 0 and val:
+                editor.addItem(f"{val} (legado)", val)
+                idx = editor.count() - 1
+            editor.setCurrentIndex(idx if idx >= 0 else 0)
+            return
+
+        if tipo == "people" and isinstance(editor, QComboBox):
+            # raw is a list of user IDs; show first user in the combo
+            first_uid = raw[0] if isinstance(raw, list) and raw else (raw or None)
+            idx = editor.findData(first_uid) if first_uid else 0
             editor.setCurrentIndex(idx if idx >= 0 else 0)
             return
 
@@ -192,7 +218,14 @@ class PropDelegate(QStyledItemDelegate):
         tipo = spec.tipo
 
         if tipo == "select" and isinstance(editor, QComboBox):
-            value: Any = editor.currentText() or None
+            # Use userData if set (for legacy items), otherwise currentText
+            value: Any = editor.currentData() if editor.currentData() is not None else editor.currentText() or None
+            model.setData(index, value, Qt.ItemDataRole.EditRole)
+            return
+
+        if tipo == "people" and isinstance(editor, QComboBox):
+            uid = editor.currentData()
+            value = [uid] if uid else []
             model.setData(index, value, Qt.ItemDataRole.EditRole)
             return
 

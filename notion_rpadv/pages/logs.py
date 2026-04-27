@@ -295,4 +295,13 @@ class LogsPage(QWidget):
         return handler
 
     def _on_revert_finished(self, success: bool, message: str) -> None:
+        # BUG-N19: distinguish success from failure instead of always refreshing silently
+        from notion_rpadv.widgets.toast import ToastManager
+        toast = self.findChild(ToastManager)
+        if success:
+            if toast:
+                toast.push("Reversão aplicada com sucesso.", kind="success")
+        else:
+            if toast:
+                toast.push(f"Erro ao reverter: {message}", kind="error")
         self.refresh()

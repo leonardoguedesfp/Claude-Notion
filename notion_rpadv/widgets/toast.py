@@ -165,7 +165,7 @@ class Toast(QFrame):
     # ------------------------------------------------------------------
 
     def slide_in(self, final_pos: QPoint) -> None:
-        """Animate the toast sliding up from below *final_pos*."""
+        """Animate the toast sliding up from below *final_pos* (first show only)."""
         start_pos = QPoint(final_pos.x(), final_pos.y() + 60)
         self.move(start_pos)
         self.show()
@@ -178,6 +178,13 @@ class Toast(QFrame):
         self._anim.start()
 
         self._timer.start()
+
+    def move_to(self, pos: QPoint) -> None:
+        """BUG-N15: reposition without re-animating or resetting the dismiss timer."""
+        if self._anim and self._anim.state() == QPropertyAnimation.State.Running:
+            self._anim.setEndValue(pos)
+        else:
+            self.move(pos)
 
     # ------------------------------------------------------------------
     # Internal
@@ -248,6 +255,8 @@ class ToastManager:
         ph = self._parent.height()
 
         bottom_y = ph - _TOAST_MARGIN_BOTTOM
+        # BUG-N15: newest toast (last in stack) uses slide_in; older ones use move_to
+        newest = self._stack[-1] if self._stack else None
         for toast in reversed(self._stack):
             if not isValid(toast):
                 continue
@@ -255,6 +264,9 @@ class ToastManager:
             th = toast.height()
             x = pw - _TOAST_WIDTH - _TOAST_MARGIN_RIGHT
             y = bottom_y - th
-            final_pos = QPoint(x, y)
-            toast.slide_in(final_pos)
+            pos = QPoint(x, y)
+            if toast is newest:
+                toast.slide_in(pos)
+            else:
+                toast.move_to(pos)
             bottom_y = y - _TOAST_GAP

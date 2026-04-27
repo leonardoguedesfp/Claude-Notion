@@ -96,8 +96,9 @@ class BaseTablePage(QWidget):
         # Dirty tracking
         self._model.dirty_changed.connect(self._on_dirty_changed)
 
-        # Reload → update meta count
+        # Reload → update meta count + resize columns
         self._model.modelReset.connect(self._update_meta)
+        self._model.modelReset.connect(self._resize_columns_to_header)
 
         # BUG-06: per-column active filter state
         self._active_filters: dict[str, set[str]] = {}
@@ -128,7 +129,12 @@ class BaseTablePage(QWidget):
         self._table.setSelectionMode(
             QAbstractItemView.SelectionMode.SingleSelection
         )
-        self._table.horizontalHeader().setStretchLastSection(True)
+        # BUG-V2: give each column a minimum width based on header text
+        header = self._table.horizontalHeader()
+        header.setMinimumSectionSize(80)
+        header.setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        header.setSectionResizeMode(header.ResizeMode.Interactive)
+        header.setStretchLastSection(False)
         self._table.verticalHeader().setDefaultSectionSize(32)
         self._table.setShowGrid(False)
         self._table.setSortingEnabled(True)
@@ -381,6 +387,19 @@ class BaseTablePage(QWidget):
         n = self._model.rowCount()
         self._toolbar_meta.setText(f"{n} registros")
 
+    def _resize_columns_to_header(self) -> None:
+        """BUG-V2: set each column width to at least the header text width."""
+        if not hasattr(self, "_table"):
+            return
+        header = self._table.horizontalHeader()
+        fm = header.fontMetrics()
+        for col in range(self._model.columnCount()):
+            label = self._model.headerData(col, Qt.Orientation.Horizontal) or ""
+            min_w = max(80, fm.horizontalAdvance(str(label)) + 24)
+            if header.sectionSize(col) < min_w:
+                header.resizeSection(col, min_w)
+            header.setSectionResizeMode(col, header.ResizeMode.Interactive)
+
     # ------------------------------------------------------------------
     # Layout override — keep save bar overlaid at bottom
     # ------------------------------------------------------------------
@@ -471,7 +490,6 @@ class BaseTablePage(QWidget):
         )
 
         schema = SCHEMAS.get(self._base, {})
-        visible_keys = list(schema.keys())
 
         for key, spec in schema.items():
             if spec.tipo in ("select", "multi_select") and spec.opcoes:

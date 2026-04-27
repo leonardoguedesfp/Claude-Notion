@@ -20,6 +20,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+import sqlite3
+
 from notion_bulk_edit.config import (
     APP_BUILD,
     APP_NAME,
@@ -128,6 +130,7 @@ class ConfiguracoesPage(QWidget):
         current_theme: str = "light",
         bindings: dict[str, str] | None = None,
         sync_manager: Any = None,  # BUG-19: injected SyncManager
+        conn: sqlite3.Connection | None = None,
         dark: bool = False,
         parent: QWidget | None = None,
     ) -> None:
@@ -137,10 +140,13 @@ class ConfiguracoesPage(QWidget):
         self._current_theme = current_theme
         self._bindings = dict(bindings or DEFAULT_SHORTCUTS)
         self._sync_labels: dict[str, QLabel] = {}
-        # BUG-19: store sync_manager for "Sincronizar agora" button
         self._sync_manager = sync_manager
+        self._conn = conn
 
         self._build_ui()
+        # BUG-V7: show real sync timestamps from DB at init
+        if conn is not None:
+            self._refresh_sync_labels(conn)
 
     # ------------------------------------------------------------------
     # UI construction
@@ -410,6 +416,9 @@ class ConfiguracoesPage(QWidget):
 
     def _make_sync_handler(self, base: str) -> Callable[[], None]:
         def handler() -> None:
+            # BUG-N6: actually trigger the sync, not just update label text
+            if self._sync_manager:
+                self._sync_manager.sync_base(base)
             lbl = self._sync_labels.get(base)
             if lbl:
                 lbl.setText("Sincronizando…")
@@ -435,6 +444,16 @@ class ConfiguracoesPage(QWidget):
             lbl.setText(dt.strftime("%d/%m/%Y %H:%M"))
         elif lbl:
             lbl.setText("Nunca")
+
+    def _refresh_sync_labels(self, conn: sqlite3.Connection) -> None:
+        """BUG-V7: populate sync labels from DB at startup."""
+        from notion_rpadv.cache import db as cache_db
+        for base in DATA_SOURCES:
+            try:
+                ts = cache_db.get_last_sync(conn, base)
+                self.update_sync_label(base, ts)
+            except Exception:  # noqa: BLE001
+                pass
 
     # ------------------------------------------------------------------
     # Widget factory helpers

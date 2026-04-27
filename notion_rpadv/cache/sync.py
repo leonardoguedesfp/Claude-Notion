@@ -60,13 +60,20 @@ class SyncWorker(QObject):
         existing_ids: set[str] = {r["page_id"] for r in existing_records if "page_id" in r}
 
         added = 0
-        updated = 0
+        # BUG-N2: renamed from 'updated' — counts pages already in cache, not "changed"
+        existing = 0
         notion_ids: set[str] = set()
 
         with cache_db.transaction(self._conn):
             for idx, page in enumerate(raw_pages, start=1):
                 page_id: str = page.get("id", "")
                 if not page_id:
+                    continue
+
+                # BUG-V5: skip template and archived/trashed pages
+                if page.get("in_trash") or page.get("archived"):
+                    continue
+                if page.get("is_template", False):
                     continue
 
                 notion_ids.add(page_id)
@@ -85,7 +92,7 @@ class SyncWorker(QObject):
                         decoded[prop_key] = None
 
                 if page_id in existing_ids:
-                    updated += 1
+                    existing += 1
                 else:
                     added += 1
 
@@ -103,9 +110,8 @@ class SyncWorker(QObject):
 
         cache_db.set_last_sync(self._conn, base, time.time())
         self.progress.emit(base, len(raw_pages))
-        # BUG-12: emit correct updated count (pages that existed before, not counting added)
-        truly_updated = updated - added if updated >= added else 0
-        self.finished.emit(base, added, truly_updated, removed)
+        # BUG-N2: emit (added, existing, removed) — semantics are clear, no arithmetic
+        self.finished.emit(base, added, existing, removed)
 
 
 class SyncManager(QObject):
@@ -180,14 +186,20 @@ class SyncManager(QObject):
         thread.start()
 
     def _on_worker_finished(
-        self, base: str, added: int, updated: int, removed: int
+        self, base: str, added: int, existing: int, removed: int
     ) -> None:
-        self.base_done.emit(base, added, updated, removed)
+        # BUG-N5: pop dead thread refs so isRunning() check in sync_base() doesn't crash
+        self._threads.pop(base, None)
+        self._workers.pop(base, None)
+        self.base_done.emit(base, added, existing, removed)
         self._pending.discard(base)
         if not self._pending:
             self.all_done.emit()
 
     def _on_worker_error(self, base: str, message: str) -> None:
+        # BUG-N5: pop dead thread refs
+        self._threads.pop(base, None)
+        self._workers.pop(base, None)
         self.sync_error.emit(base, message)
         self._pending.discard(base)
         if not self._pending:

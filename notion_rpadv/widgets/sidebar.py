@@ -44,12 +44,13 @@ _BADGE_FG: str = "#1F1E1D"
 # ---------------------------------------------------------------------------
 
 # (page_id, label, shortcut_or_None)  — icons handled below
+# BUG-N12: use Ctrl+N (Windows), not ⌘N (Mac); align numbering with DEFAULT_SHORTCUTS
 _MAIN_NAV: list[tuple[str, str, str | None]] = [
-    ("dashboard", "Dashboard",       "⌘1"),
-    ("processos", "Processos",       "⌘2"),
-    ("clientes",  "Clientes",        "⌘3"),
-    ("tarefas",   "Tarefas",         "⌘4"),
-    ("catalogo",  "Catálogo",        "⌘5"),
+    ("dashboard", "Dashboard",       None),
+    ("processos", "Processos",       "Ctrl+1"),
+    ("clientes",  "Clientes",        "Ctrl+2"),
+    ("tarefas",   "Tarefas",         "Ctrl+3"),
+    ("catalogo",  "Catálogo",        "Ctrl+4"),
 ]
 
 _DADOS_NAV: list[tuple[str, str, str | None]] = [
@@ -180,6 +181,11 @@ class SidebarItem(QWidget):
     # ------------------------------------------------------------------
 
     def mousePressEvent(self, event: object) -> None:  # type: ignore[override]
+        # BUG-N14: only emit on left-click, not right-click or middle-click
+        from PySide6.QtGui import QMouseEvent
+        if isinstance(event, QMouseEvent) and event.button() != Qt.MouseButton.LeftButton:
+            super().mousePressEvent(event)  # type: ignore[arg-type]
+            return
         self.clicked.emit(self._page_id)
 
     def enterEvent(self, event: object) -> None:  # type: ignore[override]

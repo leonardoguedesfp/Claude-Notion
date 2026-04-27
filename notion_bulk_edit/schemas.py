@@ -32,6 +32,8 @@ class PropSpec:
     mono: bool = False
     formato: str = ""          # ex: 'BRL', 'BR_DATE', 'BR_DATETIME'
     cor_por_valor: dict[str, str] = field(default_factory=dict)
+    # BUG-V3: which base to look up when tipo == 'relation'
+    target_base: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -136,8 +138,9 @@ SCHEMAS: dict[str, dict[str, PropSpec]] = {
             notion_name="Clientes",
             tipo="relation",
             label="Cliente principal",
-            editavel=True,
+            editavel=False,  # BUG-N11: relation editor not yet implemented
             largura_col="17%",
+            target_base="Clientes",  # BUG-V3
         ),
         "parte_contraria": PropSpec(
             notion_name="Partes adversas",
@@ -311,9 +314,10 @@ SCHEMAS: dict[str, dict[str, PropSpec]] = {
             notion_name="Processo",
             tipo="relation",
             label="Processo",
-            editavel=True,
+            editavel=False,  # BUG-N11: relation editor not yet implemented
             largura_col="17%",
             mono=True,
+            target_base="Processos",  # BUG-V3
         ),
         "cliente": PropSpec(
             notion_name="Cliente",
@@ -333,8 +337,9 @@ SCHEMAS: dict[str, dict[str, PropSpec]] = {
             notion_name="Tipo de tarefa",
             tipo="relation",
             label="Tipo (catálogo)",
-            editavel=True,
+            editavel=False,  # BUG-N11: relation editor not yet implemented
             largura_col="0",
+            target_base="Catalogo",  # BUG-V3
         ),
     },
 

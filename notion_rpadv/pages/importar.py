@@ -653,16 +653,16 @@ class ImportarPage(QWidget):
                     for prop_key, spec in schema.items():
                         if not spec.editavel:
                             continue
-                        # Match by notion_name, label, or internal key
-                        value = (
-                            row_dict.get(spec.notion_name)
-                            or row_dict.get(spec.label)
-                            or row_dict.get(prop_key)
-                        )
+                        # BUG-N1: explicit None checks preserve falsy values (False, 0)
+                        v = row_dict.get(spec.notion_name)
+                        if v is None:
+                            v = row_dict.get(spec.label)
+                        if v is None:
+                            v = row_dict.get(prop_key)
+                        value = v
                         if value is None:
                             continue
                         try:
-                            # BUG-01: correct argument order
                             encoded = encode_value(value, spec.tipo)
                             if encoded is not None:
                                 properties[spec.notion_name] = encoded
@@ -670,7 +670,12 @@ class ImportarPage(QWidget):
                             pass
 
                     if properties and db_id:
-                        client.create_page(db_id, properties)
+                        # BUG-N1: update existing page if page_id present, else create
+                        row_page_id = row_dict.get("page_id")
+                        if row_page_id:
+                            client.update_page(row_page_id, properties)
+                        else:
+                            client.create_page(db_id, properties)
                         imported += 1
                     elif not db_id:
                         errors += 1

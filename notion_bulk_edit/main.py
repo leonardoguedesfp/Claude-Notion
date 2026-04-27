@@ -22,7 +22,8 @@ from notion_bulk_edit.config import DATA_SOURCES
 from notion_bulk_edit.schemas import SCHEMAS, PropSpec
 from notion_bulk_edit.encoders import decode_value, encode_value, format_br_date, format_brl
 from notion_bulk_edit.validators import validar_linha, ValidationError
-from notion_rpadv.auth.token_store import get_token
+# BUG-N20: import from notion_bulk_edit.token_store, not notion_rpadv.auth
+from notion_bulk_edit.token_store import get_token
 
 
 # ---------------------------------------------------------------------------

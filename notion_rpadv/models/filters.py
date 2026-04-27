@@ -87,9 +87,17 @@ class TableFilterProxy(QSortFilterProxyModel):
             if col >= col_count:
                 continue
             idx = source.index(source_row, col, source_parent)
-            cell_display: str = str(
-                source.data(idx, Qt.ItemDataRole.DisplayRole) or ""
-            )
+            # BUG-28: compare against UserRole (canonical value), not DisplayRole text
+            # DisplayRole may be formatted ('✓', 'R$ 78.500') which breaks matching
+            raw_val = source.data(idx, Qt.ItemDataRole.UserRole)
+            if raw_val is None:
+                raw_val = source.data(idx, Qt.ItemDataRole.EditRole)
+            if raw_val is None:
+                cell_display = ""
+            elif isinstance(raw_val, list):
+                cell_display = ", ".join(str(v) for v in raw_val)
+            else:
+                cell_display = str(raw_val)
             # For multi-value cells (comma-separated chips) check intersection.
             cell_values = {v.strip() for v in cell_display.split(",") if v.strip()}
             if not cell_values:
@@ -119,7 +127,10 @@ class TableFilterProxy(QSortFilterProxyModel):
     # ------------------------------------------------------------------
 
     def unique_source_values(self, source_col: int) -> list[str]:
-        """Return sorted unique DisplayRole values from the *source* model column."""
+        """Return sorted unique canonical values from the *source* model column.
+
+        BUG-28: uses EditRole (canonical values) so filter state matches filterAcceptsRow.
+        """
         source = self.sourceModel()
         if source is None:
             return []
@@ -128,7 +139,13 @@ class TableFilterProxy(QSortFilterProxyModel):
         row_count = source.rowCount()
         for row in range(row_count):
             idx = source.index(row, source_col)
-            cell: str = str(source.data(idx, Qt.ItemDataRole.DisplayRole) or "")
+            raw = source.data(idx, Qt.ItemDataRole.EditRole)
+            if isinstance(raw, list):
+                cell = ", ".join(str(v) for v in raw)
+            elif raw is None:
+                cell = ""
+            else:
+                cell = str(raw)
             # Split multi-select values.
             parts = [v.strip() for v in cell.split(",") if v.strip()]
             if not parts:

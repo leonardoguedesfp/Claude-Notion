@@ -186,9 +186,11 @@ class AppStatusBar(QStatusBar):
     def set_sync_status(self, text: str) -> None:
         """Update the left-side sync text (e.g. 'Sincronizando…', 'Erro')."""
         self._sync_lbl.setText(text)
-        if "erro" in text.lower() or "error" in text.lower():
+        lo = text.lower()
+        if "erro" in lo or "error" in lo:
             color = LIGHT.app_danger
-        elif "sincronizando" in text.lower() or "sync" in text.lower():
+        elif "sincronizando" in lo or "sync" in lo or "salvando" in lo:
+            # BUG-N21: 'Salvando…' should also be warning (amber dot), not success
             color = _WARNING
         else:
             color = _SUCCESS

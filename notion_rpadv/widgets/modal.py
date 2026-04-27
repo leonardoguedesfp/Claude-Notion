@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QGraphicsDropShadowEffect,
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QPoint
 from PySide6.QtGui import QColor, QPainter, QPaintEvent
 
 from notion_rpadv.theme.tokens import (
@@ -211,6 +211,14 @@ class Modal(QDialog):
     # ------------------------------------------------------------------
     # Paint backdrop
     # ------------------------------------------------------------------
+
+    def showEvent(self, event: object) -> None:  # type: ignore[override]
+        # BUG-N16: size the dialog to cover the parent window so backdrop works
+        pw = self.parent()
+        if pw and hasattr(pw, "width"):
+            self.resize(pw.width(), pw.height())  # type: ignore[union-attr]
+            self.move(pw.mapToGlobal(QPoint(0, 0)))  # type: ignore[union-attr]
+        super().showEvent(event)  # type: ignore[arg-type]
 
     def paintEvent(self, event: QPaintEvent) -> None:  # type: ignore[override]
         painter = QPainter(self)

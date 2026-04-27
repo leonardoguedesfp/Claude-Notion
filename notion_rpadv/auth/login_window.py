@@ -493,8 +493,9 @@ class _FormPanel(QWidget):
             from notion_rpadv.auth.token_store import get_token as _get_token
             stored = _get_token()
             if not stored:
+                # BUG-N4: button is called 'Trocar token', not 'Primeiro acesso'
                 self._show_error(
-                    "Nenhum token armazenado. Clique em 'Primeiro acesso' para configurar."
+                    "Nenhum token armazenado. Clique em 'Trocar token' para configurar um novo."
                 )
                 self._submit_btn.setEnabled(True)
                 self._submit_btn.setText("Entrar")
