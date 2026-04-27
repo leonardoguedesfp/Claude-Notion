@@ -29,7 +29,7 @@ from notion_bulk_edit.config import (
     DATA_SOURCES,
     USUARIOS_LOCAIS,
 )
-from notion_rpadv.services.shortcuts import DEFAULT_SHORTCUTS
+from notion_rpadv.services.shortcuts_store import DEFAULT_SHORTCUTS, save_user_shortcuts
 from notion_rpadv.theme.tokens import (
     DARK,
     FONT_BODY,
@@ -122,8 +122,9 @@ class _SectionCard(QFrame):
 class ConfiguracoesPage(QWidget):
     """Settings page with 6 grouped sections."""
 
-    theme_changed: Signal = Signal(str)   # "light" | "dark"
+    theme_changed: Signal = Signal(str)    # "light" | "dark" | "auto"
     token_changed: Signal = Signal(str)
+    shortcut_changed: Signal = Signal(str, str)  # action, new_sequence
 
     def __init__(
         self,
@@ -279,23 +280,30 @@ class ConfiguracoesPage(QWidget):
         lbl = self._field_label("Tema", p)
         layout.addWidget(lbl)
 
+        self._auto_radio = QRadioButton("Auto (sistema)")
         self._light_radio = QRadioButton("Claro")
         self._dark_radio = QRadioButton("Escuro")
 
-        for rb in (self._light_radio, self._dark_radio):
+        for rb in (self._auto_radio, self._light_radio, self._dark_radio):
             rb.setStyleSheet(
                 f"color: {p.app_fg}; font-size: {FS_MD}px; background: transparent;"
             )
 
         group = QButtonGroup(self)
+        group.addButton(self._auto_radio)
         group.addButton(self._light_radio)
         group.addButton(self._dark_radio)
 
-        if self._dark:
+        if self._current_theme == "auto":
+            self._auto_radio.setChecked(True)
+        elif self._dark:
             self._dark_radio.setChecked(True)
         else:
             self._light_radio.setChecked(True)
 
+        self._auto_radio.toggled.connect(
+            lambda checked: self.theme_changed.emit("auto") if checked else None
+        )
         self._light_radio.toggled.connect(
             lambda checked: self.theme_changed.emit("light") if checked else None
         )
@@ -303,6 +311,7 @@ class ConfiguracoesPage(QWidget):
             lambda checked: self.theme_changed.emit("dark") if checked else None
         )
 
+        row.addWidget(self._auto_radio)
         row.addWidget(self._light_radio)
         row.addWidget(self._dark_radio)
         row.addStretch()
@@ -434,6 +443,8 @@ class ConfiguracoesPage(QWidget):
             if ok and new_seq:
                 self._bindings[action] = new_seq
                 label.setText(new_seq)
+                save_user_shortcuts(self._bindings)
+                self.shortcut_changed.emit(action, new_seq)
         return handler
 
     def update_sync_label(self, base: str, ts: float) -> None:

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -298,7 +298,7 @@ def test_sync_manager_cleans_threads():
     """BUG-N5: after worker finished, _threads[base] is removed."""
     from PySide6.QtWidgets import QApplication
     import sys
-    app = QApplication.instance() or QApplication(sys.argv)
+    QApplication.instance() or QApplication(sys.argv)
 
     from notion_rpadv.cache.sync import SyncManager
     conn = sqlite3.connect(":memory:")

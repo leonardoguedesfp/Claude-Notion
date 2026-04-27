@@ -42,7 +42,7 @@ class TableFilterProxy(QSortFilterProxyModel):
         if normalised == self._search_text:
             return
         self._search_text = normalised
-        self.invalidateFilter()
+        self.invalidateRowsFilter()
 
     def set_col_filter(self, col: int, values: set[str] | None) -> None:
         """Restrict *col* to the given *values*.  Pass ``None`` to remove the filter."""
@@ -50,7 +50,7 @@ class TableFilterProxy(QSortFilterProxyModel):
             self._col_filters.pop(col, None)
         else:
             self._col_filters[col] = values
-        self.invalidateFilter()
+        self.invalidateRowsFilter()
 
     def clear_filters(self) -> None:
         """Remove the text search and all column filters."""
@@ -58,7 +58,7 @@ class TableFilterProxy(QSortFilterProxyModel):
         self._search_text = ""
         self._col_filters.clear()
         if changed:
-            self.invalidateFilter()
+            self.invalidateRowsFilter()
 
     def get_active_col_filter(self, col: int) -> set[str] | None:
         """Return the current allowed-value set for *col*, or None."""

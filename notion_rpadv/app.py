@@ -299,10 +299,12 @@ class MainWindow(QMainWindow):
         self._status_bar.set_sync_status("Sincronizado")
         self._push_toast("Sincronização concluída.", "success")
 
-        # Reload whichever table page is currently active
-        current = self._stack.currentWidget()
-        if hasattr(current, "reload"):
-            current.reload()  # type: ignore[union-attr]
+        # BUG-EXEC-03: refresh all pages — each page reloads its own model
+        for page in self._pages.values():
+            if hasattr(page, "reload"):
+                page.reload()  # type: ignore[union-attr]
+            elif hasattr(page, "refresh"):
+                page.refresh()  # type: ignore[union-attr]
 
         # BUG-22: show max(last_sync) across all bases in status bar
         self._update_status_bar_sync_time()

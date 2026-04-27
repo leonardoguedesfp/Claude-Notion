@@ -49,9 +49,10 @@ SHEET_NAMES: Final[dict[str, str]] = {
 
 NOTION_USERS: Final[dict[str, dict[str, str]]] = {
     # "notion_user_id": { "name": "...", "initials": "...", "role": "..." }
-    "DEBORAH_NOTION_ID":  {"name": "Déborah",  "initials": "DM", "role": "Administradora"},
-    "LEONARDO_NOTION_ID": {"name": "Leonardo", "initials": "LV", "role": "Sócio em formação"},
-    "RICARDO_NOTION_ID":  {"name": "Ricardo",  "initials": "RP", "role": "Sócio fundador"},
+    # UUIDs obtained via GET https://api.notion.com/v1/users
+    "23fd872b-594c-8178-840c-00029746e827": {"name": "Déborah",  "initials": "DM", "role": "Administradora"},
+    "240d872b-594c-81f4-82e1-000212a926fc": {"name": "Leonardo", "initials": "LV", "role": "Sócio em formação"},
+    "23fd872b-594c-814a-b7b8-00025b13b424": {"name": "Ricardo",  "initials": "RP", "role": "Sócio fundador"},
     "MARIANA_NOTION_ID":  {"name": "Mariana",  "initials": "MS", "role": "Advogada"},
     "CARLA_NOTION_ID":    {"name": "Carla",    "initials": "CB", "role": "Estagiária"},
 }

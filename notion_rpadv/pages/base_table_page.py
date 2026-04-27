@@ -238,7 +238,7 @@ class BaseTablePage(QWidget):
         # 4. Search input
         self._search_edit = QLineEdit()
         self._search_edit.setObjectName("SearchInput")
-        self._search_edit.setPlaceholderText("Pesquisar… ⌘K")
+        self._search_edit.setPlaceholderText("Pesquisar… Ctrl+K")
         self._search_edit.setFixedWidth(280)
         self._search_edit.setFixedHeight(32)
         self._search_edit.setStyleSheet(

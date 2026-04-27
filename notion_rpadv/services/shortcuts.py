@@ -7,18 +7,11 @@ from PySide6.QtCore import QObject
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import QWidget
 
-DEFAULT_SHORTCUTS: dict[str, str] = {
-    "search": "Ctrl+K",
-    "new_record": "Ctrl+N",
-    "save": "Ctrl+S",
-    "discard": "Escape",
-    "refresh": "F5",
-    "toggle_theme": "Ctrl+Shift+T",
-    "nav_processos": "Ctrl+1",
-    "nav_clientes": "Ctrl+2",
-    "nav_tarefas": "Ctrl+3",
-    "nav_catalogo": "Ctrl+4",
-}
+from notion_rpadv.services.shortcuts_store import (  # noqa: F401  (re-export)
+    DEFAULT_SHORTCUTS,
+    load_user_shortcuts,
+    save_user_shortcuts,
+)
 
 
 class ShortcutRegistry(QObject):

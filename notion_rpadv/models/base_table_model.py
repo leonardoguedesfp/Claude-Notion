@@ -75,6 +75,13 @@ def _display_value(spec: PropSpec, raw: Any) -> str:
         if isinstance(raw, list):
             return ", ".join(str(v) for v in raw)
         return str(raw)
+    # BUG-EXEC-08: rollup arrays render as comma-joined values, not Python repr
+    if tipo == "rollup":
+        if isinstance(raw, list):
+            return ", ".join(str(v) for v in raw if v is not None)
+        return str(raw)
+    if isinstance(raw, list):
+        return ", ".join(str(v) for v in raw if v is not None)
     return str(raw)
 
 
@@ -276,16 +283,22 @@ class BaseTableModel(QAbstractTableModel):
     # Dirty-edit helpers
     # ------------------------------------------------------------------
 
-    def get_dirty_edits(self) -> list[tuple[str, str, Any, Any]]:
-        """Return list of (page_id, key, old_value, new_value) for all dirty cells."""
-        result: list[tuple[str, str, Any, Any]] = []
+    def get_dirty_edits(self) -> list[dict[str, Any]]:
+        """Return list of edit dicts compatible with CommitWorker."""
+        result: list[dict[str, Any]] = []
         for (page_id, key), new_value in self._dirty.items():
-            # BUG-24: find the row by page_id, not by index
             record = next((r for r in self._rows if r.get("page_id") == page_id), None)
             if record is None:
                 continue
             old_value: Any = record.get(key)
-            result.append((page_id, key, old_value, new_value))
+            result.append({
+                "id": 0,
+                "base": self._base,
+                "page_id": page_id,
+                "key": key,
+                "old_value": old_value,
+                "new_value": new_value,
+            })
         return result
 
     def clear_dirty(self) -> None:

@@ -27,8 +27,6 @@ from notion_rpadv.theme.tokens import (
     RADIUS_MD,
 )
 
-_BACKDROP_COLOR = "rgba(10,15,20,0.45)"
-
 # Button role → (bg, fg, hover_bg, border)
 _BTN_STYLES: dict[str, tuple[str, str, str, str]] = {
     "primary":   ("#104063", "#FFFFFF", "#0C324D", "transparent"),
