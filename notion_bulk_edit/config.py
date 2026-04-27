@@ -22,10 +22,10 @@ KEYRING_USERNAME: Final = "notion_token"
 # ---------------------------------------------------------------------------
 
 DATA_SOURCES: Final[dict[str, str]] = {
-    "Processos": os.getenv("NOTION_DB_PROCESSOS", "COLOQUE_AQUI_O_ID_DA_BASE_PROCESSOS"),
-    "Clientes":  os.getenv("NOTION_DB_CLIENTES",  "COLOQUE_AQUI_O_ID_DA_BASE_CLIENTES"),
-    "Tarefas":   os.getenv("NOTION_DB_TAREFAS",   "COLOQUE_AQUI_O_ID_DA_BASE_TAREFAS"),
-    "Catalogo":  os.getenv("NOTION_DB_CATALOGO",  "COLOQUE_AQUI_O_ID_DA_BASE_CATALOGO"),
+    "Processos": os.getenv("NOTION_DB_PROCESSOS", "5e93b734-4043-4c89-a513-5e00a14081bb"),
+    "Clientes":  os.getenv("NOTION_DB_CLIENTES",  "939e5dcf-51bd-4ffa-a28e-0313899fd229"),
+    "Tarefas":   os.getenv("NOTION_DB_TAREFAS",   "3a8bb311-5c1b-42ac-a3b2-859b75911e91"),
+    "Catalogo":  os.getenv("NOTION_DB_CATALOGO",  "79afc833-77e2-4574-98ba-ebed7bd7e66c"),
 }
 
 # Nome amigável → nome da planilha Excel (para importar/exportar)
