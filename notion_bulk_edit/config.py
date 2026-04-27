@@ -67,7 +67,7 @@ USUARIOS_LOCAIS: Final[dict[str, dict[str, str]]] = {
 # ---------------------------------------------------------------------------
 
 NOTION_API_BASE: Final = "https://api.notion.com/v1"
-NOTION_VERSION: Final  = "2022-06-28"
+NOTION_VERSION: Final  = "2025-09-03"
 
 # Rate limit — Notion permite ~3 req/s por integração
 RATE_LIMIT_RPS: Final[float] = 3.0
