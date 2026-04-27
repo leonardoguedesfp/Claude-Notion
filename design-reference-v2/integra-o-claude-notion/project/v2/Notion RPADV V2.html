@@ -1,0 +1,1189 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<title>Notion RPADV V2 — Revisão de design</title>
+<meta name="viewport" content="width=1280" />
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;500;600&family=Nunito+Sans:opsz,wght@6..12,400;6..12,500;6..12,600;6..12,700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+:root {
+  /* Brand */
+  --navy-900:#040E16; --navy-800:#082032; --navy-700:#0C324D; --navy-600:#104063; --navy-500:#3B627F;
+  --petrol-700:#2C4646; --petrol-600:#395A5A; --petrol-500:#5D7878;
+  --cream:#EDEAE4; --cream-2:#F7F6F4; --paper:#FFFFFF;
+  --warm-200:#E6E5E4; --warm-300:#D2D0CE; --warm-500:#A29E9B; --warm-700:#6F6B68; --warm-800:#474442;
+  --ink:#142430; --ink-2:#3F4751; --ink-3:#6F6B68;
+  --success:#3F6E55; --warning:#B58A3F; --danger:#9A3B3B;
+  --dirty:#FFF9C4;
+  --font-display:'Playfair Display',Georgia,serif;
+  --font-body:'Nunito Sans','Segoe UI',sans-serif;
+  --font-mono:'JetBrains Mono',Consolas,monospace;
+}
+
+/* Theme tokens used by all screens */
+.theme-light {
+  --bg:var(--cream);
+  --panel:var(--cream-2);
+  --elevated:var(--paper);
+  --sidebar:var(--navy-700);
+  --sidebar-fg:var(--cream);
+  --sidebar-fg-muted:rgba(237,234,228,0.55);
+  --sidebar-hover:rgba(237,234,228,0.06);
+  --sidebar-active:rgba(237,234,228,0.12);
+  --sidebar-border:rgba(237,234,228,0.08);
+  --fg:var(--ink); --fg-2:var(--ink-2); --fg-3:var(--ink-3);
+  --border:var(--warm-200); --border-strong:var(--warm-300);
+  --divider:rgba(20,36,48,0.06);
+  --accent:var(--navy-600); --accent-soft:rgba(16,64,99,0.08); --accent-fg:#fff;
+  --row-hover:rgba(57,90,90,0.04); --row-selected:rgba(16,64,99,0.06);
+  --chip-blue-bg:rgba(16,64,99,0.10); --chip-blue-fg:var(--navy-700);
+  --chip-green-bg:rgba(63,110,85,0.12); --chip-green-fg:#2F5640;
+  --chip-orange-bg:rgba(181,110,63,0.14); --chip-orange-fg:#8B5028;
+  --chip-red-bg:rgba(154,59,59,0.12); --chip-red-fg:#7A2E2E;
+  --chip-yellow-bg:rgba(181,138,63,0.16); --chip-yellow-fg:#7A5C28;
+  --chip-purple-bg:rgba(89,70,137,0.12); --chip-purple-fg:#4B3E72;
+  --chip-gray-bg:rgba(111,107,104,0.14); --chip-gray-fg:#4A4744;
+  --chip-petrol-bg:rgba(57,90,90,0.12); --chip-petrol-fg:var(--petrol-700);
+  --status-ok:#3F6E55; --status-warn:#B58A3F; --status-err:#9A3B3B;
+  --shadow:0 4px 12px rgba(20,36,48,0.08),0 1px 3px rgba(20,36,48,0.06);
+}
+.theme-dark {
+  --bg:#142430;
+  --panel:#1A2D3D;
+  --elevated:#22394C;
+  --sidebar:#0A1F2D;
+  --sidebar-fg:#E8E4DD;
+  --sidebar-fg-muted:rgba(232,228,221,0.55);
+  --sidebar-hover:rgba(232,228,221,0.06);
+  --sidebar-active:rgba(232,228,221,0.14);
+  --sidebar-border:rgba(232,228,221,0.10);
+  --fg:#E8E4DD; --fg-2:#A8B2BC; --fg-3:#7C8893;
+  --border:#2A3D50; --border-strong:#3A4F64;
+  --divider:rgba(232,228,221,0.06);
+  --accent:#5A92BA; --accent-soft:rgba(90,146,186,0.16); --accent-fg:#0A1F2D;
+  --row-hover:rgba(232,228,221,0.04); --row-selected:rgba(90,146,186,0.10);
+  --chip-blue-bg:rgba(90,146,186,0.18); --chip-blue-fg:#A8C8DD;
+  --chip-green-bg:rgba(99,160,123,0.18); --chip-green-fg:#B5D4BD;
+  --chip-orange-bg:rgba(204,140,90,0.20); --chip-orange-fg:#E5BA90;
+  --chip-red-bg:rgba(192,98,98,0.20); --chip-red-fg:#E2A0A0;
+  --chip-yellow-bg:rgba(204,170,90,0.22); --chip-yellow-fg:#E0C58A;
+  --chip-purple-bg:rgba(134,118,170,0.22); --chip-purple-fg:#C2B5DF;
+  --chip-gray-bg:rgba(160,156,150,0.18); --chip-gray-fg:#BDB7B0;
+  --chip-petrol-bg:rgba(110,142,142,0.20); --chip-petrol-fg:#9FBFBF;
+  --status-ok:#7BB394; --status-warn:#D4AB6E; --status-err:#D08585;
+  --dirty:rgba(255,217,90,0.18);
+  --shadow:0 4px 14px rgba(0,0,0,0.45),0 1px 4px rgba(0,0,0,0.30);
+}
+
+* { box-sizing:border-box; }
+html,body{ margin:0; padding:0; background:#0F1A22; }
+body{ font-family:var(--font-body); color:#E8E4DD; font-size:13px; line-height:1.5; -webkit-font-smoothing:antialiased; }
+
+/* Page chrome */
+.review-head{
+  position:sticky; top:0; z-index:50;
+  background:#0A1620; border-bottom:1px solid #1F2D3A;
+  padding:12px 28px;
+  display:flex; align-items:center; gap:18px;
+}
+.review-head h1{
+  font-family:var(--font-display); font-weight:500; font-size:18px; margin:0;
+  color:#E8E4DD; letter-spacing:-0.005em;
+}
+.review-head .meta{ font-size:11px; color:#7C8893; letter-spacing:0.04em; text-transform:uppercase; font-weight:600; }
+.review-head .spacer{ flex:1; }
+.review-head .seg{
+  display:inline-flex; border:1px solid #2A3D50; border-radius:4px; overflow:hidden;
+}
+.review-head .seg button{
+  background:transparent; color:#A8B2BC; border:0;
+  font:inherit; font-size:12px; font-weight:500;
+  padding:6px 14px; cursor:pointer;
+}
+.review-head .seg button.active{ background:#22394C; color:#E8E4DD; }
+
+.toc{
+  padding:18px 28px; background:#0F1A22;
+  border-bottom:1px solid #1F2D3A;
+  display:grid; grid-template-columns:repeat(5,1fr); gap:8px;
+}
+.toc a{
+  display:flex; flex-direction:column; gap:2px;
+  background:#15212D; border:1px solid #1F2D3A; border-radius:3px;
+  padding:8px 12px;
+  text-decoration:none; color:#A8B2BC;
+  font-size:11.5px;
+}
+.toc a:hover{ background:#1A2D3D; border-color:#3A4F64; color:#E8E4DD; }
+.toc a strong{ font-size:11.5px; font-weight:600; color:#E8E4DD; }
+.toc a small{ font-size:10px; letter-spacing:0.06em; text-transform:uppercase; color:#7C8893; font-weight:600; }
+
+.screens{ padding:28px; display:flex; flex-direction:column; gap:48px; }
+
+/* Screen wrapper — shows label + theme + frame */
+.screen-block{
+  display:flex; flex-direction:column; gap:14px;
+}
+.screen-block-head{
+  display:flex; align-items:baseline; gap:14px; padding:0 4px;
+}
+.screen-block-head .num{
+  font-family:var(--font-mono); font-size:11px; color:#5C6872;
+  font-weight:500; letter-spacing:0.06em;
+}
+.screen-block-head h2{
+  font-family:var(--font-display); font-weight:500; font-size:22px; margin:0;
+  color:#E8E4DD; letter-spacing:-0.01em;
+}
+.screen-block-head .desc{ font-size:12.5px; color:#A8B2BC; flex:1; max-width:680px; }
+.screen-pair{
+  display:grid; grid-template-columns:1fr 1fr; gap:18px;
+}
+.screen-pair.single{ grid-template-columns:1fr; max-width:1280px; margin:0 auto; }
+
+.frame{
+  border:1px solid #1F2D3A; border-radius:4px; overflow:hidden;
+  background:var(--bg); color:var(--fg);
+  font-family:var(--font-body);
+  position:relative;
+  height:760px;
+  display:flex; flex-direction:column;
+}
+.frame-label{
+  position:absolute; top:8px; right:8px; z-index:5;
+  font-family:var(--font-mono); font-size:9.5px; font-weight:600;
+  letter-spacing:0.10em; text-transform:uppercase;
+  background:rgba(0,0,0,0.4); color:#fff;
+  padding:3px 7px; border-radius:2px;
+  pointer-events:none;
+}
+
+/* Window chrome */
+.win{
+  height:30px; background:linear-gradient(to bottom,#F0F0F0,#E4E4E4);
+  border-bottom:1px solid #D0D0D0;
+  display:flex; align-items:center; justify-content:space-between;
+  padding:0 12px; flex-shrink:0;
+  font-size:11.5px; color:#404040;
+}
+.theme-dark .win{ background:linear-gradient(to bottom,#2A2A2A,#1F1F1F); border-bottom-color:#3A3A3A; color:#C0C0C0; }
+.win-buttons{ display:flex; gap:0; margin-right:-12px; }
+.win-btn{ width:42px; height:30px; display:flex; align-items:center; justify-content:center; }
+.win-btn:hover{ background:rgba(0,0,0,0.08); }
+.win-btn.close:hover{ background:#E81123; color:#fff; }
+.win .progress{
+  position:absolute; left:0; right:0; bottom:-1px; height:2px;
+  background:linear-gradient(to right,var(--accent) 0%,var(--accent) 76%,transparent 76%);
+  z-index:6;
+}
+
+/* Shell */
+.shell{ flex:1; display:grid; grid-template-columns:220px 1fr; min-height:0; }
+
+/* Sidebar */
+.sidebar{
+  background:var(--sidebar); color:var(--sidebar-fg);
+  display:flex; flex-direction:column;
+  font-size:12px;
+}
+.sb-brand{
+  padding:16px 14px 14px; border-bottom:1px solid var(--sidebar-border);
+  display:flex; align-items:center; gap:10px;
+}
+.sb-brand img{ height:20px; opacity:0.95; }
+.sb-brand-text{ font-size:9.5px; font-weight:700; letter-spacing:0.16em; text-transform:uppercase; line-height:1.3; }
+.sb-brand-text small{ display:block; font-weight:400; letter-spacing:0.08em; opacity:0.6; margin-top:2px; }
+.sb-section{ padding:10px 0 4px; }
+.sb-section + .sb-section{ border-top:1px solid var(--sidebar-border); }
+.sb-label{
+  font-size:9.5px; letter-spacing:0.16em; text-transform:uppercase;
+  color:var(--sidebar-fg-muted); padding:6px 14px 4px;
+  font-weight:700;
+}
+.sb-item{
+  display:flex; align-items:center; gap:10px;
+  height:30px; padding:0 14px;
+  color:var(--sidebar-fg); opacity:0.78;
+  cursor:pointer; position:relative;
+  font-weight:500;
+}
+.sb-item:hover{ background:var(--sidebar-hover); opacity:1; }
+.sb-item.active{
+  background:var(--sidebar-active); opacity:1; font-weight:600;
+}
+.sb-item.active::before{
+  content:''; position:absolute; left:0; top:6px; bottom:6px; width:2px;
+  background:var(--cream);
+}
+.sb-item .ic{ width:14px; height:14px; flex:0 0 14px; opacity:0.8; }
+.sb-item .lbl{ flex:1; }
+.sb-item .sc{ font-family:var(--font-mono); font-size:10px; opacity:0.45; letter-spacing:0.04em; }
+.sb-item .badge{
+  font-size:10px; font-weight:700; background:var(--cream); color:var(--navy-700);
+  padding:0 5px; border-radius:8px; min-width:18px; text-align:center; line-height:14px; height:14px;
+}
+.theme-dark .sb-item .badge{ background:#5A92BA; color:#0A1F2D; }
+.sb-spacer{ flex:1; }
+
+.main{ display:flex; flex-direction:column; min-width:0; overflow:hidden; }
+
+/* Toolbar */
+.toolbar{
+  height:46px; padding:0 18px;
+  border-bottom:1px solid var(--border); background:var(--bg);
+  display:flex; align-items:center; gap:10px; flex-shrink:0;
+}
+.toolbar h1{
+  font-family:var(--font-display); font-weight:500; font-size:21px; margin:0;
+  color:var(--fg); letter-spacing:-0.005em;
+}
+.toolbar .meta{
+  font-size:11px; color:var(--fg-3); margin-left:8px;
+  letter-spacing:0.02em;
+}
+.toolbar .sp{ flex:1; }
+.toolbar .sub-tabs{
+  display:flex; gap:0; height:30px; align-items:center;
+}
+.toolbar .sub-tab{
+  padding:0 12px; height:30px; display:flex; align-items:center;
+  font-size:12px; font-weight:500; color:var(--fg-2);
+  border-bottom:2px solid transparent; cursor:pointer;
+  margin-bottom:-1px;
+}
+.toolbar .sub-tab.active{ color:var(--accent); border-bottom-color:var(--accent); font-weight:600; }
+
+/* Buttons / inputs */
+.btn{
+  display:inline-flex; align-items:center; gap:6px;
+  height:28px; padding:0 12px; border-radius:3px;
+  font:inherit; font-size:12px; font-weight:500;
+  border:1px solid var(--border-strong); background:transparent; color:var(--fg);
+  cursor:pointer; line-height:1;
+}
+.btn:hover{ background:var(--row-hover); }
+.btn-primary{ background:var(--accent); color:var(--accent-fg); border-color:var(--accent); }
+.btn-primary:hover{ filter:brightness(1.08); background:var(--accent); }
+.btn-ghost{ border-color:transparent; color:var(--fg-2); }
+.btn-ghost:hover{ background:var(--row-hover); color:var(--fg); }
+.btn-danger{ background:var(--danger); color:#fff; border-color:var(--danger); }
+.btn.sm{ height:24px; padding:0 9px; font-size:11.5px; }
+
+.inp{
+  height:28px; padding:0 10px; border-radius:3px;
+  border:1px solid var(--border-strong); background:var(--elevated);
+  color:var(--fg); font:inherit; font-size:12px;
+}
+.inp:focus{ outline:none; border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft); }
+.search{ position:relative; }
+.search .inp{ padding-left:28px; width:240px; }
+.search svg{ position:absolute; left:8px; top:50%; transform:translateY(-50%); color:var(--fg-3); }
+
+.kbd{
+  display:inline-flex; align-items:center; gap:1px;
+  font-family:var(--font-mono); font-size:10px; font-weight:500;
+  padding:1px 5px; border-radius:2px;
+  background:var(--row-hover); border:1px solid var(--border);
+  color:var(--fg-3);
+}
+
+/* Chips */
+.chip{
+  display:inline-flex; align-items:center; gap:5px;
+  font-size:11.5px; font-weight:500; padding:1px 7px; border-radius:3px;
+  background:var(--chip-gray-bg); color:var(--chip-gray-fg);
+  line-height:1.6;
+}
+.chip-blue{ background:var(--chip-blue-bg); color:var(--chip-blue-fg); }
+.chip-green{ background:var(--chip-green-bg); color:var(--chip-green-fg); }
+.chip-orange{ background:var(--chip-orange-bg); color:var(--chip-orange-fg); }
+.chip-red{ background:var(--chip-red-bg); color:var(--chip-red-fg); }
+.chip-yellow{ background:var(--chip-yellow-bg); color:var(--chip-yellow-fg); }
+.chip-purple{ background:var(--chip-purple-bg); color:var(--chip-purple-fg); }
+.chip-petrol{ background:var(--chip-petrol-bg); color:var(--chip-petrol-fg); }
+.chip-rel{
+  background:var(--accent-soft); color:var(--accent);
+  font-weight:500;
+}
+.chip-rel:hover{ text-decoration:underline; cursor:pointer; }
+.chip-person{
+  background:var(--row-hover); color:var(--fg);
+  padding-left:2px; font-weight:500;
+}
+.chip-person .av{
+  width:14px; height:14px; border-radius:50%;
+  background:var(--accent); color:var(--accent-fg);
+  font-family:var(--font-body); font-size:8.5px; font-weight:700;
+  display:inline-flex; align-items:center; justify-content:center;
+}
+
+/* Status bar */
+.statusbar{
+  height:26px; padding:0 14px; flex-shrink:0;
+  border-top:1px solid var(--border); background:var(--panel);
+  display:flex; align-items:center; gap:18px;
+  font-size:11px; color:var(--fg-2);
+}
+.statusbar .dot{
+  width:7px; height:7px; border-radius:50%;
+  background:var(--status-ok);
+}
+.statusbar .dot.warn{ background:var(--status-warn); }
+.statusbar .dot.err{ background:var(--status-err); }
+.statusbar .seg{ display:inline-flex; align-items:center; gap:6px; }
+.statusbar .right{ margin-left:auto; }
+.statusbar .progress-line{
+  height:3px; width:120px; background:var(--row-hover); border-radius:2px;
+  overflow:hidden;
+}
+.statusbar .progress-line span{
+  display:block; height:100%; width:76%;
+  background:var(--accent);
+}
+
+/* Page body */
+.page{ flex:1; overflow:hidden; display:flex; flex-direction:column; }
+.page-body{ flex:1; overflow:auto; padding:18px 20px; }
+
+/* ============== KPIs ============== */
+.kpi-row{ display:grid; grid-template-columns:repeat(5,1fr); gap:14px; }
+.kpi{
+  background:var(--panel); border:1px solid var(--border); border-radius:4px;
+  padding:14px 16px; display:flex; flex-direction:column; gap:6px;
+}
+.kpi-label{ font-size:10px; font-weight:700; letter-spacing:0.14em; text-transform:uppercase; color:var(--fg-3); }
+.kpi-val{ font-family:var(--font-display); font-weight:500; font-size:34px; line-height:1.05; color:var(--fg); letter-spacing:-0.01em; }
+.kpi-val.calm{ color:var(--fg-2); font-weight:400; }
+.kpi-val .suf{ font-family:var(--font-body); font-size:13px; color:var(--fg-3); margin-left:5px; font-weight:500; }
+.kpi-foot{ font-size:11px; color:var(--fg-3); }
+.kpi.warn .kpi-val{ color:var(--warning); }
+.kpi.alert .kpi-val{ color:var(--danger); }
+.kpi.alert .kpi-foot{ color:var(--danger); }
+
+/* ============== Section card ============== */
+.section{
+  background:var(--panel); border:1px solid var(--border); border-radius:4px;
+  display:flex; flex-direction:column;
+}
+.section + .section{ margin-top:16px; }
+.section-head{
+  padding:11px 16px; border-bottom:1px solid var(--border);
+  display:flex; align-items:baseline; gap:12px;
+}
+.section-title{
+  font-family:var(--font-display); font-weight:500; font-size:16px;
+  color:var(--fg); margin:0; letter-spacing:-0.005em;
+}
+.section-meta{ font-size:11px; color:var(--fg-3); }
+.section-head .sp{ flex:1; }
+
+/* Table */
+.tbl{ width:100%; border-collapse:separate; border-spacing:0; font-size:12px; table-layout:fixed; }
+.tbl thead th{
+  position:sticky; top:0; background:var(--panel);
+  font-size:10.5px; font-weight:700; letter-spacing:0.06em; text-transform:uppercase;
+  color:var(--fg-3); padding:0 12px; height:36px; text-align:left;
+  border-bottom:1px solid var(--border);
+  white-space:nowrap;
+}
+.tbl thead th .th-in{ display:inline-flex; align-items:center; gap:5px; }
+.tbl thead th .filter-btn{
+  display:inline-flex; padding:2px; border-radius:2px; cursor:pointer;
+  color:var(--fg-3);
+}
+.tbl thead th .filter-btn.active{ background:var(--accent-soft); color:var(--accent); }
+.tbl tbody td{
+  padding:7px 12px; border-bottom:1px solid var(--divider); vertical-align:middle;
+  color:var(--fg);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.tbl tbody tr:hover td{ background:var(--row-hover); }
+.tbl tbody tr.dirty td{ background:var(--dirty); }
+.tbl tbody tr.dirty td.dirty-cell{
+  box-shadow:inset 2px 0 0 var(--warning);
+}
+.tbl tbody tr.editing td{ background:transparent; }
+.tbl tbody tr.editing td.editing-cell{
+  padding:0; box-shadow:inset 0 0 0 2px var(--accent);
+  background:var(--elevated);
+}
+.tbl tbody tr.editing td.editing-cell input{
+  border:0; background:transparent; outline:none; height:32px;
+  padding:0 12px; width:100%; font:inherit; color:var(--fg);
+}
+.tbl tbody tr.selected td{ background:var(--row-selected); }
+.tbl tbody tr.selected td:first-child{ box-shadow:inset 2px 0 0 var(--accent); }
+.tbl .num{ text-align:right; font-variant-numeric:tabular-nums; }
+.tbl .mono{ font-family:var(--font-mono); font-size:11.5px; }
+
+.tbl-pad{ flex:1; min-height:60px; background:var(--bg); border-top:1px solid var(--divider); }
+
+/* Filter pills */
+.filter-bar{
+  padding:10px 18px;
+  border-bottom:1px solid var(--border); background:var(--panel);
+  display:flex; align-items:center; gap:8px; font-size:11.5px;
+  flex-shrink:0;
+}
+.filter-bar .lbl{
+  font-size:10px; font-weight:700; letter-spacing:0.10em; text-transform:uppercase; color:var(--fg-3);
+  margin-right:4px;
+}
+.filter-pill{
+  display:inline-flex; align-items:center; gap:6px;
+  padding:3px 4px 3px 8px; height:22px; border-radius:11px;
+  background:var(--accent-soft); color:var(--accent);
+  font-weight:600; font-size:11px;
+}
+.filter-pill .x{
+  width:14px; height:14px; border-radius:50%; background:rgba(0,0,0,0.10);
+  display:inline-flex; align-items:center; justify-content:center;
+  cursor:pointer;
+}
+.filter-pill .count{ background:rgba(0,0,0,0.12); padding:0 5px; border-radius:7px; font-family:var(--font-mono); font-size:10px; }
+.filter-clear{
+  font-size:11px; color:var(--fg-3); cursor:pointer; margin-left:4px;
+}
+.filter-clear:hover{ color:var(--accent); text-decoration:underline; }
+
+/* With detail */
+.with-detail{ flex:1; display:grid; grid-template-columns:1fr 320px; min-height:0; }
+.tbl-wrap{ overflow:auto; display:flex; flex-direction:column; min-width:0; }
+.detail{
+  background:var(--panel); border-left:1px solid var(--border);
+  display:flex; flex-direction:column; overflow:hidden;
+}
+.detail-tabs{
+  display:flex; gap:0; padding:0 8px; border-bottom:1px solid var(--border);
+  background:var(--bg); flex-shrink:0;
+}
+.detail-tab{
+  padding:10px 12px; font-size:11.5px; font-weight:500; color:var(--fg-2);
+  border-bottom:2px solid transparent; margin-bottom:-1px; cursor:pointer;
+}
+.detail-tab.active{ color:var(--accent); border-bottom-color:var(--accent); font-weight:600; }
+.detail-tab .pip{ display:inline-block; width:5px; height:5px; border-radius:50%; background:var(--fg-3); margin-left:4px; vertical-align:middle; }
+.detail-head{
+  padding:14px 16px 10px; border-bottom:1px solid var(--border);
+}
+.detail-eyebrow{ font-size:9.5px; font-weight:700; letter-spacing:0.14em; text-transform:uppercase; color:var(--fg-3); margin-bottom:4px; }
+.detail-head h3{ font-family:var(--font-display); font-weight:500; font-size:18px; margin:0; color:var(--fg); letter-spacing:-0.005em; }
+.detail-body{ flex:1; overflow:auto; padding:6px 16px 14px; }
+.dprop{
+  display:grid; grid-template-columns:96px 1fr; gap:10px; padding:8px 0;
+  border-bottom:1px solid var(--divider); align-items:start;
+}
+.dprop:last-child{ border-bottom:0; }
+.dprop-l{ font-size:10.5px; font-weight:700; letter-spacing:0.10em; text-transform:uppercase; color:var(--fg-3); padding-top:2px; }
+.dprop-v{ font-size:12.5px; color:var(--fg); word-break:break-word; }
+.dprop-v.mono{ font-family:var(--font-mono); font-size:11.5px; }
+.dprop-v .subtle{ color:var(--fg-3); }
+
+/* Floating save */
+.floating-save{
+  position:absolute; right:18px; bottom:34px;
+  background:var(--navy-700); color:var(--cream);
+  padding:10px 14px; border-radius:5px;
+  display:flex; align-items:center; gap:14px;
+  box-shadow:0 8px 28px rgba(0,0,0,0.32),0 2px 8px rgba(0,0,0,0.18);
+  font-size:12px; z-index:10;
+}
+.theme-dark .floating-save{ background:var(--cream); color:var(--navy-700); }
+.floating-save .pendings{ font-family:var(--font-mono); font-size:11px; opacity:0.85; }
+.floating-save .btn{ height:24px; padding:0 10px; font-size:11.5px; border-color:rgba(255,255,255,0.30); color:#fff; }
+.floating-save .btn-primary{ background:#fff; color:var(--navy-700); border-color:#fff; }
+.theme-dark .floating-save .btn{ border-color:rgba(20,36,48,0.30); color:var(--navy-700); background:transparent; }
+.theme-dark .floating-save .btn-primary{ background:var(--navy-700); color:#fff; border-color:var(--navy-700); }
+.floating-save .ghost{ background:transparent; border:0; color:inherit; opacity:0.75; cursor:pointer; font:inherit; font-size:11.5px; padding:0; }
+.floating-save .ghost:hover{ text-decoration:underline; opacity:1; }
+
+/* ============== LOGIN (returning) ============== */
+.login-shell{ flex:1; display:grid; grid-template-columns:1fr 1fr; min-height:0; }
+.login-art{
+  background:var(--navy-700); color:var(--cream); position:relative; overflow:hidden;
+  padding:48px 56px;
+  display:flex; flex-direction:column; justify-content:space-between;
+}
+.theme-dark .login-art{ background:#082032; }
+.login-art .R{
+  position:absolute; right:-8%; top:50%; transform:translateY(-50%);
+  height:90%; opacity:0.12;
+  filter:brightness(2.4);
+}
+.login-art .eyebrow{ font-size:10.5px; font-weight:700; letter-spacing:0.18em; text-transform:uppercase; color:rgba(237,234,228,0.65); position:relative; }
+.login-art .title{
+  font-family:var(--font-display); font-size:42px; font-weight:500; line-height:1.05; margin:14px 0 0;
+  letter-spacing:-0.01em; max-width:380px; position:relative;
+}
+.login-art .foot{ font-size:11px; letter-spacing:0.10em; color:rgba(237,234,228,0.55); position:relative; }
+.login-form-wrap{
+  display:flex; flex-direction:column; justify-content:center;
+  padding:48px; background:var(--bg);
+}
+.login-form{ width:100%; max-width:420px; align-self:center; }
+.login-form h2{
+  font-family:var(--font-display); font-weight:500; font-size:30px; margin:0 0 6px; color:var(--fg);
+  letter-spacing:-0.01em;
+}
+.login-form .lead{ font-size:13px; color:var(--fg-2); margin:0 0 4px; }
+.login-form .token-stored{
+  margin:14px 0 22px; padding:10px 12px;
+  background:var(--accent-soft); border-radius:3px;
+  font-size:11.5px; color:var(--accent); display:flex; align-items:center; gap:8px;
+}
+.login-form .field-label{
+  font-size:10.5px; font-weight:700; letter-spacing:0.10em; text-transform:uppercase; color:var(--fg-3);
+  margin-bottom:8px;
+}
+.user-grid{
+  display:grid; grid-template-columns:repeat(4,1fr); gap:6px;
+  max-height:280px; overflow-y:auto; padding:2px;
+}
+.user-card{
+  display:flex; flex-direction:column; align-items:center; gap:5px;
+  padding:10px 6px; border:1px solid var(--border-strong); background:var(--elevated); border-radius:3px;
+  cursor:pointer; text-align:center;
+}
+.user-card:hover{ border-color:var(--accent); }
+.user-card.active{ border-color:var(--accent); background:var(--accent-soft); border-width:2px; padding:9px 5px; }
+.user-card .av{
+  width:34px; height:34px; border-radius:50%;
+  background:var(--petrol-600); color:#fff; font-size:11.5px; font-weight:700;
+  display:inline-flex; align-items:center; justify-content:center;
+}
+.user-card.active .av{ background:var(--accent); }
+.user-card .nm{ font-size:11px; font-weight:600; color:var(--fg); line-height:1.2; }
+.user-card .rl{ font-size:9.5px; color:var(--fg-3); letter-spacing:0.04em; }
+.login-actions{ margin-top:22px; display:flex; align-items:center; gap:12px; }
+.login-actions .swap{
+  margin-left:auto; font-size:11.5px; color:var(--fg-3);
+  background:transparent; border:0; cursor:pointer; font:inherit;
+}
+.login-actions .swap:hover{ color:var(--accent); text-decoration:underline; }
+
+/* ============== Sync panel ============== */
+.sync-row{
+  display:grid; grid-template-columns:160px 80px 1fr 130px 60px;
+  gap:14px; padding:11px 16px; border-bottom:1px solid var(--divider);
+  align-items:center; font-size:12.5px;
+}
+.sync-row .b{ font-weight:600; color:var(--fg); display:flex; align-items:center; gap:8px; }
+.sync-row .b .dot{ width:6px; height:6px; border-radius:50%; background:var(--status-ok); }
+.sync-row .b .dot.warn{ background:var(--status-warn); }
+.sync-row .b .dot.idle{ background:var(--fg-3); }
+.sync-row .count{ font-family:var(--font-mono); font-size:11.5px; color:var(--fg-3); text-align:right; }
+.sync-row .progress{ height:4px; background:var(--row-hover); border-radius:3px; overflow:hidden; }
+.sync-row .progress span{ display:block; height:100%; background:var(--accent); }
+.sync-row .stamp{ font-size:11px; color:var(--fg-3); }
+
+/* ============== Modal ============== */
+.modal-backdrop{
+  position:absolute; inset:0; background:rgba(20,36,48,0.55);
+  backdrop-filter:blur(2px);
+  display:flex; align-items:center; justify-content:center; z-index:80;
+}
+.modal{
+  background:var(--elevated); border:1px solid var(--border-strong); border-radius:6px;
+  width:480px; box-shadow:0 24px 60px rgba(0,0,0,0.40);
+  display:flex; flex-direction:column;
+}
+.modal-head{
+  padding:16px 20px 12px; border-bottom:1px solid var(--divider);
+}
+.modal-head .eyebrow{ font-size:9.5px; font-weight:700; letter-spacing:0.14em; text-transform:uppercase; color:var(--fg-3); margin-bottom:4px; }
+.modal-head h3{ font-family:var(--font-display); font-size:21px; font-weight:500; margin:0; color:var(--fg); letter-spacing:-0.005em; }
+.modal-body{ padding:16px 20px; font-size:13px; color:var(--fg); }
+.modal-foot{
+  padding:12px 20px; border-top:1px solid var(--divider);
+  background:var(--panel); display:flex; justify-content:flex-end; gap:8px; border-radius:0 0 6px 6px;
+}
+.diff{ border:1px solid var(--border); border-radius:3px; overflow:hidden; margin-top:12px; font-size:11.5px; }
+.diff-row{ display:grid; grid-template-columns:1fr 1fr 1fr; border-bottom:1px solid var(--divider); }
+.diff-row:last-child{ border-bottom:0; }
+.diff-row.head{ background:var(--bg); font-weight:700; font-size:9.5px; letter-spacing:0.12em; text-transform:uppercase; color:var(--fg-3); }
+.diff-cell{ padding:7px 10px; border-right:1px solid var(--divider); font-family:var(--font-mono); }
+.diff-cell:last-child{ border-right:0; }
+.diff-cell.label{ font-family:var(--font-body); color:var(--fg-2); font-weight:500; }
+.diff-cell.before{ color:var(--fg-3); text-decoration:line-through; background:rgba(154,59,59,0.05); }
+.diff-cell.after{ color:var(--success); background:rgba(63,110,85,0.06); }
+
+/* Command palette */
+.palette{
+  position:absolute; top:14%; left:50%; transform:translateX(-50%);
+  width:540px; background:var(--elevated); border:1px solid var(--border-strong); border-radius:6px;
+  z-index:90; box-shadow:0 24px 60px rgba(0,0,0,0.45);
+  display:flex; flex-direction:column;
+}
+.palette-input{
+  display:flex; align-items:center; gap:10px;
+  padding:14px 16px; border-bottom:1px solid var(--divider);
+  font-size:14px; color:var(--fg-3);
+}
+.palette-input .typed{ color:var(--fg); flex:1; font-size:14px; }
+.palette-input .typed::after{ content:''; display:inline-block; width:1px; height:14px; background:var(--accent); animation:blink 1s steps(2) infinite; vertical-align:-2px; margin-left:1px; }
+@keyframes blink { 50% { opacity:0; } }
+.palette-list{ max-height:340px; overflow-y:auto; padding:6px 0; }
+.palette-section{
+  padding:6px 16px 4px; font-size:9.5px; font-weight:700; letter-spacing:0.14em;
+  text-transform:uppercase; color:var(--fg-3);
+}
+.palette-row{
+  display:grid; grid-template-columns:auto 1fr auto auto; gap:10px; align-items:center;
+  padding:8px 16px; cursor:pointer;
+}
+.palette-row.active{ background:var(--accent-soft); }
+.palette-row .ic{ width:14px; height:14px; color:var(--fg-3); }
+.palette-row.active .ic{ color:var(--accent); }
+.palette-row .lb{ font-size:13px; color:var(--fg); }
+.palette-row .kn{ font-size:10px; color:var(--fg-3); letter-spacing:0.04em; text-transform:uppercase; font-weight:600; }
+
+/* Importar stepper */
+.stepper{
+  padding:14px 24px; background:var(--panel); border-bottom:1px solid var(--border);
+  display:flex; align-items:center; gap:0; flex-shrink:0;
+}
+.step-item{ display:flex; align-items:center; gap:10px; font-size:12px; color:var(--fg-3); font-weight:500; }
+.step-item.active{ color:var(--fg); }
+.step-item.done{ color:var(--fg-2); }
+.step-dot{
+  width:22px; height:22px; border-radius:50%;
+  display:inline-flex; align-items:center; justify-content:center;
+  background:var(--row-hover); color:var(--fg-3); font-size:11px; font-weight:700; font-family:var(--font-mono);
+  border:1px solid var(--border);
+}
+.step-item.active .step-dot{ background:var(--accent); color:var(--accent-fg); border-color:var(--accent); }
+.step-item.done .step-dot{ background:var(--success); color:#fff; border-color:var(--success); }
+.step-line{ width:64px; height:1px; background:var(--border); margin:0 14px; }
+
+/* Banner */
+.banner{
+  display:flex; align-items:center; gap:10px;
+  padding:9px 18px; font-size:12.5px; font-weight:500;
+  border-bottom:1px solid;
+}
+.banner-warn{ background:rgba(181,138,63,0.12); color:var(--warning); border-bottom-color:rgba(181,138,63,0.25); }
+.banner-info{ background:var(--accent-soft); color:var(--accent); border-bottom-color:rgba(16,64,99,0.18); }
+
+/* Empty state */
+.empty{
+  flex:1; display:flex; align-items:center; justify-content:center; padding:48px;
+}
+.empty-inner{ text-align:center; max-width:380px; }
+.empty-icon{
+  width:64px; height:64px; margin:0 auto 16px;
+  background:var(--row-hover); border-radius:50%;
+  display:inline-flex; align-items:center; justify-content:center;
+  color:var(--fg-3);
+}
+.empty h3{ font-family:var(--font-display); font-weight:500; font-size:22px; color:var(--fg); margin:0 0 8px; letter-spacing:-0.01em; }
+.empty p{ font-size:13px; color:var(--fg-2); margin:0 0 18px; line-height:1.55; }
+
+/* Activity */
+.activity-row{
+  display:grid; grid-template-columns:24px 1fr auto; gap:10px;
+  padding:9px 16px; border-bottom:1px solid var(--divider); font-size:12px;
+  align-items:center;
+}
+.activity-row .av{
+  width:22px; height:22px; border-radius:50%; background:var(--accent); color:var(--accent-fg);
+  display:inline-flex; align-items:center; justify-content:center;
+  font-size:9.5px; font-weight:700; letter-spacing:0.04em;
+}
+.activity-row .ts{ font-size:10.5px; color:var(--fg-3); font-family:var(--font-mono); }
+
+/* Dashboard layout */
+.dash{
+  display:flex; flex-direction:column; gap:20px;
+}
+.dash-row-2{ display:grid; grid-template-columns:1fr 1fr; gap:20px; }
+
+/* Config */
+.cfg-layout{ flex:1; display:grid; grid-template-columns:200px 1fr; min-height:0; }
+.cfg-nav{
+  border-right:1px solid var(--border); background:var(--panel);
+  padding:10px 8px; display:flex; flex-direction:column; gap:2px; overflow-y:auto;
+}
+.cfg-nav-item{
+  height:30px; padding:0 10px; border-radius:3px;
+  display:flex; align-items:center; gap:9px; cursor:pointer;
+  font-size:12px; color:var(--fg-2);
+}
+.cfg-nav-item:hover{ background:var(--row-hover); color:var(--fg); }
+.cfg-nav-item.active{ background:var(--accent-soft); color:var(--accent); font-weight:600; }
+.cfg-body{ overflow-y:auto; padding:22px 28px; }
+.cfg-section{ max-width:680px; }
+.cfg-section + .cfg-section{ margin-top:26px; padding-top:22px; border-top:1px solid var(--border); }
+.cfg-section h2{ font-family:var(--font-display); font-weight:500; font-size:20px; margin:0 0 4px; color:var(--fg); letter-spacing:-0.005em; }
+.cfg-section p.help{ font-size:12.5px; color:var(--fg-2); margin:0 0 16px; line-height:1.55; max-width:520px; }
+.cfg-row{ display:grid; grid-template-columns:160px 1fr; gap:14px; align-items:center; padding:9px 0; border-bottom:1px solid var(--divider); }
+.cfg-row > label{ font-size:11px; font-weight:600; letter-spacing:0.04em; color:var(--fg-2); }
+.cfg-val{ font-size:12.5px; color:var(--fg); display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.cfg-val.mono{ font-family:var(--font-mono); }
+.cfg-val .subtle{ color:var(--fg-3); font-size:11.5px; }
+
+.theme-cards{ display:flex; gap:10px; }
+.theme-card{
+  display:flex; flex-direction:column; gap:6px; align-items:center;
+  padding:8px; border:2px solid var(--border); border-radius:4px;
+  cursor:pointer; font-size:11.5px;
+}
+.theme-card:hover{ border-color:var(--fg-3); }
+.theme-card.active{ border-color:var(--accent); background:var(--accent-soft); }
+.tp{
+  width:88px; height:54px; border-radius:3px; overflow:hidden;
+  display:grid; grid-template-columns:22px 1fr; grid-template-rows:1fr;
+  border:1px solid var(--border);
+}
+.tp-light{ background:#FAF7F2; }
+.tp-light span:first-child{ background:#0C324D; }
+.tp-light span:last-child{ background:linear-gradient(to bottom,#F2EEE7 12px,#FAF7F2 12px); }
+.tp-dark{ background:#142430; }
+.tp-dark span:first-child{ background:#0A1F2D; }
+.tp-dark span:last-child{ background:linear-gradient(to bottom,#1A2D3D 12px,#142430 12px); }
+.tp-auto span:first-child{ background:linear-gradient(to right,#0C324D 50%,#0A1F2D 50%); }
+.tp-auto span:last-child{ background:linear-gradient(to right,#F2EEE7 50%,#1A2D3D 50%); }
+
+.shortcut-grid{ display:grid; grid-template-columns:1fr 1fr; gap:2px 24px; }
+.sc-row{
+  display:flex; align-items:center; justify-content:space-between; gap:12px;
+  padding:8px 0; border-bottom:1px solid var(--divider); font-size:12.5px;
+}
+.sc-row .keys{ display:inline-flex; gap:4px; align-items:center; }
+.sc-row .lb{ color:var(--fg-2); flex:1; text-align:right; }
+.sc-row.captured{ background:var(--accent-soft); padding:8px 10px; border-radius:3px; border-bottom:0; }
+.sc-row.captured .keys{ color:var(--accent); font-weight:700; }
+.sc-row.captured .saved{ font-size:10.5px; color:var(--success); font-weight:700; letter-spacing:0.10em; text-transform:uppercase; }
+
+.user-tbl{ width:100%; border-collapse:separate; border-spacing:0; font-size:12px; }
+.user-tbl th{ font-size:10px; font-weight:700; letter-spacing:0.08em; text-transform:uppercase; color:var(--fg-3); padding:8px 10px; text-align:left; border-bottom:1px solid var(--border); }
+.user-tbl td{ padding:7px 10px; border-bottom:1px solid var(--divider); color:var(--fg); }
+.user-tbl tr.you td{ background:var(--accent-soft); font-weight:600; }
+.you-chip{ font-size:9.5px; font-weight:700; letter-spacing:0.10em; text-transform:uppercase; padding:1px 6px; border-radius:2px; background:var(--accent); color:var(--accent-fg); }
+
+/* Cells helpers */
+.rel-arrow{ display:inline-block; color:var(--fg-3); margin-right:4px; font-family:var(--font-mono); }
+.muted-empty{ color:var(--fg-3); font-style:italic; font-size:11.5px; }
+.row-warn td{ background:rgba(181,138,63,0.08) !important; }
+.row-err td{ background:rgba(154,59,59,0.06) !important; }
+.cell-err-icon{ display:inline-flex; vertical-align:middle; margin-right:4px; color:var(--danger); }
+
+/* Misc */
+.hr{ height:1px; background:var(--divider); border:0; margin:14px 0; }
+hr{ height:1px; background:var(--divider); border:0; }
+.small{ font-size:11px; color:var(--fg-3); }
+.f-num{ font-variant-numeric:tabular-nums; }
+
+/* Inline svg sizing */
+svg{ display:inline-block; vertical-align:middle; }
+
+/* Print-friendly: hide review chrome on print */
+@media print{ .review-head,.toc{ display:none; } body{ background:#fff; } }
+</style>
+</head>
+<body>
+
+<header class="review-head">
+  <h1>Notion RPADV — V2 (revisão)</h1>
+  <span class="meta">9 telas · claro + escuro · 27 abr 2026</span>
+  <span class="spacer"></span>
+  <span class="meta">PySide6 · 1.108 processos · 17 usuários</span>
+</header>
+
+<nav class="toc">
+  <a href="#s1"><small>01</small><strong>Login (returning)</strong></a>
+  <a href="#s2"><small>02</small><strong>Dashboard</strong></a>
+  <a href="#s3"><small>03</small><strong>Processos</strong></a>
+  <a href="#s4"><small>04</small><strong>Clientes</strong></a>
+  <a href="#s5"><small>05</small><strong>Importar — etapa 2</strong></a>
+  <a href="#s6"><small>06</small><strong>Logs · reverter</strong></a>
+  <a href="#s7"><small>07</small><strong>Configurações</strong></a>
+  <a href="#s8"><small>08</small><strong>Paleta de comandos</strong></a>
+  <a href="#s9"><small>09</small><strong>Empty state</strong></a>
+  <a href="DELTA_V1_V2.md" target="_blank"><small>doc</small><strong>DELTA_V1_V2.md →</strong></a>
+</nav>
+
+<main class="screens">
+
+<!-- ============================================================ -->
+<!-- 01 LOGIN (returning) -->
+<!-- ============================================================ -->
+<section class="screen-block" id="s1">
+  <div class="screen-block-head">
+    <span class="num">01</span>
+    <h2>Login — modo returning</h2>
+    <span class="desc">Token salvo no Credential Manager. Mostra só o seletor de usuário (17 cards) + botão "Trocar token" como secundário no rodapé.</span>
+  </div>
+  <div class="screen-pair">
+    <div class="frame theme-light"><span class="frame-label">Light</span>
+      <div class="win"><span>Notion RPADV — Selecionar usuário</span><span class="win-buttons"><span class="win-btn">−</span><span class="win-btn">▢</span><span class="win-btn close">×</span></span></div>
+      <div class="login-shell">
+        <aside class="login-art">
+          <img class="R" src="assets/symbol-cream.png" alt="">
+          <div>
+            <div class="eyebrow">Ricardo Passos Advocacia</div>
+            <h1 class="title">Continue de onde parou.</h1>
+          </div>
+          <div class="foot">v0.4.2 · Windows · 17 usuários cadastrados</div>
+        </aside>
+        <div class="login-form-wrap"><div class="login-form" id="login-form-light"></div></div>
+      </div>
+    </div>
+    <div class="frame theme-dark"><span class="frame-label">Dark</span>
+      <div class="win"><span>Notion RPADV — Selecionar usuário</span><span class="win-buttons"><span class="win-btn">−</span><span class="win-btn">▢</span><span class="win-btn close">×</span></span></div>
+      <div class="login-shell">
+        <aside class="login-art">
+          <img class="R" src="assets/symbol-cream.png" alt="">
+          <div>
+            <div class="eyebrow">Ricardo Passos Advocacia</div>
+            <h1 class="title">Continue de onde parou.</h1>
+          </div>
+          <div class="foot">v0.4.2 · Windows · 17 usuários cadastrados</div>
+        </aside>
+        <div class="login-form-wrap"><div class="login-form" id="login-form-dark"></div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- 02 DASHBOARD -->
+<!-- ============================================================ -->
+<section class="screen-block" id="s2">
+  <div class="screen-block-head">
+    <span class="num">02</span>
+    <h2>Dashboard</h2>
+    <span class="desc">883 processos ativos, 1.072 clientes, 0 tarefas hoje (calmo, não anômalo), 0 prazos críticos (cinza, não vermelho). Spacing 32px entre seções.</span>
+  </div>
+  <div class="screen-pair">
+    <div class="frame theme-light"><span class="frame-label">Light</span>
+      <div class="win"><span>Notion RPADV — Déborah Marques</span><span class="win-buttons"><span class="win-btn">−</span><span class="win-btn">▢</span><span class="win-btn close">×</span></span></div>
+      <div class="shell">
+        <aside class="sidebar" data-active="dashboard"></aside>
+        <div class="main">
+          <div class="page" id="dash-light"></div>
+          <div class="statusbar">
+            <span class="seg"><span class="dot"></span><span>Online</span></span>
+            <span class="seg"><span>Déborah Marques</span></span>
+            <span class="seg"><span>Última sync: há 2 min</span></span>
+            <span class="right"><span>v0.4.2 · Windows</span></span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="frame theme-dark"><span class="frame-label">Dark</span>
+      <div class="win"><span>Notion RPADV — Déborah Marques</span><span class="win-buttons"><span class="win-btn">−</span><span class="win-btn">▢</span><span class="win-btn close">×</span></span></div>
+      <div class="shell">
+        <aside class="sidebar" data-active="dashboard"></aside>
+        <div class="main">
+          <div class="page" id="dash-dark"></div>
+          <div class="statusbar">
+            <span class="seg"><span class="dot"></span><span>Online</span></span>
+            <span class="seg"><span>Déborah Marques</span></span>
+            <span class="seg"><span>Última sync: há 2 min</span></span>
+            <span class="right"><span>v0.4.2 · Windows</span></span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- 03 PROCESSOS -->
+<!-- ============================================================ -->
+<section class="screen-block" id="s3">
+  <div class="screen-block-head">
+    <span class="num">03</span>
+    <h2>Processos</h2>
+    <span class="desc">Tabela com 1 linha em edição inline + barra flutuante. Filtro ativo "Tribunal: TRT/10". Coluna "Cliente principal" com nomes resolvidos. Linhas de recurso indicadas com ↳ + CNJ pai.</span>
+  </div>
+  <div class="screen-pair">
+    <div class="frame theme-light"><span class="frame-label">Light</span>
+      <div class="win"><span>Notion RPADV — Déborah Marques</span><span class="win-buttons"><span class="win-btn">−</span><span class="win-btn">▢</span><span class="win-btn close">×</span></span></div>
+      <div class="shell">
+        <aside class="sidebar" data-active="processos"></aside>
+        <div class="main">
+          <div class="page" id="proc-light"></div>
+          <div class="statusbar">
+            <span class="seg"><span class="dot"></span><span>Online</span></span>
+            <span class="seg"><span>Déborah Marques</span></span>
+            <span class="seg"><span>Última sync: há 2 min</span></span>
+            <span class="seg" style="color:var(--warning)"><span>3 alterações pendentes em Processos</span></span>
+            <span class="right"><span>v0.4.2 · Windows</span></span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="frame theme-dark"><span class="frame-label">Dark</span>
+      <div class="win"><span>Notion RPADV — Déborah Marques</span><span class="win-buttons"><span class="win-btn">−</span><span class="win-btn">▢</span><span class="win-btn close">×</span></span></div>
+      <div class="shell">
+        <aside class="sidebar" data-active="processos"></aside>
+        <div class="main">
+          <div class="page" id="proc-dark"></div>
+          <div class="statusbar">
+            <span class="seg"><span class="dot"></span><span>Online</span></span>
+            <span class="seg"><span>Déborah Marques</span></span>
+            <span class="seg"><span>Última sync: há 2 min</span></span>
+            <span class="seg" style="color:var(--warning)"><span>3 alterações pendentes em Processos</span></span>
+            <span class="right"><span>v0.4.2 · Windows</span></span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- 04 CLIENTES -->
+<!-- ============================================================ -->
+<section class="screen-block" id="s4">
+  <div class="screen-block-head">
+    <span class="num">04</span>
+    <h2>Clientes</h2>
+    <span class="desc">Inclui coluna "N° processos" (lookup reverso) e "Sucessor de" com seta ↳. 1.072 clientes total.</span>
+  </div>
+  <div class="screen-pair">
+    <div class="frame theme-light"><span class="frame-label">Light</span>
+      <div class="win"><span>Notion RPADV — Déborah Marques</span><span class="win-buttons"><span class="win-btn">−</span><span class="win-btn">▢</span><span class="win-btn close">×</span></span></div>
+      <div class="shell">
+        <aside class="sidebar" data-active="clientes"></aside>
+        <div class="main">
+          <div class="page" id="cli-light"></div>
+          <div class="statusbar">
+            <span class="seg"><span class="dot"></span><span>Online</span></span>
+            <span class="seg"><span>Déborah Marques</span></span>
+            <span class="seg"><span>Última sync: há 2 min</span></span>
+            <span class="right"><span>v0.4.2 · Windows</span></span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="frame theme-dark"><span class="frame-label">Dark</span>
+      <div class="win"><span>Notion RPADV — Déborah Marques</span><span class="win-buttons"><span class="win-btn">−</span><span class="win-btn">▢</span><span class="win-btn close">×</span></span></div>
+      <div class="shell">
+        <aside class="sidebar" data-active="clientes"></aside>
+        <div class="main">
+          <div class="page" id="cli-dark"></div>
+          <div class="statusbar">
+            <span class="seg"><span class="dot"></span><span>Online</span></span>
+            <span class="seg"><span>Déborah Marques</span></span>
+            <span class="seg"><span>Última sync: há 2 min</span></span>
+            <span class="right"><span>v0.4.2 · Windows</span></span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- 05 IMPORTAR — etapa 2 com erro -->
+<!-- ============================================================ -->
+<section class="screen-block" id="s5">
+  <div class="screen-block-head">
+    <span class="num">05</span>
+    <h2>Importar — etapa 2 (preview)</h2>
+    <span class="desc">12 linhas, 1 com erro de validação (CNJ malformado) e 2 conflitos. Banner amarelo no topo.</span>
+  </div>
+  <div class="screen-pair">
+    <div class="frame theme-light"><span class="frame-label">Light</span>
+      <div class="win"><span>Notion RPADV — Déborah Marques</span><span class="win-buttons"><span class="win-btn">−</span><span class="win-btn">▢</span><span class="win-btn close">×</span></span></div>
+      <div class="shell">
+        <aside class="sidebar" data-active="importar"></aside>
+        <div class="main">
+          <div class="page" id="imp-light"></div>
+          <div class="statusbar"><span class="seg"><span class="dot"></span><span>Online</span></span><span class="seg"><span>Déborah</span></span><span class="right"><span>v0.4.2</span></span></div>
+        </div>
+      </div>
+    </div>
+    <div class="frame theme-dark"><span class="frame-label">Dark</span>
+      <div class="win"><span>Notion RPADV — Déborah Marques</span><span class="win-buttons"><span class="win-btn">−</span><span class="win-btn">▢</span><span class="win-btn close">×</span></span></div>
+      <div class="shell">
+        <aside class="sidebar" data-active="importar"></aside>
+        <div class="main">
+          <div class="page" id="imp-dark"></div>
+          <div class="statusbar"><span class="seg"><span class="dot"></span><span>Online</span></span><span class="seg"><span>Déborah</span></span><span class="right"><span>v0.4.2</span></span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- 06 LOGS · reverter -->
+<!-- ============================================================ -->
+<section class="screen-block" id="s6">
+  <div class="screen-block-head">
+    <span class="num">06</span>
+    <h2>Logs de edição · modal de reversão</h2>
+    <span class="desc">Tabela com 12 entradas, uma já revertida (chip cinza). Modal centralizado mostra resumo da alteração e botões "Confirmar reversão" (danger) / "Cancelar".</span>
+  </div>
+  <div class="screen-pair">
+    <div class="frame theme-light"><span class="frame-label">Light · modal aberto</span>
+      <div class="win"><span>Notion RPADV — Déborah Marques</span><span class="win-buttons"><span class="win-btn">−</span><span class="win-btn">▢</span><span class="win-btn close">×</span></span></div>
+      <div class="shell">
+        <aside class="sidebar" data-active="logs"></aside>
+        <div class="main" style="position:relative;">
+          <div class="page" id="logs-light"></div>
+          <div class="statusbar"><span class="seg"><span class="dot"></span><span>Online</span></span><span class="seg"><span>Déborah</span></span><span class="right"><span>v0.4.2</span></span></div>
+          <div class="modal-backdrop">
+            <div class="modal">
+              <div class="modal-head"><div class="eyebrow">Confirmação destrutiva</div><h3>Reverter alteração?</h3></div>
+              <div class="modal-body">
+                <p style="margin:0 0 4px;">Reverter alteração feita por <strong>Déborah Marques</strong> em <strong>27/04 14:32</strong>:</p>
+                <p style="margin:0;color:var(--fg-2);font-size:12.5px;">Status do processo <span class="mono" style="font-family:var(--font-mono);font-size:11.5px;">0726654-71.2024.8.07.0001</span></p>
+                <div class="diff">
+                  <div class="diff-row head"><div class="diff-cell label">Propriedade</div><div class="diff-cell">Antes</div><div class="diff-cell">Depois</div></div>
+                  <div class="diff-row"><div class="diff-cell label">Status</div><div class="diff-cell before">Ativo</div><div class="diff-cell after">Arquivado</div></div>
+                </div>
+                <p style="margin:14px 0 0;font-size:11.5px;color:var(--fg-3);">A alteração será desfeita no Notion e registrada como evento "Reversão". Esta ação também pode ser revertida.</p>
+              </div>
+              <div class="modal-foot">
+                <button class="btn">Cancelar <span class="kbd">Esc</span></button>
+                <button class="btn btn-danger">Confirmar reversão</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="frame theme-dark"><span class="frame-label">Dark · modal aberto</span>
+      <div class="win"><span>Notion RPADV — Déborah Marques</span><span class="win-buttons"><span class="win-btn">−</span><span class="win-btn">▢</span><span class="win-btn close">×</span></span></div>
+      <div class="shell">
+        <aside class="sidebar" data-active="logs"></aside>
+        <div class="main" style="position:relative;">
+          <div class="page" id="logs-dark"></div>
+          <div class="statusbar"><span class="seg"><span class="dot"></span><span>Online</span></span><span class="seg"><span>Déborah</span></span><span class="right"><span>v0.4.2</span></span></div>
+          <div class="modal-backdrop">
+            <div class="modal">
+              <div class="modal-head"><div class="eyebrow">Confirmação destrutiva</div><h3>Reverter alteração?</h3></div>
+              <div class="modal-body">
+                <p style="margin:0 0 4px;">Reverter alteração feita por <strong>Déborah Marques</strong> em <strong>27/04 14:32</strong>:</p>
+                <p style="margin:0;color:var(--fg-2);font-size:12.5px;">Status do processo <span style="font-family:var(--font-mono);font-size:11.5px;">0726654-71.2024.8.07.0001</span></p>
+                <div class="diff">
+                  <div class="diff-row head"><div class="diff-cell label">Propriedade</div><div class="diff-cell">Antes</div><div class="diff-cell">Depois</div></div>
+                  <div class="diff-row"><div class="diff-cell label">Status</div><div class="diff-cell before">Ativo</div><div class="diff-cell after">Arquivado</div></div>
+                </div>
+                <p style="margin:14px 0 0;font-size:11.5px;color:var(--fg-3);">A alteração será desfeita no Notion e registrada como evento "Reversão". Esta ação também pode ser revertida.</p>
+              </div>
+              <div class="modal-foot">
+                <button class="btn">Cancelar <span class="kbd">Esc</span></button>
+                <button class="btn btn-danger">Confirmar reversão</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- 07 Configurações -->
+<!-- ============================================================ -->
+<section class="screen-block" id="s7">
+  <div class="screen-block-head">
+    <span class="num">07</span>
+    <h2>Configurações — Aparência + Atalhos + Usuários</h2>
+    <span class="desc">3 radios de tema (Auto default), captura de atalho com "✓ Salvo", tabela de usuários destacando o ativo (chip "Você"). 6 seções no menu lateral.</span>
+  </div>
+  <div class="screen-pair">
+    <div class="frame theme-light"><span class="frame-label">Light</span>
+      <div class="win"><span>Notion RPADV — Déborah Marques</span><span class="win-buttons"><span class="win-btn">−</span><span class="win-btn">▢</span><span class="win-btn close">×</span></span></div>
+      <div class="shell">
+        <aside class="sidebar" data-active="config"></aside>
+        <div class="main">
+          <div class="page" id="cfg-light"></div>
+          <div class="statusbar"><span class="seg"><span class="dot"></span><span>Online</span></span><span class="seg"><span>Déborah</span></span><span class="right"><span>v0.4.2</span></span></div>
+        </div>
+      </div>
+    </div>
+    <div class="frame theme-dark"><span class="frame-label">Dark</span>
+      <div class="win"><span>Notion RPADV — Déborah Marques</span><span class="win-buttons"><span class="win-btn">−</span><span class="win-btn">▢</span><span class="win-btn close">×</span></span></div>
+      <div class="shell">
+        <aside class="sidebar" data-active="config"></aside>
+        <div class="main">
+          <div class="page" id="cfg-dark"></div>
+          <div class="statusbar"><span class="seg"><span class="dot"></span><span>Online</span></span><span class="seg"><span>Déborah</span></span><span class="right"><span>v0.4.2</span></span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- 08 Paleta de comandos -->
+<!-- ============================================================ -->
+<section class="screen-block" id="s8">
+  <div class="screen-block-head">
+    <span class="num">08</span>
+    <h2>Paleta de comandos sobre Dashboard</h2>
+    <span class="desc">⌘K aberta, query "rec", primeiro resultado destacado. Backdrop blur sobre conteúdo.</span>
+  </div>
+  <div class="screen-pair">
+    <div class="frame theme-light"><span class="frame-label">Light</span>
+      <div class="win"><span>Notion RPADV — Déborah Marques</span><span class="win-buttons"><span class="win-btn">−</span><span class="win-btn">▢</span><span class="win-btn close">×</span></span></div>
+      <div class="shell">
+        <aside class="sidebar" data-active="dashboard"></aside>
+        <div class="main" style="position:relative;">
+          <div class="page" id="dash-light-2"></div>
+          <div class="statusbar"><span class="seg"><span class="dot"></span><span>Online</span></span><span class="seg"><span>Déborah</span></span><span class="right"><span>v0.4.2</span></span></div>
+          <div class="modal-backdrop" style="background:rgba(20,36,48,0.30);"></div>
+          <div class="palette" id="palette-light"></div>
+        </div>
+      </div>
+    </div>
+    <div class="frame theme-dark"><span class="frame-label">Dark</span>
+      <div class="win"><span>Notion RPADV — Déborah Marques</span><span class="win-buttons"><span class="win-btn">−</span><span class="win-btn">▢</span><span class="win-btn close">×</span></span></div>
+      <div class="shell">
+        <aside class="sidebar" data-active="dashboard"></aside>
+        <div class="main" style="position:relative;">
+          <div class="page" id="dash-dark-2"></div>
+          <div class="statusbar"><span class="seg"><span class="dot"></span><span>Online</span></span><span class="seg"><span>Déborah</span></span><span class="right"><span>v0.4.2</span></span></div>
+          <div class="modal-backdrop" style="background:rgba(0,0,0,0.55);"></div>
+          <div class="palette" id="palette-dark"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- 09 Empty state -->
+<!-- ============================================================ -->
+<section class="screen-block" id="s9">
+  <div class="screen-block-head">
+    <span class="num">09</span>
+    <h2>Empty state — base sem registros (NOVO na V2)</h2>
+    <span class="desc">Após primeira sync que não retornou nada. Diferente de "sem resultados após filtro": aqui a base inteira está vazia. Botão "Sincronizar agora" como primário.</span>
+  </div>
+  <div class="screen-pair">
+    <div class="frame theme-light"><span class="frame-label">Light · Tarefas vazia</span>
+      <div class="win"><span>Notion RPADV — Déborah Marques</span><span class="win-buttons"><span class="win-btn">−</span><span class="win-btn">▢</span><span class="win-btn close">×</span></span></div>
+      <div class="shell">
+        <aside class="sidebar" data-active="tarefas"></aside>
+        <div class="main">
+          <div class="page" id="empty-light"></div>
+          <div class="statusbar"><span class="seg"><span class="dot warn"></span><span>Online · base vazia</span></span><span class="seg"><span>Déborah</span></span><span class="right"><span>v0.4.2</span></span></div>
+        </div>
+      </div>
+    </div>
+    <div class="frame theme-dark"><span class="frame-label">Dark · Tarefas vazia</span>
+      <div class="win"><span>Notion RPADV — Déborah Marques</span><span class="win-buttons"><span class="win-btn">−</span><span class="win-btn">▢</span><span class="win-btn close">×</span></span></div>
+      <div class="shell">
+        <aside class="sidebar" data-active="tarefas"></aside>
+        <div class="main">
+          <div class="page" id="empty-dark"></div>
+          <div class="statusbar"><span class="seg"><span class="dot warn"></span><span>Online · base vazia</span></span><span class="seg"><span>Déborah</span></span><span class="right"><span>v0.4.2</span></span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<script src="data-v2.js"></script>
+<script src="render.js"></script>
+</body>
+</html>

@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="pt-BR" data-theme="light">
+<head>
+<meta charset="UTF-8" />
+<title>Notion RPADV — Ricardo Passos Advocacia</title>
+<meta name="viewport" content="width=1280" />
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500;600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+
+<link rel="stylesheet" href="styles/brand.css" />
+<link rel="stylesheet" href="styles/app.css" />
+<link rel="stylesheet" href="styles/extras.css" />
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<style>
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--app-bg);
+    color: var(--app-fg);
+    font-family: var(--font-body);
+    overflow: hidden;
+  }
+  #root { height: 100vh; display: flex; flex-direction: column; }
+</style>
+</head>
+<body>
+
+<div id="root"></div>
+
+<script src="data.js"></script>
+<script type="text/babel" src="icons.jsx"></script>
+<script type="text/babel" src="shared.jsx"></script>
+<script type="text/babel" src="login.jsx"></script>
+<script type="text/babel" src="dashboard.jsx"></script>
+<script type="text/babel" src="base-table.jsx"></script>
+<script type="text/babel" src="pages-bases.jsx"></script>
+<script type="text/babel" src="pages-admin.jsx"></script>
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+
+<script type="text/babel" data-presets="env,react">
+/* global React, ReactDOM, RPDATA, Icon, Shared, LoginScreen, Dashboard, Pages, AdminPages, TweaksPanel, useTweaks, TweakSection, TweakRadio, TweakToggle, TweakSlider, TweakColor */
+const { useState, useEffect, useMemo, useCallback, useRef } = React;
+const { WinChrome, Sidebar, StatusBar, useToasts, Kbd } = Shared;
+
+const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "theme": "light",
+  "density": "compact",
+  "showWindowChrome": true,
+  "edgeState": "normal",
+  "accentColor": "#0C324D"
+}/*EDITMODE-END*/;
+
+function App() {
+  const [tweaks, setTweak] = useTweaks(TWEAK_DEFAULTS);
+  const [user, setUser] = useState(null);
+  const [route, setRoute] = useState('dashboard');
+  const [pendingChanges, setPendingChanges] = useState(0);
+  const [lastSync, setLastSync] = useState('há 2 min');
+  const [syncing, setSyncing] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const toasts = useToasts();
+
+  // ---- theme
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', tweaks.theme === 'auto'
+      ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+      : tweaks.theme);
+  }, [tweaks.theme]);
+
+  useEffect(() => {
+    document.documentElement.style.setProperty('--app-accent', tweaks.accentColor);
+  }, [tweaks.accentColor]);
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-density', tweaks.density);
+  }, [tweaks.density]);
+
+  // ---- shortcuts
+  useEffect(() => {
+    function onKey(e) {
+      const isMod = e.metaKey || e.ctrlKey;
+      if (isMod && e.key === 'k') { e.preventDefault(); setPaletteOpen(true); return; }
+      if (isMod && e.key === '/') { e.preventDefault(); setShortcutsOpen(true); return; }
+      if (e.key === 'Escape') { setPaletteOpen(false); setShortcutsOpen(false); return; }
+      if (isMod && /^[1-9]$/.test(e.key)) {
+        const map = { '1': 'dashboard', '2': 'processos', '3': 'clientes', '4': 'tarefas', '5': 'catalogo', '6': 'importar', '7': 'logs', '8': 'config' };
+        if (map[e.key]) { e.preventDefault(); setRoute(map[e.key]); }
+      }
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  // urgent count
+  const urgentCount = useMemo(() => {
+    return RPDATA.TAREFAS_LIST.filter((t) => {
+      if (t.status === 'Concluída') return false;
+      const days = Shared.daysUntil(t.prazo);
+      return days <= 3;
+    }).length;
+  }, []);
+
+  // ---- handlers
+  const handleLogin = (u) => {
+    setUser(u);
+    toasts.push(`Sessão iniciada · ${u.name}`);
+  };
+  const handleSync = () => {
+    setSyncing(true);
+    setTimeout(() => { setSyncing(false); setLastSync('agora'); toasts.push('Sincronizado com Notion'); setPendingChanges(0); }, 1400);
+  };
+  const handleCommit = (count) => {
+    setPendingChanges((p) => p + count);
+  };
+
+  // ---- not logged in
+  if (!user) {
+    return (
+      <>
+        {tweaks.showWindowChrome && <WinChrome user={null} onMinimize={() => {}} onMaximize={() => {}} onClose={() => {}} />}
+        <LoginScreen onLogin={handleLogin} />
+        {toasts.node}
+        <TweaksPanel>
+          <TweakSection title="Aparência">
+            <TweakRadio label="Tema" value={tweaks.theme} options={[
+              { value: 'light', label: 'Claro' },
+              { value: 'dark', label: 'Escuro' },
+              { value: 'auto', label: 'Auto' },
+            ]} onChange={(v) => setTweak('theme', v)} />
+            <TweakToggle label="Window chrome (Win)" checked={tweaks.showWindowChrome} onChange={(v) => setTweak('showWindowChrome', v)} />
+            <TweakColor label="Cor de destaque" value={tweaks.accentColor} onChange={(v) => setTweak('accentColor', v)} />
+          </TweakSection>
+        </TweaksPanel>
+      </>
+    );
+  }
+
+  // ---- logged in
+  let pageNode = null;
+  const pageProps = { user, onCommit: handleCommit, pushToast: toasts.push };
+  if (route === 'dashboard')  pageNode = <Dashboard user={user} onNavigate={setRoute} lastSync={lastSync} onSync={handleSync} syncing={syncing} />;
+  else if (route === 'processos') pageNode = <Pages.ProcessosPage {...pageProps} edgeState={tweaks.edgeState} />;
+  else if (route === 'clientes')  pageNode = <Pages.ClientesPage {...pageProps} />;
+  else if (route === 'tarefas')   pageNode = <Pages.TarefasPage {...pageProps} />;
+  else if (route === 'catalogo')  pageNode = <Pages.CatalogoPage {...pageProps} />;
+  else if (route === 'importar')  pageNode = <AdminPages.ImportarPage {...pageProps} />;
+  else if (route === 'logs')      pageNode = <AdminPages.LogsPage {...pageProps} />;
+  else if (route === 'config')    pageNode = <AdminPages.ConfiguracoesPage {...pageProps} tweaks={tweaks} setTweak={setTweak} />;
+
+  // online state from edgeState tweak
+  const onlineState = tweaks.edgeState === 'rate-limit' ? 'rate-limit'
+                    : tweaks.edgeState === 'offline' ? 'offline'
+                    : tweaks.edgeState === 'error' ? 'error'
+                    : 'online';
+
+  return (
+    <>
+      {tweaks.showWindowChrome && <WinChrome user={user} onMinimize={() => {}} onMaximize={() => {}} onClose={() => setUser(null)} />}
+      <div className="shell-grid">
+        <Sidebar active={route} onNavigate={setRoute} urgentCount={urgentCount} />
+        <main className="main-area" data-screen-label={route}>
+          {pageNode}
+        </main>
+      </div>
+      <StatusBar user={user} lastSync={lastSync} pending={pendingChanges} onlineState={onlineState} />
+      {toasts.node}
+      {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} onNavigate={(r) => { setRoute(r); setPaletteOpen(false); }} />}
+      {shortcutsOpen && <ShortcutsModal onClose={() => setShortcutsOpen(false)} />}
+
+      <TweaksPanel>
+        <TweakSection title="Aparência">
+          <TweakRadio label="Tema" value={tweaks.theme} options={[
+            { value: 'light', label: 'Claro' },
+            { value: 'dark', label: 'Escuro' },
+            { value: 'auto', label: 'Auto' },
+          ]} onChange={(v) => setTweak('theme', v)} />
+          <TweakRadio label="Densidade" value={tweaks.density} options={[
+            { value: 'compact', label: 'Compacta' },
+            { value: 'comfy', label: 'Confortável' },
+          ]} onChange={(v) => setTweak('density', v)} />
+          <TweakToggle label="Window chrome (Win)" checked={tweaks.showWindowChrome} onChange={(v) => setTweak('showWindowChrome', v)} />
+          <TweakColor label="Cor de destaque" value={tweaks.accentColor} onChange={(v) => setTweak('accentColor', v)} />
+        </TweakSection>
+        <TweakSection title="Estados de borda">
+          <TweakRadio label="Conexão" value={tweaks.edgeState} options={[
+            { value: 'normal', label: 'Normal' },
+            { value: 'offline', label: 'Offline' },
+            { value: 'rate-limit', label: '429' },
+            { value: 'error', label: 'Erro' },
+          ]} onChange={(v) => setTweak('edgeState', v)} />
+        </TweakSection>
+        <TweakSection title="Atalhos">
+          <button className="btn btn-secondary" onClick={() => setShortcutsOpen(true)} style={{ width: '100%' }}>
+            Ver atalhos <Kbd>⌘/</Kbd>
+          </button>
+        </TweakSection>
+      </TweaksPanel>
+    </>
+  );
+}
+
+// ============================================================
+// Command palette
+// ============================================================
+function CommandPalette({ onClose, onNavigate }) {
+  const [q, setQ] = useState('');
+  const inputRef = useRef(null);
+  useEffect(() => { inputRef.current && inputRef.current.focus(); }, []);
+
+  const items = [
+    { id: 'dashboard', label: 'Ir para Dashboard', kind: 'Navegação', shortcut: '⌘1' },
+    { id: 'processos', label: 'Ir para Processos', kind: 'Navegação', shortcut: '⌘2' },
+    { id: 'clientes',  label: 'Ir para Clientes',  kind: 'Navegação', shortcut: '⌘3' },
+    { id: 'tarefas',   label: 'Ir para Tarefas',   kind: 'Navegação', shortcut: '⌘4' },
+    { id: 'catalogo',  label: 'Ir para Catálogo',  kind: 'Navegação', shortcut: '⌘5' },
+    { id: 'importar',  label: 'Importar planilha', kind: 'Ação',      shortcut: '⌘6' },
+    { id: 'logs',      label: 'Abrir Logs',        kind: 'Ação',      shortcut: '⌘7' },
+    { id: 'config',    label: 'Abrir Configurações', kind: 'Ação',    shortcut: '⌘8' },
+  ];
+  const filtered = items.filter((it) => !q || it.label.toLowerCase().includes(q.toLowerCase()));
+
+  return (
+    <div className="modal-backdrop" onClick={onClose} style={{ alignItems: 'flex-start', paddingTop: '14vh' }}>
+      <div className="modal" onClick={(e) => e.stopPropagation()} style={{ width: 540, padding: 0 }}>
+        <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--app-divider)', display: 'flex', alignItems: 'center', gap: 10 }}>
+          <Icon.Search size={16} />
+          <input ref={inputRef} value={q} onChange={(e) => setQ(e.target.value)}
+            placeholder="Buscar processos, clientes, ações…"
+            style={{ flex: 1, border: 'none', background: 'transparent', font: 'inherit', fontSize: 14, color: 'var(--app-fg)', outline: 'none' }} />
+          <Kbd>Esc</Kbd>
+        </div>
+        <div style={{ maxHeight: 360, overflowY: 'auto', padding: '6px 0' }}>
+          {filtered.length === 0 && <div style={{ padding: '20px 16px', fontSize: 12.5, color: 'var(--app-fg-subtle)' }}>Nenhum resultado.</div>}
+          {filtered.map((it, i) => (
+            <button key={it.id}
+              onClick={() => onNavigate(it.id)}
+              className="cmd-row"
+              style={{ width: '100%', textAlign: 'left', display: 'grid', gridTemplateColumns: '1fr auto auto', gap: 10, alignItems: 'center', padding: '9px 16px', border: 'none', background: i === 0 ? 'var(--app-row-hover)' : 'transparent', cursor: 'pointer', fontSize: 13 }}>
+              <span style={{ color: 'var(--app-fg)' }}>{it.label}</span>
+              <span style={{ fontSize: 10.5, color: 'var(--app-fg-subtle)', letterSpacing: '0.06em', textTransform: 'uppercase', fontWeight: 600 }}>{it.kind}</span>
+              <Kbd>{it.shortcut}</Kbd>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// Shortcuts modal
+// ============================================================
+function ShortcutsModal({ onClose }) {
+  const groups = [
+    { title: 'Navegação', items: [
+      { keys: '⌘1', label: 'Dashboard' },
+      { keys: '⌘2', label: 'Processos' },
+      { keys: '⌘3', label: 'Clientes' },
+      { keys: '⌘4', label: 'Tarefas' },
+      { keys: '⌘5', label: 'Catálogo' },
+    ] },
+    { title: 'Ações', items: [
+      { keys: '⌘K', label: 'Paleta de comandos' },
+      { keys: '⌘N', label: 'Novo processo' },
+      { keys: '⌘S', label: 'Salvar alterações' },
+      { keys: '⌘Z', label: 'Desfazer' },
+      { keys: '⌘/', label: 'Esta tela' },
+    ] },
+    { title: 'Tabelas', items: [
+      { keys: 'Enter', label: 'Editar célula' },
+      { keys: 'Esc', label: 'Cancelar edição' },
+      { keys: '↑ ↓', label: 'Navegar linhas' },
+      { keys: 'Espaço', label: 'Selecionar linha' },
+      { keys: '⌘A', label: 'Selecionar todos' },
+    ] },
+    { title: 'Detalhe', items: [
+      { keys: '⌘D', label: 'Abrir/fechar painel' },
+      { keys: 'J K', label: 'Próximo/anterior' },
+      { keys: 'Tab', label: 'Próximo campo' },
+    ] },
+  ];
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()} style={{ width: 720 }}>
+        <div className="modal-head">
+          <div>
+            <div className="modal-eyebrow">Referência</div>
+            <h2>Atalhos de teclado</h2>
+          </div>
+          <button className="btn btn-ghost btn-icon" onClick={onClose} aria-label="Fechar"><Icon.X size={14} /></button>
+        </div>
+        <div className="modal-body">
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px 32px' }}>
+            {groups.map((g) => (
+              <div key={g.title} style={{ marginBottom: 18 }}>
+                <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '0.14em', textTransform: 'uppercase', color: 'var(--app-fg-subtle)', marginBottom: 6, paddingBottom: 6, borderBottom: '1px solid var(--app-divider)' }}>{g.title}</div>
+                {g.items.map((it) => (
+                  <div key={it.label} className="shortcut-row">
+                    <Kbd>{it.keys}</Kbd>
+                    <span className="shortcut-label">{it.label}</span>
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="modal-foot">
+          <button className="btn btn-secondary" onClick={onClose}>Fechar <Kbd>Esc</Kbd></button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+
+</body>
+</html>

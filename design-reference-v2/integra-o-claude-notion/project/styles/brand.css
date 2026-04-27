@@ -1,0 +1,305 @@
+/* ================================================================
+   Ricardo Passos Advocacia — Colors & Type
+   ----------------------------------------------------------------
+   Tokens canonized from 00_IDV/ vector PDFs (verdade-fonte) and
+   the official identity manual. Keep all consumer code on these
+   variables — never hardcode brand hexes.
+   ----------------------------------------------------------------
+   FONT SUBSTITUTION NOTICE
+   - Display: Playfair Display (matches the manual's editorial
+     slides 4 + 18; the lockup nominative is vectorized).
+   - Body:    Nunito Sans (Google Fonts substitute for Avenir,
+     which is proprietary/Linotype). Same geometric-humanist
+     personality, similar x-height + counter widths. ASK USER
+     for the licensed Avenir webfont files to drop into /fonts.
+   ================================================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Nunito+Sans:ital,opsz,wght@0,6..12,300;0,6..12,400;0,6..12,500;0,6..12,600;0,6..12,700;0,6..12,800;0,6..12,900;1,6..12,400;1,6..12,500;1,6..12,700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+  /* ============================================================
+     COLOR — Primary (Navy) · source: Logo Principal 2.pdf vector
+     ============================================================ */
+  --color-primary-50:  #F5F7F9;
+  --color-primary-100: #E7ECEF;
+  --color-primary-200: #CAD5DD;
+  --color-primary-300: #9FB3C1;
+  --color-primary-400: #708CA1;
+  --color-primary-500: #3B627F;
+  --color-primary-600: #104063;   /* base — institutional navy */
+  --color-primary-700: #0C324D;
+  --color-primary-800: #082032;
+  --color-primary-900: #040E16;
+
+  /* ============================================================
+     COLOR — Secondary (Petrol/Teal) · Logo Principal 1.pdf
+     ============================================================ */
+  --color-secondary-50:  #F7F8F8;
+  --color-secondary-100: #EBEEEE;
+  --color-secondary-200: #D3DBDB;
+  --color-secondary-300: #B0BDBD;
+  --color-secondary-400: #889C9C;
+  --color-secondary-500: #5D7878;
+  --color-secondary-600: #395A5A;  /* base — petrol */
+  --color-secondary-700: #2C4646;
+  --color-secondary-800: #1C2D2D;
+  --color-secondary-900: #0D1414;
+
+  /* ============================================================
+     COLOR — Neutral (Warm Gray) · Logo Principal 3.pdf
+     ============================================================ */
+  --color-neutral-50:  #FAFAFA;
+  --color-neutral-100: #F4F3F3;
+  --color-neutral-200: #E6E5E4;
+  --color-neutral-300: #D2D0CE;
+  --color-neutral-400: #BBB8B6;
+  --color-neutral-500: #A29E9B;
+  --color-neutral-600: #8E8985;  /* base — warm gray */
+  --color-neutral-700: #6F6B68;
+  --color-neutral-800: #474442;
+  --color-neutral-900: #1F1E1D;
+
+  /* Accent mirrors secondary by convention — do not diverge
+     without coordinating consumers. */
+  --color-accent-600: var(--color-secondary-600);
+  --color-accent-700: var(--color-secondary-700);
+
+  /* ============================================================
+     COLOR — Surface · canonical cream from Logo Principal 4.pdf
+     ============================================================ */
+  --color-surface-default: #EDEAE4;   /* cream — primary surface */
+  --color-surface-muted:   #F7F6F4;   /* off-white — interior */
+  --color-surface-paper:   #FFFFFF;   /* paper white — cards */
+  --color-surface-inverse: #142430;   /* midnight backdrop */
+  --color-surface-black:   #020202;   /* slide-01 absolute */
+
+  /* ============================================================
+     COLOR — Semantic foreground tokens
+     ============================================================ */
+  --fg-1: #142430;          /* default body text */
+  --fg-2: #3F4751;          /* muted body text */
+  --fg-3: #6F6B68;          /* tertiary / captions */
+  --fg-on-dark: #EDEAE4;    /* on navy/petrol/black */
+  --fg-strong: #020202;     /* editorial headings on light */
+  --fg-link: var(--color-primary-600);
+  --fg-link-hover: var(--color-primary-700);
+
+  /* Border + divider tokens */
+  --border-subtle: var(--color-neutral-200);
+  --border-default: var(--color-neutral-300);
+  --border-strong: var(--color-neutral-700);
+  --border-on-dark: rgba(237, 234, 228, 0.18);
+
+  /* Status — proposal pending Gruv approval (NOT in original IDV) */
+  --color-success: #3F6E55;
+  --color-warning: #B58A3F;
+  --color-danger:  #9A3B3B;
+  --color-info:    var(--color-primary-500);
+
+  /* ============================================================
+     TYPOGRAPHY — families
+     ============================================================ */
+  --font-display: "Playfair Display", "Cormorant Garamond", Georgia, "Times New Roman", serif;
+  --font-body:    "Nunito Sans", "Avenir", "Avenir Next", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono:    "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --fw-light:   300;
+  --fw-regular: 400;
+  --fw-medium:  500;
+  --fw-bold:    700;
+  --fw-black:   900;
+
+  /* ============================================================
+     TYPOGRAPHY — modular scale (1.25 / major third)
+     ============================================================ */
+  --fs-xs:  0.75rem;   /* 12 — eyebrow caps */
+  --fs-sm:  0.875rem;  /* 14 — caption */
+  --fs-md:  1rem;      /* 16 — body base */
+  --fs-lg:  1.125rem;  /* 18 — body large */
+  --fs-xl:  1.25rem;   /* 20 — H4 */
+  --fs-2xl: 1.5rem;    /* 24 — H3 */
+  --fs-3xl: 1.875rem;  /* 30 */
+  --fs-4xl: 2.25rem;   /* 36 — H2 */
+  --fs-5xl: 3rem;      /* 48 — H1 */
+  --fs-6xl: 3.75rem;   /* 60 — display */
+  --fs-7xl: 4.5rem;    /* 72 — hero display */
+
+  --lh-tight:  1.15;
+  --lh-snug:   1.3;
+  --lh-normal: 1.5;
+  --lh-loose:  1.75;
+
+  --ls-tight:  -0.01em;
+  --ls-normal: 0;
+  --ls-wide:   0.04em;
+  --ls-wider:  0.12em;   /* eyebrow / nominative */
+  --ls-widest: 0.18em;
+
+  /* ============================================================
+     SPACING (4px base)
+     ============================================================ */
+  --space-0:  0;
+  --space-1:  4px;
+  --space-2:  8px;
+  --space-3:  12px;
+  --space-4:  16px;
+  --space-5:  20px;
+  --space-6:  24px;
+  --space-8:  32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+  --space-20: 80px;
+  --space-24: 96px;
+  --space-32: 128px;
+
+  /* ============================================================
+     RADIUS — kept tight; the brand prefers crisp rectangles
+     ============================================================ */
+  --radius-none: 0;
+  --radius-sm:   2px;
+  --radius-md:   4px;
+  --radius-lg:   8px;
+  --radius-xl:   16px;
+  --radius-full: 9999px;
+
+  /* ============================================================
+     SHADOW — soft, low-contrast (sober institutional feel)
+     ============================================================ */
+  --shadow-sm:    0 1px 2px rgba(20, 36, 48, 0.06);
+  --shadow-md:    0 4px 8px rgba(20, 36, 48, 0.08), 0 2px 4px rgba(20, 36, 48, 0.04);
+  --shadow-lg:    0 12px 28px rgba(20, 36, 48, 0.12), 0 4px 10px rgba(20, 36, 48, 0.06);
+  --shadow-xl:    0 24px 56px rgba(20, 36, 48, 0.18), 0 8px 18px rgba(20, 36, 48, 0.08);
+  --shadow-inner: inset 0 1px 2px rgba(20, 36, 48, 0.08);
+
+  /* ============================================================
+     BORDERS — echo the monogram's thin, constant stroke
+     ============================================================ */
+  --border-thin:    1px;
+  --border-regular: 1.5px;
+  --border-thick:   2px;
+
+  /* Motion — subtle, no bounce (institutional restraint) */
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-out:      cubic-bezier(0, 0, 0.2, 1);
+  --duration-fast: 120ms;
+  --duration-base: 180ms;
+  --duration-slow: 280ms;
+}
+
+/* ================================================================
+   SEMANTIC TYPOGRAPHY — apply directly to elements
+   These are guidelines; consumers may also use the tokens above.
+   ================================================================ */
+
+.rp-eyebrow,
+[data-rp="eyebrow"] {
+  font-family: var(--font-body);
+  font-weight: var(--fw-bold);
+  font-size: var(--fs-xs);
+  letter-spacing: var(--ls-wider);
+  text-transform: uppercase;
+  color: var(--color-secondary-600);
+  line-height: var(--lh-snug);
+}
+
+.rp-display,
+[data-rp="display"] {
+  font-family: var(--font-display);
+  font-weight: var(--fw-regular);
+  font-size: var(--fs-6xl);
+  line-height: var(--lh-tight);
+  letter-spacing: var(--ls-tight);
+  color: var(--fg-strong);
+}
+
+.rp-h1, h1.rp,
+[data-rp="h1"] {
+  font-family: var(--font-display);
+  font-weight: var(--fw-regular);
+  font-size: var(--fs-5xl);
+  line-height: var(--lh-tight);
+  letter-spacing: var(--ls-tight);
+  color: var(--fg-strong);
+}
+
+.rp-h2, h2.rp,
+[data-rp="h2"] {
+  font-family: var(--font-display);
+  font-weight: var(--fw-regular);
+  font-size: var(--fs-4xl);
+  line-height: var(--lh-snug);
+  color: var(--color-primary-600);
+}
+
+.rp-h3, h3.rp,
+[data-rp="h3"] {
+  font-family: var(--font-body);
+  font-weight: var(--fw-bold);
+  font-size: var(--fs-2xl);
+  line-height: var(--lh-snug);
+  color: var(--color-primary-700);
+}
+
+.rp-h4, h4.rp,
+[data-rp="h4"] {
+  font-family: var(--font-body);
+  font-weight: var(--fw-bold);
+  font-size: var(--fs-xl);
+  line-height: var(--lh-snug);
+  color: var(--fg-1);
+}
+
+.rp-body-lg,
+[data-rp="body-lg"] {
+  font-family: var(--font-body);
+  font-weight: var(--fw-regular);
+  font-size: var(--fs-lg);
+  line-height: var(--lh-normal);
+  color: var(--fg-1);
+}
+
+.rp-body, p.rp,
+[data-rp="body"] {
+  font-family: var(--font-body);
+  font-weight: var(--fw-regular);
+  font-size: var(--fs-md);
+  line-height: var(--lh-normal);
+  color: var(--fg-1);
+}
+
+.rp-caption,
+[data-rp="caption"] {
+  font-family: var(--font-body);
+  font-weight: var(--fw-medium);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-normal);
+  color: var(--fg-2);
+}
+
+.rp-nominative,
+[data-rp="nominative"] {
+  font-family: var(--font-body);
+  font-weight: var(--fw-bold);
+  font-size: var(--fs-xs);
+  letter-spacing: var(--ls-wider);
+  text-transform: uppercase;
+  line-height: 1.4;
+}
+
+.rp-quote,
+[data-rp="quote"] {
+  font-family: var(--font-display);
+  font-weight: var(--fw-regular);
+  font-style: italic;
+  font-size: var(--fs-3xl);
+  line-height: var(--lh-snug);
+  color: var(--fg-strong);
+}
+
+.rp-mono,
+[data-rp="mono"] {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  color: var(--fg-2);
+}
