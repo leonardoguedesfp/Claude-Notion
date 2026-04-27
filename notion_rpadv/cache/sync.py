@@ -79,7 +79,7 @@ class SyncWorker(QObject):
                     notion_prop = notion_props.get(spec.notion_name)
                     if notion_prop is not None:
                         try:
-                            decoded[prop_key] = decode_value(spec, notion_prop)
+                            decoded[prop_key] = decode_value(notion_prop, spec.tipo)
                         except Exception:  # noqa: BLE001
                             decoded[prop_key] = None
                     else:

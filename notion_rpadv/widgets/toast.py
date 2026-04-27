@@ -1,6 +1,8 @@
 """Toast notification widget (slides in from bottom-right)."""
 from __future__ import annotations
 
+from shiboken6 import isValid
+
 from PySide6.QtWidgets import (
     QFrame,
     QLabel,
@@ -226,7 +228,7 @@ class ToastManager:
     def push(self, message: str, kind: str = "info") -> None:
         """Show a new toast and stack it above existing ones."""
         # Purge any toasts that have already been dismissed (deleted)
-        self._stack = [t for t in self._stack if t.parent() is not None]
+        self._stack = [t for t in self._stack if isValid(t)]
 
         toast = Toast(message, kind, parent=self._parent)
         toast.adjustSize()
@@ -242,7 +244,7 @@ class ToastManager:
     # ------------------------------------------------------------------
 
     def _on_toast_destroyed(self) -> None:
-        self._stack = [t for t in self._stack if t.parent() is not None]
+        self._stack = [t for t in self._stack if isValid(t)]
         self._reposition_all()
 
     def _reposition_all(self) -> None:
@@ -255,7 +257,7 @@ class ToastManager:
 
         bottom_y = ph - _TOAST_MARGIN_BOTTOM
         for toast in reversed(self._stack):
-            if toast.parent() is None:
+            if not isValid(toast):
                 continue
             toast.adjustSize()
             th = toast.height()

@@ -63,8 +63,6 @@ class NotionClient:
                 "Content-Type": "application/json",
             }
         )
-        # Cache: database_id → data_source_id (Notion API 2025-09-03)
-        self._ds_cache: dict[str, str] = {}
 
     # ------------------------------------------------------------------
     # Internos
@@ -145,29 +143,6 @@ class NotionClient:
     # Endpoints públicos
     # ------------------------------------------------------------------
 
-    def _resolve_ds_id(self, database_id: str) -> str:
-        """Resolve database_id → data_source_id (cached).
-
-        Notion API 2025-09-03 replaced /databases/{id}/query with
-        /data_sources/{id}/query, where the data_source_id is obtained
-        from the database object's 'data_sources' array.
-        The result is cached so each database is looked up only once.
-        """
-        if database_id in self._ds_cache:
-            return self._ds_cache[database_id]
-        db = self._request("GET", f"/databases/{database_id}")
-        sources: list[dict] = db.get("data_sources") or []
-        if not sources:
-            raise NotionAPIError(
-                404,
-                f"Nenhum data source encontrado para o banco {database_id}. "
-                "Verifique se a integração tem acesso a essa base no Notion "
-                "(⋯ → Conexões → adicionar integração).",
-            )
-        ds_id: str = sources[0]["id"]
-        self._ds_cache[database_id] = ds_id
-        return ds_id
-
     def me(self) -> dict:
         """Valida o token retornando os dados do bot/usuário autenticado.
 
@@ -207,8 +182,7 @@ class NotionClient:
         if start_cursor:
             body["start_cursor"] = start_cursor
 
-        ds_id = self._resolve_ds_id(database_id)
-        return self._request("POST", f"/data_sources/{ds_id}/query", json=body)
+        return self._request("POST", f"/data_sources/{database_id}/query", json=body)
 
     def query_all(
         self,

@@ -87,7 +87,7 @@ SCHEMAS: dict[str, dict[str, PropSpec]] = {
 
     "Processos": {
         "cnj": PropSpec(
-            notion_name="CNJ",
+            notion_name="Número do processo",
             tipo="title",
             label="CNJ",
             editavel=True,
@@ -133,21 +133,21 @@ SCHEMAS: dict[str, dict[str, PropSpec]] = {
             cor_por_valor=_COR_STATUS_PROC,
         ),
         "cliente": PropSpec(
-            notion_name="Cliente",
+            notion_name="Clientes",
             tipo="relation",
             label="Cliente principal",
             editavel=True,
             largura_col="17%",
         ),
         "parte_contraria": PropSpec(
-            notion_name="Parte Contrária",
-            tipo="rich_text",
+            notion_name="Partes adversas",
+            tipo="multi_select",
             label="Parte contrária",
             editavel=True,
             largura_col="15%",
         ),
         "distribuicao": PropSpec(
-            notion_name="Distribuição",
+            notion_name="Data de distribuição",
             tipo="date",
             label="Distribuição",
             editavel=True,
@@ -170,16 +170,23 @@ SCHEMAS: dict[str, dict[str, PropSpec]] = {
             largura_col="5%",
         ),
         "tema955": PropSpec(
-            notion_name="Tema 955",
+            notion_name="Tema 955 — Sobrestado",
             tipo="checkbox",
             label="Tema 955",
             editavel=True,
             largura_col="5%",
         ),
-        "sucessao": PropSpec(
-            notion_name="Sucessão",
+        "sobrestado_tj": PropSpec(
+            notion_name="Sobrestado - TJ conexa",
             tipo="checkbox",
-            label="Sucessão",
+            label="Sob. TJ",
+            editavel=True,
+            largura_col="5%",
+        ),
+        "sobrestado_irr": PropSpec(
+            notion_name="Sobrestado - IRR 20",
+            tipo="checkbox",
+            label="Sob. IRR",
             editavel=True,
             largura_col="5%",
         ),
@@ -202,9 +209,9 @@ SCHEMAS: dict[str, dict[str, PropSpec]] = {
             largura_col="24%",
         ),
         "cpf": PropSpec(
-            notion_name="CPF",
+            notion_name="CPF/CNPJ",
             tipo="rich_text",
-            label="CPF",
+            label="CPF/CNPJ",
             editavel=True,
             obrigatorio=True,
             largura_col="12%",
@@ -244,7 +251,7 @@ SCHEMAS: dict[str, dict[str, PropSpec]] = {
             notion_name="Cadastrado em",
             tipo="date",
             label="Cadastro",
-            editavel=False,   # geralmente data de criação
+            editavel=False,
             largura_col="10%",
             formato="BR_DATE",
         ),
@@ -266,7 +273,7 @@ SCHEMAS: dict[str, dict[str, PropSpec]] = {
 
     "Tarefas": {
         "titulo": PropSpec(
-            notion_name="Título",
+            notion_name="Tarefa",
             tipo="title",
             label="Tarefa",
             editavel=True,
@@ -274,7 +281,7 @@ SCHEMAS: dict[str, dict[str, PropSpec]] = {
             largura_col="28%",
         ),
         "prazo_fatal": PropSpec(
-            notion_name="Prazo Fatal",
+            notion_name="Prazo fatal",
             tipo="date",
             label="Prazo fatal",
             editavel=True,
@@ -310,7 +317,7 @@ SCHEMAS: dict[str, dict[str, PropSpec]] = {
         ),
         "cliente": PropSpec(
             notion_name="Cliente",
-            tipo="rollup",   # derivado da relação Processo
+            tipo="rollup",
             label="Cliente",
             editavel=False,
             largura_col="14%",
@@ -323,7 +330,7 @@ SCHEMAS: dict[str, dict[str, PropSpec]] = {
             largura_col="5%",
         ),
         "catalogo_tipo": PropSpec(
-            notion_name="Tipo (Catálogo)",
+            notion_name="Tipo de tarefa",
             tipo="relation",
             label="Tipo (catálogo)",
             editavel=True,
@@ -333,7 +340,7 @@ SCHEMAS: dict[str, dict[str, PropSpec]] = {
 
     "Catalogo": {
         "titulo": PropSpec(
-            notion_name="Título",
+            notion_name="Nome",
             tipo="title",
             label="Tipo de tarefa",
             editavel=True,
