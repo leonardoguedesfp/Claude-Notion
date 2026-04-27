@@ -202,7 +202,7 @@ class TestBug04Bug05Importar:
 
         mock_client = MagicMock()
         mock_client.create_page.return_value = {"id": "new"}
-        with patch("notion_rpadv.pages.importar.NotionClient", return_value=mock_client):
+        with patch("notion_bulk_edit.notion_api.NotionClient", return_value=mock_client):
             page._do_import()
 
         assert mock_client.create_page.called, "create_page was never called — BUG-04"

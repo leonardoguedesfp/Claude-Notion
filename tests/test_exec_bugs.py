@@ -195,7 +195,7 @@ def test_load_shortcuts_ignores_corrupt_file(tmp_path, monkeypatch):
 def test_no_mac_glyph_in_search_placeholder():
     """BUG-EXEC-06: search box placeholder uses Ctrl+K not ⌘K."""
     import pathlib
-    src = pathlib.Path("/home/claude/repo/notion_rpadv/pages/base_table_page.py").read_text()
+    src = (pathlib.Path(__file__).parent.parent / "notion_rpadv/pages/base_table_page.py").read_text()
     assert "⌘K" not in src, "Mac-specific ⌘K glyph found in base_table_page.py"
     assert "Ctrl+K" in src or "Pesquisar" in src
 
@@ -244,7 +244,7 @@ def test_display_value_generic_list():
 def test_filters_use_invalidate_rows_filter():
     """BUG-EXEC-09: filters.py must not call invalidateFilter() (deprecated)."""
     import pathlib
-    src = pathlib.Path("/home/claude/repo/notion_rpadv/models/filters.py").read_text()
+    src = (pathlib.Path(__file__).parent.parent / "notion_rpadv/models/filters.py").read_text()
     # Must NOT use bare invalidateFilter()
     # invalidateRowsFilter is the correct PySide6 6.x API
     assert "invalidateFilter()" not in src, (
@@ -260,7 +260,7 @@ def test_filters_use_invalidate_rows_filter():
 def test_modal_no_backdrop_color_dead_code():
     """BUG-EXEC-11: _BACKDROP_COLOR variable must be removed from modal.py."""
     import pathlib
-    src = pathlib.Path("/home/claude/repo/notion_rpadv/widgets/modal.py").read_text()
+    src = (pathlib.Path(__file__).parent.parent / "notion_rpadv/widgets/modal.py").read_text()
     assert "_BACKDROP_COLOR" not in src, (
         "_BACKDROP_COLOR dead variable still present in modal.py"
     )
