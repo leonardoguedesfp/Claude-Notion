@@ -5,7 +5,7 @@ import sqlite3
 from datetime import datetime
 from typing import Any
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -54,6 +54,9 @@ _COL_ACTION = 6
 
 class LogsPage(QWidget):
     """Page displaying the full history of changes with revert capability."""
+
+    # Emitted when the page wants to show a toast; MainWindow connects this.
+    toast_requested: Signal = Signal(str, str)  # message, kind
 
     def __init__(
         self,
@@ -295,13 +298,8 @@ class LogsPage(QWidget):
         return handler
 
     def _on_revert_finished(self, success: bool, message: str) -> None:
-        # BUG-N19: distinguish success from failure instead of always refreshing silently
-        from notion_rpadv.widgets.toast import ToastManager
-        toast = self.findChild(ToastManager)
         if success:
-            if toast:
-                toast.push("Reversão aplicada com sucesso.", kind="success")
+            self.toast_requested.emit("Reversão aplicada com sucesso.", "success")
+            self.refresh()
         else:
-            if toast:
-                toast.push(f"Erro ao reverter: {message}", kind="error")
-        self.refresh()
+            self.toast_requested.emit(f"Erro ao reverter: {message}", "error")

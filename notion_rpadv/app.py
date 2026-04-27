@@ -192,6 +192,7 @@ class MainWindow(QMainWindow):
                 conn=self._conn, token=self._token, user=self._user_id,
                 facade=self._facade, dark=self._dark
             )
+            logs.toast_requested.connect(self._push_toast)
             self._add_page(_PAGE_LOGS, logs)
 
         # BUG-19: pass sync_manager to ConfiguracoesPage
