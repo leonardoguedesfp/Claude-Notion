@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import sqlite3
-import time
 from typing import Any
 
 from PySide6.QtCore import QObject, QThread, Signal
@@ -22,12 +21,12 @@ class CommitWorker(QObject):
 
     Emits:
         progress(done: int, total: int)
-        finished(succeeded: int, failed: int)
+        finished(base: str, succeeded: int, failed: int)
         error(message: str)  — fatal, no edits were applied
     """
 
     progress: Signal = Signal(int, int)
-    finished: Signal = Signal(int, int)
+    finished: Signal = Signal(str, int, int)  # BUG-07: base, succeeded, failed
     error: Signal = Signal(str)
 
     def __init__(
@@ -36,12 +35,14 @@ class CommitWorker(QObject):
         conn: sqlite3.Connection,
         edits: list[dict[str, Any]],
         user: str = "",
+        base: str = "",
     ) -> None:
         super().__init__()
         self._token = token
         self._conn = conn
         self._edits = edits
         self._user = user
+        self._base = base
 
     def run(self) -> None:
         """For each edit: encode_value + client.update_page + mark_edit_applied."""
@@ -59,7 +60,7 @@ class CommitWorker(QObject):
         failed = 0
 
         for i, edit in enumerate(self._edits, start=1):
-            base: str = edit.get("base", "")
+            base: str = edit.get("base", self._base)
             page_id: str = edit.get("page_id", "")
             key: str = edit.get("key", "")
             new_value: Any = edit.get("new_value")
@@ -67,25 +68,26 @@ class CommitWorker(QObject):
 
             spec = get_prop(base, key)
             if spec is None:
-                # Unknown property — skip but count as failed.
                 failed += 1
                 self.progress.emit(i, total)
                 continue
 
             try:
-                encoded = encode_value(spec, new_value)
+                # BUG-01: fixed argument order — encode_value(value, tipo)
+                encoded = encode_value(new_value, spec.tipo)
                 client.update_page(page_id, {spec.notion_name: encoded})
                 if edit_id:
                     cache_db.mark_edit_applied(self._conn, edit_id, self._user)
                 succeeded += 1
-            except (NotionAPIError, NotionAuthError) as exc:
+            except (NotionAPIError, NotionAuthError):
                 failed += 1
             except Exception:  # noqa: BLE001
                 failed += 1
 
             self.progress.emit(i, total)
 
-        self.finished.emit(succeeded, failed)
+        # BUG-07: emit base along with counts
+        self.finished.emit(self._base, succeeded, failed)
 
 
 class _RevertWorker(QObject):
@@ -110,20 +112,30 @@ class _RevertWorker(QObject):
         try:
             client = NotionClient(self._token)
 
-            # Fetch log entry and mark reverted in DB.
-            entry = cache_db.revert_edit(self._conn, self._log_id)
+            # BUG-16: fetch entry WITHOUT marking reverted first
+            entry = cache_db.get_log_entry(self._conn, self._log_id)
+            if entry is None:
+                self.finished.emit(False, f"Log entry {self._log_id} not found.")
+                return
+
             base: str = entry["base"]
             page_id: str = entry["page_id"]
             key: str = entry["key"]
-            old_value: Any = entry["old_value"]  # the value to restore
+            old_value: Any = entry["old_value"]
 
             spec = get_prop(base, key)
             if spec is None:
                 self.finished.emit(False, f"Property '{key}' not found in schema '{base}'.")
                 return
 
-            encoded = encode_value(spec, old_value)
+            # BUG-01: fixed argument order — encode_value(value, tipo)
+            encoded = encode_value(old_value, spec.tipo)
+
+            # BUG-16: API call BEFORE marking reverted in DB
             client.update_page(page_id, {spec.notion_name: encoded})
+
+            # Only mark reverted after successful API call
+            cache_db.revert_edit(self._conn, self._log_id)
 
             # Add a new log entry for the reversion so history is complete.
             new_edit_id = cache_db.add_pending_edit(
@@ -142,7 +154,8 @@ class NotionFacade(QObject):
     """Facade used by UI pages to commit or revert edits to Notion."""
 
     commit_started: Signal = Signal()
-    commit_finished: Signal = Signal(int, int)   # succeeded, failed
+    # BUG-07: base added so pages only clear dirty for their own base
+    commit_finished: Signal = Signal(str, int, int)   # base, succeeded, failed
     commit_error: Signal = Signal(str)
 
     revert_finished: Signal = Signal(bool, str)  # success, message
@@ -160,13 +173,13 @@ class NotionFacade(QObject):
     # Commit
     # ------------------------------------------------------------------
 
-    def commit_edits(self, edits: list[dict[str, Any]], user: str) -> None:
+    def commit_edits(self, edits: list[dict[str, Any]], user: str, base: str = "") -> None:
         """Launch CommitWorker in a QThread to push *edits* to Notion."""
         if self._commit_thread is not None and self._commit_thread.isRunning():
             return  # already busy
 
         thread = QThread(self)
-        worker = CommitWorker(self._token, self._conn, edits, user)
+        worker = CommitWorker(self._token, self._conn, edits, user, base)
         worker.moveToThread(thread)
 
         thread.started.connect(worker.run)
@@ -182,10 +195,10 @@ class NotionFacade(QObject):
         self.commit_started.emit()
         thread.start()
 
-    def _on_commit_finished(self, succeeded: int, failed: int) -> None:
+    def _on_commit_finished(self, base: str, succeeded: int, failed: int) -> None:
         self._commit_thread = None
         self._commit_worker = None
-        self.commit_finished.emit(succeeded, failed)
+        self.commit_finished.emit(base, succeeded, failed)
 
     def _on_commit_error(self, message: str) -> None:
         self._commit_thread = None

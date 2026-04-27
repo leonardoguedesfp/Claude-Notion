@@ -4,7 +4,7 @@ from __future__ import annotations
 import sqlite3
 from typing import Any
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QMainWindow,
@@ -19,7 +19,6 @@ from notion_bulk_edit.config import (
     USUARIOS_LOCAIS,
     get_cache_db_path,
 )
-from notion_rpadv.auth.token_store import get_token
 from notion_rpadv.cache import db as cache_db
 from notion_rpadv.cache.sync import SyncManager
 from notion_rpadv.pages.catalogo import CatalogoPage
@@ -27,7 +26,6 @@ from notion_rpadv.pages.clientes import ClientesPage
 from notion_rpadv.pages.configuracoes import ConfiguracoesPage
 from notion_rpadv.pages.dashboard import DashboardPage
 from notion_rpadv.pages.importar import ImportarPage
-from notion_rpadv.pages.logs import LogsPage
 from notion_rpadv.pages.processos import ProcessosPage
 from notion_rpadv.pages.tarefas import TarefasPage
 from notion_rpadv.services.notion_facade import NotionFacade
@@ -39,6 +37,11 @@ from notion_rpadv.widgets.shortcuts_modal import ShortcutsModal
 from notion_rpadv.widgets.sidebar import Sidebar
 from notion_rpadv.widgets.status_bar import AppStatusBar
 from notion_rpadv.widgets.toast import ToastManager
+
+try:
+    from notion_rpadv.pages.logs import LogsPage
+except ImportError:
+    LogsPage = None  # type: ignore[assignment,misc]
 
 # Page IDs used as keys in the stacked widget registry
 _PAGE_DASHBOARD  = "dashboard"
@@ -136,7 +139,6 @@ class MainWindow(QMainWindow):
         self._toast = ToastManager(central)
         self._command_palette = CommandPalette(parent=self)
         self._command_palette.action_selected.connect(self._on_command_action)
-        # Register navigation + utility actions in the palette
         self._command_palette.set_actions([
             {"id": "nav_dashboard",  "label": "Dashboard",               "section": "Navegação"},
             {"id": "nav_processos",  "label": "Ir para Processos",       "section": "Navegação"},
@@ -157,11 +159,13 @@ class MainWindow(QMainWindow):
     def _build_pages(self) -> None:
         """Instantiate and register every page."""
         base_kwargs: dict[str, Any] = {
-            "conn":   self._conn,
-            "token":  self._token,
-            "user":   self._user_id,
-            "facade": self._facade,
-            "dark":   self._dark,
+            "conn":         self._conn,
+            "token":        self._token,
+            "user":         self._user_id,
+            "facade":       self._facade,
+            # BUG-21: inject shared SyncManager so pages don't create duplicates
+            "sync_manager": self._sync_manager,
+            "dark":         self._dark,
         }
 
         # Dashboard
@@ -183,15 +187,18 @@ class MainWindow(QMainWindow):
         importar.import_done.connect(self._on_import_done)
         self._add_page(_PAGE_IMPORTAR, importar)
 
-        logs = LogsPage(
-            conn=self._conn, token=self._token, user=self._user_id,
-            facade=self._facade, dark=self._dark
-        )
-        self._add_page(_PAGE_LOGS, logs)
+        if LogsPage is not None:
+            logs = LogsPage(
+                conn=self._conn, token=self._token, user=self._user_id,
+                facade=self._facade, dark=self._dark
+            )
+            self._add_page(_PAGE_LOGS, logs)
 
+        # BUG-19: pass sync_manager to ConfiguracoesPage
         config = ConfiguracoesPage(
             current_theme="dark" if self._dark else "light",
             bindings=dict(DEFAULT_SHORTCUTS),
+            sync_manager=self._sync_manager,
             dark=self._dark,
         )
         config.theme_changed.connect(self._on_theme_changed)
@@ -225,7 +232,12 @@ class MainWindow(QMainWindow):
 
     def _apply_theme(self) -> None:
         p = DARK if self._dark else LIGHT
-        qss = build_qss(p)
+        # BUG-10: use qss_dark for dark theme instead of always qss_light
+        if self._dark:
+            from notion_rpadv.theme.qss_dark import build_qss as build_qss_dark
+            qss = build_qss_dark(p)
+        else:
+            qss = build_qss(p)
         self.setStyleSheet(qss)
 
     def _toggle_theme(self) -> None:
@@ -241,6 +253,9 @@ class MainWindow(QMainWindow):
 
     def _on_token_changed(self, token: str) -> None:
         self._token = token
+        # BUG-11: propagate new token to facade and sync_manager
+        self._facade._token = token
+        self._sync_manager._token = token
         self._push_toast("Token atualizado com sucesso.", "success")
 
     # ------------------------------------------------------------------
@@ -283,16 +298,21 @@ class MainWindow(QMainWindow):
         if hasattr(current, "reload"):
             current.reload()  # type: ignore[union-attr]
 
-        # Update last sync in status bar
-        from notion_rpadv.cache import db as cache_db
+        # BUG-22: show max(last_sync) across all bases in status bar
+        self._update_status_bar_sync_time()
+
+    def _update_status_bar_sync_time(self) -> None:
+        """BUG-22: display the most recent sync timestamp across all bases."""
+        max_ts: float = 0.0
         for base in DATA_SOURCES:
             try:
                 ts = cache_db.get_last_sync(self._conn, base)
-                if ts > 0:
-                    self._status_bar.set_last_sync(f"Última sync ({base})", ts)
-                    break
+                if ts > max_ts:
+                    max_ts = ts
             except Exception:  # noqa: BLE001
                 pass
+        if max_ts > 0:
+            self._status_bar.set_last_sync("Última sync", max_ts)
 
     def _on_sync_base_done(self, base: str, added: int, updated: int, removed: int) -> None:
         self._status_bar.set_sync_status(f"{base} sincronizado")
@@ -302,19 +322,17 @@ class MainWindow(QMainWindow):
         self._push_toast(f"Erro ao sincronizar {base}: {message}", "error")
 
     def _auto_sync_if_stale(self) -> None:
-        """Sync any base whose cache is older than CACHE_STALE_HOURS."""
-        stale_found = False
+        """BUG-26: sync only bases whose cache is stale or never synced."""
         for base in DATA_SOURCES:
             try:
-                if cache_db.is_stale(self._conn, base, CACHE_STALE_HOURS):
-                    stale_found = True
-                    break
+                # BUG-23: check never-synced separately from stale
+                never = cache_db.is_never_synced(self._conn, base)
+                stale = cache_db.is_stale(self._conn, base, CACHE_STALE_HOURS)
+                if never or stale:
+                    self._status_bar.set_sync_status("Sincronizando…")
+                    self._sync_manager.sync_base(base)
             except Exception:  # noqa: BLE001
-                stale_found = True
-                break
-        if stale_found:
-            self._status_bar.set_sync_status("Sincronizando…")
-            self._sync_manager.sync_all()
+                self._sync_manager.sync_base(base)
 
     # ------------------------------------------------------------------
     # Signal connections
@@ -326,7 +344,7 @@ class MainWindow(QMainWindow):
         self._sync_manager.base_done.connect(self._on_sync_base_done)
         self._sync_manager.sync_error.connect(self._on_sync_error)
 
-        # Facade commit results
+        # Facade commit results — BUG-07: signal now carries base
         self._facade.commit_started.connect(
             lambda: self._status_bar.set_sync_status("Salvando…")
         )
@@ -335,7 +353,7 @@ class MainWindow(QMainWindow):
             lambda msg: self._push_toast(f"Erro ao salvar: {msg}", "error")
         )
 
-    def _on_commit_finished(self, succeeded: int, failed: int) -> None:
+    def _on_commit_finished(self, base: str, succeeded: int, failed: int) -> None:
         self._status_bar.set_sync_status("Sincronizado")
         if failed == 0:
             self._push_toast(
@@ -350,7 +368,7 @@ class MainWindow(QMainWindow):
         self._push_toast(f"{rows} registro(s) importado(s) para {base}.", "success")
 
     # ------------------------------------------------------------------
-    # Shortcuts
+    # Shortcuts — BUG-17: wire save/discard to active page
     # ------------------------------------------------------------------
 
     def _setup_shortcuts(self) -> None:
@@ -362,6 +380,10 @@ class MainWindow(QMainWindow):
             "nav_tarefas":   lambda: self._navigate(_PAGE_TAREFAS),
             "nav_catalogo":  lambda: self._navigate(_PAGE_CATALOGO),
             "refresh":       self._refresh_current_page,
+            # BUG-17: Ctrl+S → save, Escape → discard on active page
+            "save":          self._save_current_page,
+            "discard":       self._discard_current_page,
+            "new_record":    self._new_record_current_page,
         }
         self._shortcut_registry = ShortcutRegistry(self, handlers)
         self._shortcut_registry.register_all()
@@ -372,6 +394,24 @@ class MainWindow(QMainWindow):
             current.reload()  # type: ignore[union-attr]
         elif hasattr(current, "refresh"):
             current.refresh()  # type: ignore[union-attr]
+
+    def _save_current_page(self) -> None:
+        """BUG-17: Ctrl+S delegates to the active page's save."""
+        current = self._stack.currentWidget()
+        if hasattr(current, "_on_save"):
+            current._on_save()  # type: ignore[union-attr]
+
+    def _discard_current_page(self) -> None:
+        """BUG-17: Escape delegates to the active page's discard."""
+        current = self._stack.currentWidget()
+        if hasattr(current, "_on_discard"):
+            current._on_discard()  # type: ignore[union-attr]
+
+    def _new_record_current_page(self) -> None:
+        """BUG-17: Ctrl+N delegates to the active page's new-record handler."""
+        current = self._stack.currentWidget()
+        if hasattr(current, "_on_new"):
+            current._on_new()  # type: ignore[union-attr]
 
     # ------------------------------------------------------------------
     # Toast helper

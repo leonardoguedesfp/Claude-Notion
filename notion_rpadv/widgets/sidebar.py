@@ -2,23 +2,19 @@
 from __future__ import annotations
 
 import pathlib
-from typing import Optional
 
 from PySide6.QtCore import Qt, QSize, Signal
-from PySide6.QtGui import QFont, QPainter, QColor, QPixmap
+from PySide6.QtGui import QPainter, QColor, QPixmap
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QSizePolicy,
-    QSpacerItem,
     QVBoxLayout,
     QWidget,
 )
 
 from notion_rpadv.theme.tokens import (
-    FONT_BODY,
     FONT_MONO,
-    FW_BOLD,
     FW_REGULAR,
     FW_SEMIBOLD,
 )
@@ -198,7 +194,6 @@ class SidebarItem(QWidget):
     # ------------------------------------------------------------------
 
     def paintEvent(self, event: object) -> None:  # type: ignore[override]
-        from PySide6.QtGui import QPaintEvent  # local import to keep top clean
 
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)

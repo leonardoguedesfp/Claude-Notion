@@ -1,26 +1,21 @@
 """Avatar chip for Notion people fields."""
 from __future__ import annotations
 
-import math
 
 from PySide6.QtWidgets import QWidget, QHBoxLayout, QLabel, QSizePolicy
 from PySide6.QtCore import Qt, QRect, QSize
 from PySide6.QtGui import (
     QPainter,
-    QPainterPath,
     QColor,
     QFont,
-    QFontMetrics,
     QPaintEvent,
 )
 
 from notion_rpadv.theme.tokens import (
     FONT_BODY,
-    FS_SM,
     FS_SM2,
     FW_MEDIUM,
     FW_BOLD,
-    SP_1,
     SP_2,
 )
 

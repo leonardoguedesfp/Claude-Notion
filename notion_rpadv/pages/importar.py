@@ -8,7 +8,6 @@ from typing import Any
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
-    QApplication,
     QComboBox,
     QFileDialog,
     QFrame,
@@ -16,8 +15,6 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QPushButton,
-    QScrollArea,
-    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -27,21 +24,15 @@ from PySide6.QtWidgets import (
 from notion_bulk_edit.config import DATA_SOURCES
 from notion_rpadv.theme.tokens import (
     DARK,
-    FONT_BODY,
     FONT_DISPLAY,
-    FS_LG,
     FS_MD,
     FS_SM,
     FS_SM2,
-    FS_XL,
     FW_BOLD,
     FW_MEDIUM,
-    FW_REGULAR,
     LIGHT,
     Palette,
-    RADIUS_LG,
     RADIUS_MD,
-    RADIUS_XL,
     SP_2,
     SP_3,
     SP_4,
@@ -299,6 +290,8 @@ class _Step2Widget(QWidget):
 
     def load_file(self, base: str, file_path: str) -> None:
         self._rows = []
+        # BUG-05: store ALL rows separately from the preview slice
+        self._all_rows: list[dict[str, Any]] = []
         self._errors = []
         try:
             import openpyxl  # type: ignore[import]
@@ -314,26 +307,30 @@ class _Step2Widget(QWidget):
                 self._update_table([], [])
                 return
             headers = [str(c) if c is not None else "" for c in rows[0]]
-            data_rows = rows[1:_MAX_PREVIEW_ROWS + 1]
+            all_data_rows = rows[1:]
+            preview_rows = all_data_rows[:_MAX_PREVIEW_ROWS]
 
             from notion_bulk_edit.validators import validar_linha
-            row_dicts: list[dict[str, Any]] = []
+            all_row_dicts: list[dict[str, Any]] = []
             error_rows: list[int] = []
 
-            for i, row in enumerate(data_rows):
+            for i, row in enumerate(all_data_rows):
                 row_dict = {headers[j]: row[j] for j in range(len(headers)) if j < len(row)}
-                row_dicts.append(row_dict)
-                try:
-                    errs = validar_linha(base, row_dict)
-                    for err in errs:
-                        self._errors.append(f"Linha {i + 2}: [{err.campo}] {err.mensagem}")
-                    if errs:
-                        error_rows.append(i)
-                except Exception:  # noqa: BLE001
-                    pass
+                all_row_dicts.append(row_dict)
+                if i < _MAX_PREVIEW_ROWS:
+                    try:
+                        errs = validar_linha(base, row_dict)
+                        for err in errs:
+                            self._errors.append(f"Linha {i + 2}: [{err.campo}] {err.mensagem}")
+                        if errs:
+                            error_rows.append(i)
+                    except Exception:  # noqa: BLE001
+                        pass
 
-            self._rows = row_dicts
-            self._update_table(headers, data_rows, error_rows)
+            # BUG-05: _rows = preview only; _all_rows = full dataset
+            self._rows = all_row_dicts[:_MAX_PREVIEW_ROWS]
+            self._all_rows = all_row_dicts
+            self._update_table(headers, preview_rows, error_rows)
             wb.close()
         except ImportError:
             self._errors.append("Instale 'openpyxl' para importar planilhas Excel.")
@@ -634,20 +631,53 @@ class ImportarPage(QWidget):
 
     def _do_import(self) -> None:
         base = self._step1.selected_base
-        rows = self._step2._rows
+        # BUG-05: use _all_rows (full dataset) instead of preview-only _rows
+        all_rows = getattr(self._step2, "_all_rows", self._step2._rows)
         errors = 0
         imported = 0
 
-        for row_dict in rows:
-            try:
-                from notion_bulk_edit.notion_api import NotionClient
-                from notion_bulk_edit.schemas import SCHEMAS
-                from notion_bulk_edit.encoders import encode_value
-                # Simple: upsert into cache (full Notion push would require mapping)
-                # For now, record count as imported since live push is via sync
-                imported += 1
-            except Exception:  # noqa: BLE001
-                errors += 1
+        try:
+            from notion_bulk_edit.notion_api import NotionClient
+            from notion_bulk_edit.schemas import SCHEMAS
+            from notion_bulk_edit.encoders import encode_value
+            from notion_bulk_edit.config import DATA_SOURCES
+
+            client = NotionClient(self._token)
+            schema = SCHEMAS.get(base, {})
+            db_id = DATA_SOURCES.get(base, "")
+
+            for row_dict in all_rows:
+                try:
+                    # Build Notion properties payload from this row
+                    properties: dict = {}
+                    for prop_key, spec in schema.items():
+                        if not spec.editavel:
+                            continue
+                        # Match by notion_name, label, or internal key
+                        value = (
+                            row_dict.get(spec.notion_name)
+                            or row_dict.get(spec.label)
+                            or row_dict.get(prop_key)
+                        )
+                        if value is None:
+                            continue
+                        try:
+                            # BUG-01: correct argument order
+                            encoded = encode_value(value, spec.tipo)
+                            if encoded is not None:
+                                properties[spec.notion_name] = encoded
+                        except Exception:  # noqa: BLE001
+                            pass
+
+                    if properties and db_id:
+                        client.create_page(db_id, properties)
+                        imported += 1
+                    elif not db_id:
+                        errors += 1
+                except Exception:  # noqa: BLE001
+                    errors += 1
+        except Exception:  # noqa: BLE001
+            errors = len(all_rows)
 
         self._step3.show_result(imported, errors)
         self._show_step(2)

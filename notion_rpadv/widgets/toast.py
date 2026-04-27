@@ -7,11 +7,9 @@ from PySide6.QtWidgets import (
     QFrame,
     QLabel,
     QHBoxLayout,
-    QVBoxLayout,
     QPushButton,
     QWidget,
     QSizePolicy,
-    QApplication,
 )
 from PySide6.QtCore import (
     QTimer,
@@ -21,23 +19,17 @@ from PySide6.QtCore import (
     QPoint,
     QByteArray,
 )
-from PySide6.QtGui import QColor, QFont
 
 from notion_rpadv.theme.tokens import (
-    LIGHT,
     FONT_BODY,
-    FS_SM,
     FS_SM2,
     FS_MD,
     FW_MEDIUM,
     FW_BOLD,
-    SP_1,
     SP_2,
     SP_3,
-    SP_4,
     RADIUS_LG,
     RADIUS_MD,
-    RADIUS_XL,
 )
 
 # Pixel constants

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import sqlite3
-import time
 from datetime import datetime
 from typing import Any
 
@@ -10,7 +9,6 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QAbstractItemView,
-    QFrame,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -28,17 +26,14 @@ from notion_rpadv.theme.tokens import (
     FONT_BODY,
     FONT_DISPLAY,
     FONT_MONO,
-    FS_LG,
     FS_MD,
     FS_SM,
     FS_SM2,
     FW_BOLD,
     FW_MEDIUM,
-    FW_REGULAR,
     LIGHT,
     Palette,
     RADIUS_MD,
-    RADIUS_XL,
     SP_2,
     SP_3,
     SP_4,

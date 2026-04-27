@@ -17,14 +17,11 @@ from notion_rpadv.theme.tokens import (
     FONT_BODY,
     FS_SM,
     FS_SM2,
-    FS_MD,
     FW_BOLD,
     FW_MEDIUM,
-    SP_1,
     SP_2,
     SP_3,
     SP_4,
-    RADIUS_LG,
     RADIUS_XL,
     RADIUS_MD,
 )
@@ -191,7 +188,6 @@ class FloatingSaveBar(QFrame):
         start_y = ph if show else visible_y
         end_y = visible_y if show else ph
 
-        from PySide6.QtCore import QRect
         start_rect = self.geometry()
         start_rect.moveTop(start_y)
         end_rect = self.geometry()

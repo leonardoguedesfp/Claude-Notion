@@ -14,8 +14,8 @@ from PySide6.QtWidgets import (
     QGraphicsDropShadowEffect,
     QSizePolicy,
 )
-from PySide6.QtCore import Qt, QSize
-from PySide6.QtGui import QColor, QFont, QPainter, QPaintEvent
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QPainter, QPaintEvent
 
 from notion_rpadv.services.shortcuts import DEFAULT_SHORTCUTS
 from notion_rpadv.theme.tokens import (
@@ -24,14 +24,12 @@ from notion_rpadv.theme.tokens import (
     FS_SM,
     FS_SM2,
     FS_MD,
-    FS_LG,
     FW_BOLD,
     FW_MEDIUM,
     SP_1,
     SP_2,
     SP_3,
     SP_4,
-    RADIUS_LG,
     RADIUS_XL,
     RADIUS_MD,
 )

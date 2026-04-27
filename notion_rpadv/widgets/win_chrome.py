@@ -13,14 +13,11 @@ from PySide6.QtWidgets import (
 
 from notion_rpadv.theme.tokens import (
     DARK,
-    FONT_BODY,
     FS_SM2,
     FW_BOLD,
-    FW_MEDIUM,
     LIGHT,
     RADIUS_MD,
     SP_2,
-    SP_3,
     SP_4,
 )
 

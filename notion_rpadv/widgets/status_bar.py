@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 
 from PySide6.QtWidgets import (
     QStatusBar,
@@ -13,19 +13,15 @@ from PySide6.QtWidgets import (
     QSizePolicy,
 )
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QFont
 
 from notion_rpadv.theme.tokens import (
     LIGHT,
     FONT_BODY,
     FONT_MONO,
     FS_SM,
-    FS_SM2,
     FW_MEDIUM,
     SP_1,
-    SP_2,
     SP_3,
-    SP_4,
 )
 
 _BG_COLOR: str = "#F0EDE7"

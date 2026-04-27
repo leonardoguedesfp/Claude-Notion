@@ -7,7 +7,6 @@ from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QColor, QFont, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QDialog,
-    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -24,23 +23,19 @@ from notion_rpadv.theme.tokens import (
     FONT_BODY,
     FONT_DISPLAY,
     FONT_MONO,
-    FS_LG,
     FS_MD,
     FS_SM,
     FS_SM2,
-    FS_XL,
     FW_BOLD,
     FW_MEDIUM,
     FW_REGULAR,
     FW_SEMIBOLD,
     LIGHT,
-    RADIUS_LG,
     RADIUS_MD,
     SP_2,
     SP_3,
     SP_4,
     SP_6,
-    SP_8,
 )
 
 _P = LIGHT
@@ -494,7 +489,17 @@ class _FormPanel(QWidget):
                 self._show_error("Cole o token de integração Notion.")
                 return
         else:
-            token = ""  # use stored token (handled by parent dialog)
+            # BUG-13: validate that a stored token actually exists
+            from notion_rpadv.auth.token_store import get_token as _get_token
+            stored = _get_token()
+            if not stored:
+                self._show_error(
+                    "Nenhum token armazenado. Clique em 'Primeiro acesso' para configurar."
+                )
+                self._submit_btn.setEnabled(True)
+                self._submit_btn.setText("Entrar")
+                return
+            token = stored
 
         self._submit_btn.setEnabled(False)
         self._submit_btn.setText("Verificando…" if self._step == "first-time" else "Entrando…")

@@ -8,7 +8,7 @@ from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QFont
 
 from notion_bulk_edit.encoders import format_br_date, format_brl
-from notion_bulk_edit.schemas import SCHEMAS, PropSpec, colunas_visiveis, get_prop
+from notion_bulk_edit.schemas import PropSpec, colunas_visiveis, get_prop, is_nao_editavel
 from notion_rpadv.cache import db as cache_db
 
 # Background colours (ARGB strings, styled via the app palette or hard-coded).
@@ -46,6 +46,19 @@ def _display_value(spec: PropSpec, raw: Any) -> str:
     return str(raw)
 
 
+def _values_equal(a: Any, b: Any) -> bool:
+    """BUG-25: safe equality that handles list/bool/None/date mismatches."""
+    if a is None and b is None:
+        return True
+    if a is None or b is None:
+        return False
+    if isinstance(a, list) and isinstance(b, list):
+        return sorted(str(x) for x in a) == sorted(str(x) for x in b)
+    if type(a) is not type(b):
+        return str(a) == str(b)
+    return a == b
+
+
 class BaseTableModel(QAbstractTableModel):
     """QAbstractTableModel backed by SQLite cache for a single Notion base."""
 
@@ -62,7 +75,8 @@ class BaseTableModel(QAbstractTableModel):
         self._conn = conn
         self._cols: list[str] = colunas_visiveis(base)
         self._rows: list[dict[str, Any]] = []
-        self._dirty: dict[tuple[int, str], Any] = {}
+        # BUG-24: keyed by (page_id, key) instead of (row_idx, key)
+        self._dirty: dict[tuple[str, str], Any] = {}
         self.reload()
 
     # ------------------------------------------------------------------
@@ -128,7 +142,9 @@ class BaseTableModel(QAbstractTableModel):
         spec = get_prop(self._base, key)
         record = self._rows[row_idx]
 
-        dirty_key = (row_idx, key)
+        # BUG-24: dirty key uses (page_id, key)
+        page_id = record.get("page_id", "")
+        dirty_key = (page_id, key)
         is_dirty = dirty_key in self._dirty
 
         # Raw value: prefer dirty override, fall back to cached.
@@ -189,16 +205,20 @@ class BaseTableModel(QAbstractTableModel):
             return False
 
         key = self._cols[col_idx]
-        original = self._rows[row_idx].get(key)
+        record = self._rows[row_idx]
+        # BUG-24: key by page_id, not row_idx
+        page_id = record.get("page_id", "")
+        dirty_key = (page_id, key)
+        original = record.get(key)
 
-        if value == original:
-            # Remove dirty marker if reverted to original.
-            self._dirty.pop((row_idx, key), None)
+        # BUG-25: use type-aware comparison instead of bare ==
+        if _values_equal(value, original):
+            self._dirty.pop(dirty_key, None)
         else:
-            self._dirty[(row_idx, key)] = value
+            self._dirty[dirty_key] = value
 
         self.dataChanged.emit(index, index, [role, Qt.ItemDataRole.BackgroundRole])
-        had_dirty = len(self._dirty) > (1 if value == original else 0)
+        # BUG-29: removed unused had_dirty variable
         self.dirty_changed.emit(bool(self._dirty))
         return True
 
@@ -212,12 +232,9 @@ class BaseTableModel(QAbstractTableModel):
             return base_flags
 
         key = self._cols[col_idx]
-        spec = get_prop(self._base, key)
-        if spec is not None and spec.editavel and not spec.obrigatorio is False:
-            # Allow editing for editable columns.
-            from notion_bulk_edit.schemas import is_nao_editavel
-            if not is_nao_editavel(spec):
-                return base_flags | Qt.ItemFlag.ItemIsEditable
+        # BUG-02 + BUG-03: correct arity and removed broken obrigatorio check
+        if not is_nao_editavel(self._base, key):
+            return base_flags | Qt.ItemFlag.ItemIsEditable
         return base_flags
 
     # ------------------------------------------------------------------
@@ -227,11 +244,11 @@ class BaseTableModel(QAbstractTableModel):
     def get_dirty_edits(self) -> list[tuple[str, str, Any, Any]]:
         """Return list of (page_id, key, old_value, new_value) for all dirty cells."""
         result: list[tuple[str, str, Any, Any]] = []
-        for (row_idx, key), new_value in self._dirty.items():
-            if row_idx >= len(self._rows):
+        for (page_id, key), new_value in self._dirty.items():
+            # BUG-24: find the row by page_id, not by index
+            record = next((r for r in self._rows if r.get("page_id") == page_id), None)
+            if record is None:
                 continue
-            record = self._rows[row_idx]
-            page_id: str = record.get("page_id", "")
             old_value: Any = record.get(key)
             result.append((page_id, key, old_value, new_value))
         return result
@@ -241,9 +258,11 @@ class BaseTableModel(QAbstractTableModel):
         if not self._dirty:
             return
         # Apply dirty values into the backing rows so reload is not required.
-        for (row_idx, key), new_value in self._dirty.items():
-            if row_idx < len(self._rows):
-                self._rows[row_idx][key] = new_value
+        for (page_id, key), new_value in self._dirty.items():
+            for row in self._rows:
+                if row.get("page_id") == page_id:
+                    row[key] = new_value
+                    break
         self._dirty.clear()
         self.dataChanged.emit(
             self.index(0, 0),

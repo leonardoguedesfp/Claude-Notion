@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QWidgetAction,
 )
 
-from notion_bulk_edit.schemas import SCHEMAS, PropSpec, vocabulario
+from notion_bulk_edit.schemas import SCHEMAS
 from notion_rpadv.cache.sync import SyncManager
 from notion_rpadv.models.base_table_model import BaseTableModel
 from notion_rpadv.models.delegates import PropDelegate
@@ -30,18 +30,15 @@ from notion_rpadv.services.notion_facade import NotionFacade
 from notion_rpadv.theme.tokens import (
     FONT_BODY,
     FONT_DISPLAY,
-    FS_LG,
     FS_MD,
     FS_SM,
     FS_SM2,
     FW_BOLD,
     FW_MEDIUM,
-    FW_REGULAR,
     LIGHT,
     DARK,
     Palette,
     RADIUS_MD,
-    RADIUS_LG,
     SP_1,
     SP_2,
     SP_3,
@@ -64,6 +61,7 @@ class BaseTablePage(QWidget):
         token: str,
         user: str,
         facade: NotionFacade,
+        sync_manager: SyncManager | None = None,
         dark: bool = False,
         parent: QWidget | None = None,
     ) -> None:
@@ -82,12 +80,16 @@ class BaseTablePage(QWidget):
         self._proxy = TableFilterProxy(self)
         self._proxy.setSourceModel(self._model)
 
-        # Sync manager for this base
-        self._sync_manager = SyncManager(token, conn)
+        # BUG-21: use injected SyncManager instead of creating a duplicate
+        if sync_manager is not None:
+            self._sync_manager = sync_manager
+        else:
+            # Fallback for callers that don't inject one
+            self._sync_manager = SyncManager(token, conn)
         self._sync_manager.base_done.connect(self._on_base_done)
         self._sync_manager.sync_error.connect(self._on_sync_error)
 
-        # Facade signals
+        # Facade signals — BUG-07: signal now carries base
         self._facade.commit_finished.connect(self._on_commit_finished)
         self._facade.commit_error.connect(self._on_commit_error)
 
@@ -96,6 +98,9 @@ class BaseTablePage(QWidget):
 
         # Reload → update meta count
         self._model.modelReset.connect(self._update_meta)
+
+        # BUG-06: per-column active filter state
+        self._active_filters: dict[str, set[str]] = {}
 
         self._build_ui(palette)
 
@@ -410,22 +415,24 @@ class BaseTablePage(QWidget):
         if not edits:
             return
         self._save_bar.setEnabled(False)
-        self._facade.commit_edits(edits, self._user)
+        # BUG-07: pass base so facade can emit it in commit_finished
+        self._facade.commit_edits(edits, self._user, self._base)
 
     def _on_discard(self) -> None:
         self._model.discard_dirty()
         self._save_bar.setVisible(False)
 
     def _on_new(self) -> None:
-        # New record: not yet implemented — show info toast via parent
         pass
 
-    def _on_commit_finished(self, success: int, errors: int) -> None:
+    def _on_commit_finished(self, base: str, success: int, errors: int) -> None:
         self._save_bar.setEnabled(True)
+        # BUG-07: only clear dirty for this page's base
+        if base != self._base:
+            return
         if errors == 0:
             self._model.clear_dirty()
             self._save_bar.setVisible(False)
-        # Parent window will show toast via facade signal
 
     def _on_commit_error(self, message: str) -> None:
         self._save_bar.setEnabled(True)
@@ -446,13 +453,14 @@ class BaseTablePage(QWidget):
     # ------------------------------------------------------------------
 
     def _open_filter_menu(self) -> None:
+        p = DARK if self._dark else LIGHT
         menu = QMenu(self)
         menu.setStyleSheet(
             f"""
             QMenu {{
-                background-color: {(DARK if self._dark else LIGHT).app_panel};
-                color: {(DARK if self._dark else LIGHT).app_fg};
-                border: 1px solid {(DARK if self._dark else LIGHT).app_border};
+                background-color: {p.app_panel};
+                color: {p.app_fg};
+                border: 1px solid {p.app_border};
                 border-radius: {RADIUS_MD}px;
                 padding: {SP_2}px;
             }}
@@ -463,6 +471,8 @@ class BaseTablePage(QWidget):
         )
 
         schema = SCHEMAS.get(self._base, {})
+        visible_keys = list(schema.keys())
+
         for key, spec in schema.items():
             if spec.tipo in ("select", "multi_select") and spec.opcoes:
                 label_action = QWidgetAction(menu)
@@ -470,7 +480,7 @@ class BaseTablePage(QWidget):
                 col_label.setStyleSheet(
                     f"""
                     QLabel {{
-                        color: {(DARK if self._dark else LIGHT).app_fg_muted};
+                        color: {p.app_fg_muted};
                         font-size: {FS_SM}px;
                         font-weight: {FW_BOLD};
                         padding: {SP_1}px {SP_3}px;
@@ -481,16 +491,24 @@ class BaseTablePage(QWidget):
                 label_action.setDefaultWidget(col_label)
                 menu.addAction(label_action)
 
-                col_index = list(schema.keys()).index(key) if key in list(schema.keys()) else -1
+                # BUG-06: determine source model column index for this key
+                try:
+                    source_col = self._model._cols.index(key)
+                except ValueError:
+                    source_col = -1
+
+                # Current active filter for this column (None = all allowed)
+                active = self._active_filters.get(key)
 
                 for option in spec.opcoes:
                     wa = QWidgetAction(menu)
                     cb = QCheckBox(f"  {option}")
-                    cb.setChecked(True)
+                    # If no filter active, all boxes start checked
+                    cb.setChecked(active is None or option in active)
                     cb.setStyleSheet(
                         f"""
                         QCheckBox {{
-                            color: {(DARK if self._dark else LIGHT).app_fg};
+                            color: {p.app_fg};
                             font-size: {FS_MD}px;
                             padding: {SP_1}px {SP_3}px;
                             background: transparent;
@@ -498,16 +516,28 @@ class BaseTablePage(QWidget):
                         """
                     )
 
-                    def _make_handler(k: str, opt: str, checkbox: QCheckBox) -> Any:
+                    # BUG-06: closure captures key, option, source_col
+                    def _make_handler(k: str, opt: str, col: int) -> Any:
                         def handler(checked: bool) -> None:
-                            # Rebuild active values for this column
-                            parent_menu = menu
-                            # Collect all checked options for this column
-                            # Simple approach: clear and set filter based on all current checkboxes
-                            pass
+                            # Initialise filter set from all options if not yet active
+                            if k not in self._active_filters:
+                                self._active_filters[k] = set(SCHEMAS.get(self._base, {}).get(k).opcoes)  # type: ignore[union-attr]
+                            if checked:
+                                self._active_filters[k].add(opt)
+                            else:
+                                self._active_filters[k].discard(opt)
+                            # Apply to proxy (None removes the filter, restoring all rows)
+                            if col >= 0:
+                                active_set = self._active_filters[k]
+                                all_opts = set(SCHEMAS.get(self._base, {}).get(k).opcoes)  # type: ignore[union-attr]
+                                # If all options checked, remove the filter entirely
+                                if active_set >= all_opts:
+                                    self._proxy.set_col_filter(col, None)
+                                else:
+                                    self._proxy.set_col_filter(col, active_set)
                         return handler
 
-                    cb.toggled.connect(_make_handler(key, option, cb))
+                    cb.toggled.connect(_make_handler(key, option, source_col))
                     wa.setDefaultWidget(cb)
                     menu.addAction(wa)
 

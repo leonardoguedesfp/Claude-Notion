@@ -300,7 +300,7 @@ def _adicionar_aba_instrucoes(wb: Any, base: str, schema: dict[str, PropSpec]) -
         base: Nome da base.
         schema: Schema da base.
     """
-    from openpyxl.styles import Font, Alignment, PatternFill
+    from openpyxl.styles import Font, Alignment
 
     ws = wb.create_sheet("Instruções")
     ws.column_dimensions["A"].width = 20

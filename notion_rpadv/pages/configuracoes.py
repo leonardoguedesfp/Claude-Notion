@@ -1,8 +1,6 @@
 """Settings/configuration page."""
 from __future__ import annotations
 
-import sqlite3
-import time
 from datetime import datetime
 from typing import Any, Callable
 
@@ -10,18 +8,14 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QButtonGroup,
-    QCheckBox,
-    QComboBox,
     QFrame,
     QGridLayout,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
     QRadioButton,
     QScrollArea,
-    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -30,7 +24,6 @@ from notion_bulk_edit.config import (
     APP_BUILD,
     APP_NAME,
     APP_VERSION,
-    CACHE_STALE_HOURS,
     DATA_SOURCES,
     USUARIOS_LOCAIS,
 )
@@ -43,15 +36,12 @@ from notion_rpadv.theme.tokens import (
     FS_MD,
     FS_SM,
     FS_SM2,
-    FS_XL,
     FW_BOLD,
     FW_MEDIUM,
-    FW_REGULAR,
     LIGHT,
     Palette,
     RADIUS_LG,
     RADIUS_MD,
-    RADIUS_XL,
     SP_2,
     SP_3,
     SP_4,
@@ -137,6 +127,7 @@ class ConfiguracoesPage(QWidget):
         self,
         current_theme: str = "light",
         bindings: dict[str, str] | None = None,
+        sync_manager: Any = None,  # BUG-19: injected SyncManager
         dark: bool = False,
         parent: QWidget | None = None,
     ) -> None:
@@ -146,6 +137,8 @@ class ConfiguracoesPage(QWidget):
         self._current_theme = current_theme
         self._bindings = dict(bindings or DEFAULT_SHORTCUTS)
         self._sync_labels: dict[str, QLabel] = {}
+        # BUG-19: store sync_manager for "Sincronizar agora" button
+        self._sync_manager = sync_manager
 
         self._build_ui()
 
@@ -394,7 +387,7 @@ class ConfiguracoesPage(QWidget):
             self._token_status.setText("Cole o token primeiro.")
             return
         try:
-            from notion_bulk_edit.notion_api import NotionClient, NotionAuthError
+            from notion_bulk_edit.notion_api import NotionClient
             NotionClient(token).me()
             self._token_status.setText("✓ Token válido")
             self._token_status.setStyleSheet(

@@ -18,7 +18,7 @@ from typing import Any
 # Importações internas (lazy quando possível para startup rápido)
 # ---------------------------------------------------------------------------
 
-from notion_bulk_edit.config import DATA_SOURCES, SCHEMAS as _SCHEMAS_HINT
+from notion_bulk_edit.config import DATA_SOURCES
 from notion_bulk_edit.schemas import SCHEMAS, PropSpec
 from notion_bulk_edit.encoders import decode_value, encode_value, format_br_date, format_brl
 from notion_bulk_edit.validators import validar_linha, ValidationError

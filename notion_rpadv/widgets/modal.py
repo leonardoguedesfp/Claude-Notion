@@ -9,26 +9,20 @@ from PySide6.QtWidgets import (
     QLabel,
     QWidget,
     QFrame,
-    QSizePolicy,
     QGraphicsDropShadowEffect,
 )
-from PySide6.QtCore import Qt, QSize
-from PySide6.QtGui import QColor, QFont, QPalette, QPainter, QBrush, QPaintEvent
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QPainter, QPaintEvent
 
 from notion_rpadv.theme.tokens import (
-    LIGHT,
     FONT_BODY,
     FS_MD,
-    FS_LG,
-    FS_XL,
     FS_SM2,
     FW_BOLD,
     FW_MEDIUM,
-    SP_1,
     SP_2,
     SP_3,
     SP_4,
-    RADIUS_LG,
     RADIUS_XL,
     RADIUS_MD,
 )

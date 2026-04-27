@@ -2,8 +2,7 @@
 from __future__ import annotations
 
 import sqlite3
-import time
-from datetime import date, datetime, timezone
+from datetime import date, datetime
 from typing import Any
 
 from PySide6.QtCore import Qt, Signal
@@ -25,18 +24,14 @@ from notion_rpadv.theme.tokens import (
     DARK,
     FONT_BODY,
     FONT_DISPLAY,
-    FS_LG,
     FS_MD,
     FS_SM,
     FS_SM2,
     FS_XL,
-    FS_2XL,
     FW_BOLD,
     FW_MEDIUM,
-    FW_REGULAR,
     LIGHT,
     Palette,
-    RADIUS_LG,
     RADIUS_MD,
     RADIUS_XL,
     SP_2,
@@ -128,17 +123,17 @@ class StatCard(QFrame):
         layout.setSpacing(SP_2)
         layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
-        # Value
-        val_lbl = QLabel(str(value))
-        val_lbl.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        # BUG-27: store as attribute so update_value() doesn't use fragile findChildren
+        self._val_lbl = QLabel(str(value))
+        self._val_lbl.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         val_font = QFont(FONT_DISPLAY)
         val_font.setPixelSize(32)
         val_font.setWeight(QFont.Weight(FW_BOLD))
-        val_lbl.setFont(val_font)
-        val_lbl.setStyleSheet(
+        self._val_lbl.setFont(val_font)
+        self._val_lbl.setStyleSheet(
             f"color: {accent}; background: transparent; border: none;"
         )
-        layout.addWidget(val_lbl)
+        layout.addWidget(self._val_lbl)
 
         # Label
         cap_lbl = QLabel(label)
@@ -159,9 +154,8 @@ class StatCard(QFrame):
 
     def update_value(self, value: str | int) -> None:
         """Update the displayed value at runtime."""
-        value_label = self.findChildren(QLabel)[0]
-        if value_label:
-            value_label.setText(str(value))
+        # BUG-27: use stored attribute instead of fragile findChildren()[0]
+        self._val_lbl.setText(str(value))
 
 
 # ---------------------------------------------------------------------------

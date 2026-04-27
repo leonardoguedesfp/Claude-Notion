@@ -4,13 +4,12 @@ from __future__ import annotations
 from typing import Any
 
 from PySide6.QtCore import QDate, QModelIndex, Qt
-from PySide6.QtGui import QColor, QPainter, QPen, QBrush, QFont
+from PySide6.QtGui import QColor, QPainter, QPen, QBrush
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDateEdit,
     QLineEdit,
-    QStyle,
     QStyleOptionViewItem,
     QStyledItemDelegate,
     QWidget,

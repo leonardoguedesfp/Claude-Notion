@@ -175,12 +175,21 @@ def set_last_sync(conn: sqlite3.Connection, base: str, ts: float) -> None:
 
 
 def is_stale(conn: sqlite3.Connection, base: str, stale_hours: float) -> bool:
-    """Return True if the cache for *base* is older than *stale_hours* hours."""
+    """Return True if the cache for *base* exists but is older than *stale_hours*.
+
+    Returns False when never synced — use is_never_synced() for that check.
+    """
     last = get_last_sync(conn, base)
     if last == 0.0:
-        return True
+        # BUG-23: never synced is not the same as "stale"; handle separately
+        return False
     age_hours = (time.time() - last) / 3600.0
     return age_hours > stale_hours
+
+
+def is_never_synced(conn: sqlite3.Connection, base: str) -> bool:
+    """Return True if *base* has never been synced (no timestamp recorded)."""
+    return get_last_sync(conn, base) == 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -275,6 +284,19 @@ def get_edit_log(conn: sqlite3.Connection, limit: int = 200) -> list[dict[str, A
         d["new_value"] = json.loads(d["new_value"])
         result.append(d)
     return result
+
+
+def get_log_entry(conn: sqlite3.Connection, log_id: int) -> dict[str, Any] | None:
+    """Return a single edit_log entry without modifying it, or None if missing."""
+    row = conn.execute(
+        "SELECT * FROM edit_log WHERE id=?", (log_id,)
+    ).fetchone()
+    if row is None:
+        return None
+    d = dict(row)
+    d["old_value"] = json.loads(d["old_value"])
+    d["new_value"] = json.loads(d["new_value"])
+    return d
 
 
 def revert_edit(conn: sqlite3.Connection, log_id: int) -> dict[str, Any]:

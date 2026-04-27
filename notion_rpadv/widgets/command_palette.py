@@ -4,40 +4,32 @@ from __future__ import annotations
 from PySide6.QtWidgets import (
     QDialog,
     QVBoxLayout,
-    QHBoxLayout,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
-    QLabel,
     QFrame,
     QWidget,
     QGraphicsDropShadowEffect,
-    QSizePolicy,
 )
-from PySide6.QtCore import Signal, Qt, QSize, QPoint
+from PySide6.QtCore import Signal, Qt, QSize
 from PySide6.QtGui import (
     QColor,
     QFont,
     QKeyEvent,
     QPainter,
     QPaintEvent,
-    QBrush,
 )
 
 from notion_rpadv.theme.tokens import (
     FONT_BODY,
-    FONT_MONO,
     FS_SM,
-    FS_SM2,
     FS_MD,
     FS_LG,
     FW_BOLD,
     FW_MEDIUM,
     SP_1,
-    SP_2,
     SP_3,
     SP_4,
-    RADIUS_LG,
     RADIUS_XL,
     RADIUS_MD,
 )

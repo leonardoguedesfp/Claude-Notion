@@ -6,6 +6,7 @@ O CLI legado e o app desktop leem do mesmo keyring — um único token por máqu
 from __future__ import annotations
 
 import os
+import pathlib  # BUG-31: moved to top (was E402 at line 87)
 from typing import Final
 
 # ---------------------------------------------------------------------------
@@ -16,9 +17,9 @@ KEYRING_SERVICE: Final = "NotionRPADV"
 KEYRING_USERNAME: Final = "notion_token"
 
 # ---------------------------------------------------------------------------
-# IDs das bases Notion (configure com os IDs reais do workspace RPADV)
-# Obtenha via: GET https://api.notion.com/v1/databases  ou URL da base no Notion
-# Formato: 32 hex chars sem hífens ou com hífens UUID.
+# IDs das bases Notion (data_source_ids — igual ao database UUID da URL).
+# Obtenha via a URL da base no Notion: notion.so/{workspace}/{database-uuid}
+# BUG-08: estes são data_source_ids, passados diretamente para /data_sources/{id}/query
 # ---------------------------------------------------------------------------
 
 DATA_SOURCES: Final[dict[str, str]] = {
@@ -84,7 +85,7 @@ APP_VERSION: Final = "0.4.2"
 APP_BUILD: Final   = "2026.04"
 
 # Caminho do cache SQLite
-import pathlib
+
 
 def get_cache_dir() -> pathlib.Path:
     """Retorna %APPDATA%\\NotionRPADV no Windows; ~/.notionrpadv no Linux/Mac."""
@@ -93,8 +94,10 @@ def get_cache_dir() -> pathlib.Path:
     cache.mkdir(parents=True, exist_ok=True)
     return cache
 
+
 def get_cache_db_path() -> pathlib.Path:
     return get_cache_dir() / "cache.db"
+
 
 # Staleness threshold — cache mais antigo que isto sugere refresh
 CACHE_STALE_HOURS: Final = 2

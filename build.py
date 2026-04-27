@@ -59,7 +59,6 @@ def run_pyinstaller() -> None:
         "--hidden-import", "notion_rpadv.pages.configuracoes",
         "--hidden-import", "notion_rpadv.widgets.command_palette",
         "--hidden-import", "notion_rpadv.widgets.shortcuts_modal",
-        "--hidden-import", "notion_rpadv.widgets.win_chrome",
         "--hidden-import", "notion_rpadv.widgets.floating_save",
         "--hidden-import", "notion_rpadv.widgets.toast",
         "--hidden-import", "notion_rpadv.widgets.modal",
