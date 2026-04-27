@@ -1,0 +1,281 @@
+"""QAbstractTableModel backed by the SQLite cache."""
+from __future__ import annotations
+
+import sqlite3
+from typing import Any
+
+from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, Signal
+from PySide6.QtGui import QBrush, QColor, QFont
+
+from notion_bulk_edit.encoders import format_br_date, format_brl
+from notion_bulk_edit.schemas import SCHEMAS, PropSpec, colunas_visiveis, get_prop
+from notion_rpadv.cache import db as cache_db
+
+# Background colours (ARGB strings, styled via the app palette or hard-coded).
+_COLOR_DIRTY = QColor("#FFF9C4")       # pale yellow for dirty cells
+_COLOR_ROW_ALT = QColor("#F5F5F5")    # alternating row tint
+_COLOR_ROW_EVEN = QColor("#FFFFFF")
+
+
+def _display_value(spec: PropSpec, raw: Any) -> str:
+    """Convert a raw Python value to a human-readable string for DisplayRole."""
+    if raw is None:
+        return ""
+    tipo = spec.tipo
+    if tipo == "number":
+        if spec.formato == "brl":
+            try:
+                return format_brl(float(raw))
+            except (TypeError, ValueError):
+                return str(raw)
+        try:
+            return str(raw)
+        except Exception:  # noqa: BLE001
+            return ""
+    if tipo in ("date", "created_time", "last_edited_time"):
+        try:
+            return format_br_date(str(raw))
+        except Exception:  # noqa: BLE001
+            return str(raw)
+    if tipo == "checkbox":
+        return "✓" if raw else "✗"
+    if tipo == "multi_select":
+        if isinstance(raw, list):
+            return ", ".join(str(v) for v in raw)
+        return str(raw)
+    return str(raw)
+
+
+class BaseTableModel(QAbstractTableModel):
+    """QAbstractTableModel backed by SQLite cache for a single Notion base."""
+
+    dirty_changed: Signal = Signal(bool)
+
+    def __init__(
+        self,
+        base: str,
+        conn: sqlite3.Connection,
+        parent: Any = None,
+    ) -> None:
+        super().__init__(parent)
+        self._base = base
+        self._conn = conn
+        self._cols: list[str] = colunas_visiveis(base)
+        self._rows: list[dict[str, Any]] = []
+        self._dirty: dict[tuple[int, str], Any] = {}
+        self.reload()
+
+    # ------------------------------------------------------------------
+    # Data loading
+    # ------------------------------------------------------------------
+
+    def reload(self) -> None:
+        """Reload rows from SQLite and reset the model."""
+        self.beginResetModel()
+        self._rows = cache_db.get_all_records(self._conn, self._base)
+        self._dirty.clear()
+        self.endResetModel()
+        self.dirty_changed.emit(False)
+
+    # ------------------------------------------------------------------
+    # QAbstractTableModel overrides
+    # ------------------------------------------------------------------
+
+    def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
+        if parent.isValid():
+            return 0
+        return len(self._rows)
+
+    def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:
+        if parent.isValid():
+            return 0
+        return len(self._cols)
+
+    def headerData(
+        self,
+        section: int,
+        orientation: Qt.Orientation,
+        role: int = Qt.ItemDataRole.DisplayRole,
+    ) -> Any:
+        if role != Qt.ItemDataRole.DisplayRole:
+            return None
+        if orientation == Qt.Orientation.Horizontal:
+            if 0 <= section < len(self._cols):
+                key = self._cols[section]
+                spec = get_prop(self._base, key)
+                if spec is not None:
+                    return spec.label
+                return key
+        else:
+            return str(section + 1)
+        return None
+
+    def data(
+        self,
+        index: QModelIndex,
+        role: int = Qt.ItemDataRole.DisplayRole,
+    ) -> Any:
+        if not index.isValid():
+            return None
+        row_idx = index.row()
+        col_idx = index.column()
+        if row_idx < 0 or row_idx >= len(self._rows):
+            return None
+        if col_idx < 0 or col_idx >= len(self._cols):
+            return None
+
+        key = self._cols[col_idx]
+        spec = get_prop(self._base, key)
+        record = self._rows[row_idx]
+
+        dirty_key = (row_idx, key)
+        is_dirty = dirty_key in self._dirty
+
+        # Raw value: prefer dirty override, fall back to cached.
+        raw: Any = self._dirty[dirty_key] if is_dirty else record.get(key)
+
+        if role == Qt.ItemDataRole.DisplayRole:
+            if spec is not None:
+                return _display_value(spec, raw)
+            return str(raw) if raw is not None else ""
+
+        if role == Qt.ItemDataRole.EditRole:
+            return raw
+
+        # UserRole+1 → dirty flag
+        if role == Qt.ItemDataRole.UserRole + 1:
+            return is_dirty
+
+        if role == Qt.ItemDataRole.BackgroundRole:
+            if is_dirty:
+                return QBrush(_COLOR_DIRTY)
+            if row_idx % 2 == 1:
+                return QBrush(_COLOR_ROW_ALT)
+            return QBrush(_COLOR_ROW_EVEN)
+
+        if role == Qt.ItemDataRole.ForegroundRole:
+            return None
+
+        if role == Qt.ItemDataRole.FontRole:
+            if spec is not None and spec.mono:
+                font = QFont("Courier New", 9)
+                font.setStyleHint(QFont.StyleHint.Monospace)
+                return font
+            return None
+
+        if role == Qt.ItemDataRole.TextAlignmentRole:
+            if spec is not None and spec.tipo == "number":
+                return int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            return int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+
+        return None
+
+    def setData(
+        self,
+        index: QModelIndex,
+        value: Any,
+        role: int = Qt.ItemDataRole.EditRole,
+    ) -> bool:
+        if role != Qt.ItemDataRole.EditRole:
+            return False
+        if not index.isValid():
+            return False
+
+        row_idx = index.row()
+        col_idx = index.column()
+        if row_idx < 0 or row_idx >= len(self._rows):
+            return False
+        if col_idx < 0 or col_idx >= len(self._cols):
+            return False
+
+        key = self._cols[col_idx]
+        original = self._rows[row_idx].get(key)
+
+        if value == original:
+            # Remove dirty marker if reverted to original.
+            self._dirty.pop((row_idx, key), None)
+        else:
+            self._dirty[(row_idx, key)] = value
+
+        self.dataChanged.emit(index, index, [role, Qt.ItemDataRole.BackgroundRole])
+        had_dirty = len(self._dirty) > (1 if value == original else 0)
+        self.dirty_changed.emit(bool(self._dirty))
+        return True
+
+    def flags(self, index: QModelIndex) -> Qt.ItemFlag:
+        base_flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+        if not index.isValid():
+            return base_flags
+
+        col_idx = index.column()
+        if col_idx < 0 or col_idx >= len(self._cols):
+            return base_flags
+
+        key = self._cols[col_idx]
+        spec = get_prop(self._base, key)
+        if spec is not None and spec.editavel and not spec.obrigatorio is False:
+            # Allow editing for editable columns.
+            from notion_bulk_edit.schemas import is_nao_editavel
+            if not is_nao_editavel(spec):
+                return base_flags | Qt.ItemFlag.ItemIsEditable
+        return base_flags
+
+    # ------------------------------------------------------------------
+    # Dirty-edit helpers
+    # ------------------------------------------------------------------
+
+    def get_dirty_edits(self) -> list[tuple[str, str, Any, Any]]:
+        """Return list of (page_id, key, old_value, new_value) for all dirty cells."""
+        result: list[tuple[str, str, Any, Any]] = []
+        for (row_idx, key), new_value in self._dirty.items():
+            if row_idx >= len(self._rows):
+                continue
+            record = self._rows[row_idx]
+            page_id: str = record.get("page_id", "")
+            old_value: Any = record.get(key)
+            result.append((page_id, key, old_value, new_value))
+        return result
+
+    def clear_dirty(self) -> None:
+        """Mark all cells as clean (called after saving)."""
+        if not self._dirty:
+            return
+        # Apply dirty values into the backing rows so reload is not required.
+        for (row_idx, key), new_value in self._dirty.items():
+            if row_idx < len(self._rows):
+                self._rows[row_idx][key] = new_value
+        self._dirty.clear()
+        self.dataChanged.emit(
+            self.index(0, 0),
+            self.index(len(self._rows) - 1, len(self._cols) - 1),
+            [Qt.ItemDataRole.BackgroundRole],
+        )
+        self.dirty_changed.emit(False)
+
+    def discard_dirty(self) -> None:
+        """Revert all dirty cells to their original cached values."""
+        if not self._dirty:
+            return
+        self._dirty.clear()
+        self.dataChanged.emit(
+            self.index(0, 0),
+            self.index(len(self._rows) - 1, len(self._cols) - 1),
+            [Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.BackgroundRole, Qt.ItemDataRole.EditRole],
+        )
+        self.dirty_changed.emit(False)
+
+    # ------------------------------------------------------------------
+    # Row accessors
+    # ------------------------------------------------------------------
+
+    def get_page_id(self, row: int) -> str:
+        """Return the Notion page_id for a given row index."""
+        if 0 <= row < len(self._rows):
+            return str(self._rows[row].get("page_id", ""))
+        return ""
+
+    def get_record(self, row: int) -> dict[str, Any]:
+        """Return the full decoded record dict for a given row index."""
+        if 0 <= row < len(self._rows):
+            return dict(self._rows[row])
+        return {}

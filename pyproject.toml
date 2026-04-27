@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "notion-rpadv"
+version = "0.4.2"
+description = "Desktop companion para as bases Notion do escritório Ricardo Passos Advocacia"
+requires-python = ">=3.11"
+dependencies = [
+    "PySide6>=6.7",
+    "requests>=2.31",
+    "openpyxl>=3.1",
+    "keyring>=24",
+    "Pillow>=10",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = ["mypy>=1.9", "ruff>=0.4", "pyinstaller>=6"]
+
+[tool.setuptools.packages.find]
+include = ["notion_bulk_edit*", "notion_rpadv*"]
+
+[tool.mypy]
+strict = true
+python_version = "3.11"
+ignore_missing_imports = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

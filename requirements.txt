@@ -1,0 +1,10 @@
+PySide6>=6.7
+requests>=2.31
+openpyxl>=3.1
+keyring>=24
+Pillow>=10
+python-dotenv>=1.0
+# dev / build
+mypy>=1.9
+ruff>=0.4
+pyinstaller>=6
