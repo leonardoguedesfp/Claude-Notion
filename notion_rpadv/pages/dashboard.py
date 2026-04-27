@@ -6,12 +6,13 @@ import time
 from datetime import date, datetime, timezone
 from typing import Any
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QPushButton,
     QScrollArea,
     QSizePolicy,
     QVBoxLayout,
@@ -44,6 +45,33 @@ from notion_rpadv.theme.tokens import (
     SP_6,
     SP_8,
 )
+
+# ---------------------------------------------------------------------------
+# Spacing constant that may not exist in older token sets
+# ---------------------------------------------------------------------------
+try:
+    from notion_rpadv.theme.tokens import SP_1
+except ImportError:
+    SP_1 = 4  # type: ignore[assignment]
+
+# ---------------------------------------------------------------------------
+# pt-BR month names for locale-independent date formatting
+# ---------------------------------------------------------------------------
+_PT_BR_MONTHS: tuple[str, ...] = (
+    "janeiro", "fevereiro", "março", "abril", "maio", "junho",
+    "julho", "agosto", "setembro", "outubro", "novembro", "dezembro",
+)
+_PT_BR_WEEKDAYS: tuple[str, ...] = (
+    "segunda-feira", "terça-feira", "quarta-feira",
+    "quinta-feira", "sexta-feira", "sábado", "domingo",
+)
+
+
+def _format_date_pt_br(dt: datetime) -> str:
+    """Return e.g. 'segunda-feira, 27 de abril de 2026'."""
+    weekday = _PT_BR_WEEKDAYS[dt.weekday()]
+    month = _PT_BR_MONTHS[dt.month - 1]
+    return f"{weekday}, {dt.day} de {month} de {dt.year}"
 
 
 # ---------------------------------------------------------------------------
@@ -280,6 +308,8 @@ class _TaskRow(QFrame):
 class DashboardPage(QWidget):
     """Dashboard showing firm-wide statistics, urgent tasks, and sync status."""
 
+    sync_requested: Signal = Signal()
+
     def __init__(
         self,
         conn: sqlite3.Connection,
@@ -316,6 +346,10 @@ class DashboardPage(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
+        # ---- Toolbar (pinned above scroll area) ----
+        toolbar = self._build_toolbar(self._user)
+        outer.addWidget(toolbar)
+
         # Scrollable content
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -330,19 +364,6 @@ class DashboardPage(QWidget):
         self._content_layout = QVBoxLayout(content)
         self._content_layout.setContentsMargins(SP_8, SP_6, SP_8, SP_8)
         self._content_layout.setSpacing(SP_6)
-
-        # ---- Greeting ----
-        name = self._user.get("name", "")
-        greeting = self._get_greeting(name)
-        self._greeting_lbl = QLabel(greeting)
-        greeting_font = QFont(FONT_DISPLAY)
-        greeting_font.setPixelSize(26)
-        greeting_font.setWeight(QFont.Weight(FW_BOLD))
-        self._greeting_lbl.setFont(greeting_font)
-        self._greeting_lbl.setStyleSheet(
-            f"color: {p.navy_base}; background: transparent; border: none;"
-        )
-        self._content_layout.addWidget(self._greeting_lbl)
 
         # ---- Stat cards row ----
         cards_row = QHBoxLayout()
@@ -373,6 +394,122 @@ class DashboardPage(QWidget):
         self._content_layout.addLayout(self._sync_container)
 
         self._content_layout.addStretch()
+
+    def _build_toolbar(self, user: dict[str, str]) -> QFrame:
+        """Build the dashboard toolbar QFrame matching the HTML prototype spec."""
+        p = self._p
+        now = datetime.now()
+
+        toolbar = QFrame()
+        toolbar.setObjectName("Toolbar")
+        toolbar.setStyleSheet(
+            f"""
+            QFrame#Toolbar {{
+                background-color: {p.app_bg};
+                border-bottom: 1px solid {p.app_border};
+            }}
+            """
+        )
+
+        row = QHBoxLayout(toolbar)
+        row.setContentsMargins(20, 12, 20, 12)
+        row.setSpacing(10)
+
+        # 1. Greeting title: "Bom dia, Nome."
+        greeting_text = self._get_greeting(user.get("name", ""))
+        greeting_lbl = QLabel(greeting_text)
+        greeting_lbl.setObjectName("ToolbarTitle")
+        title_font = QFont(FONT_DISPLAY)
+        title_font.setPixelSize(22)
+        title_font.setWeight(QFont.Weight(400))
+        greeting_lbl.setFont(title_font)
+        greeting_lbl.setStyleSheet(
+            f"""
+            QLabel#ToolbarTitle {{
+                font-family: "{FONT_DISPLAY}", "Cormorant Garamond", Georgia, serif;
+                font-size: 22px;
+                font-weight: 400;
+                color: {p.app_fg_strong};
+                background: transparent;
+                border: none;
+                margin-right: 14px;
+            }}
+            """
+        )
+        row.addWidget(greeting_lbl)
+
+        # 2. Date meta label: "segunda-feira, 27 de abril de 2026"
+        date_text = _format_date_pt_br(now)
+        date_lbl = QLabel(date_text)
+        date_lbl.setObjectName("ToolbarMeta")
+        date_lbl.setStyleSheet(
+            f"""
+            QLabel#ToolbarMeta {{
+                font-size: 11px;
+                color: {p.app_fg_subtle};
+                letter-spacing: 0.04em;
+                text-transform: uppercase;
+                font-weight: 600;
+                background: transparent;
+                border: none;
+                margin-left: 12px;
+                margin-right: 4px;
+            }}
+            """
+        )
+        row.addWidget(date_lbl)
+
+        # 3. Spacer
+        row.addStretch()
+
+        # 4. "Última sync: …" label
+        self._last_sync_lbl = QLabel("Última sync: —")
+        self._last_sync_lbl.setStyleSheet(
+            f"""
+            QLabel {{
+                font-size: 11px;
+                color: {p.app_fg_subtle};
+                background: transparent;
+                border: none;
+                margin-right: 8px;
+            }}
+            """
+        )
+        row.addWidget(self._last_sync_lbl)
+
+        # 5. "Sincronizar tudo" button
+        sync_all_btn = QPushButton("Sincronizar tudo")
+        sync_all_btn.setObjectName("BtnSecondary")
+        sync_all_btn.setFixedHeight(32)
+        sync_all_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        sync_all_btn.setStyleSheet(
+            f"""
+            QPushButton#BtnSecondary {{
+                background-color: transparent;
+                color: {p.app_fg};
+                font-family: "{FONT_BODY}", "Segoe UI", Arial, sans-serif;
+                font-size: {FS_SM2}px;
+                font-weight: {FW_MEDIUM};
+                border: 1px solid {p.app_border};
+                border-radius: {RADIUS_MD}px;
+                padding: 0 {SP_3}px;
+            }}
+            QPushButton#BtnSecondary:hover {{
+                background-color: {p.app_row_hover};
+                border-color: {p.app_border_strong};
+            }}
+            QPushButton#BtnSecondary:pressed {{
+                background-color: {p.app_accent_soft};
+            }}
+            QPushButton#BtnSecondary:disabled {{
+                color: {p.app_fg_subtle};
+            }}
+            """
+        )
+        sync_all_btn.clicked.connect(self.sync_requested)
+        row.addWidget(sync_all_btn)
+
+        return toolbar
 
     # ------------------------------------------------------------------
     # Data loading
@@ -407,6 +544,29 @@ class DashboardPage(QWidget):
         self._card_tarefas.findChildren(QLabel)[0].setText(str(tarefas_hoje))
         self._card_criticos.findChildren(QLabel)[0].setText(str(criticos))
         self._card_clientes.findChildren(QLabel)[0].setText(str(total_clientes))
+
+        # Update last-sync label from the most recent sync across all bases
+        self._update_last_sync_label()
+
+    def _update_last_sync_label(self) -> None:
+        """Set the 'Última sync' label to the most recent sync timestamp."""
+        latest: float = 0.0
+        for base in DATA_SOURCES:
+            try:
+                ts = cache_db.get_last_sync(self._conn, base)
+                if ts > latest:
+                    latest = ts
+            except Exception:  # noqa: BLE001
+                pass
+
+        if latest > 0:
+            dt = datetime.fromtimestamp(latest)
+            text = f"Última sync: {dt.strftime('%d/%m %H:%M')}"
+        else:
+            text = "Última sync: —"
+
+        if hasattr(self, "_last_sync_lbl"):
+            self._last_sync_lbl.setText(text)
 
     def _load_urgent_tasks(self) -> None:
         # Clear existing rows
@@ -488,7 +648,7 @@ class DashboardPage(QWidget):
             period = "Boa tarde"
         else:
             period = "Boa noite"
-        suffix = f", {name}" if name else ""
+        suffix = f", {name}." if name else "."
         return f"{period}{suffix}"
 
     @staticmethod
@@ -501,10 +661,3 @@ class DashboardPage(QWidget):
             return delta
         except ValueError:
             return None
-
-
-# Alias for SP_1 which may not be in all token sets
-try:
-    from notion_rpadv.theme.tokens import SP_1  # noqa: F401
-except ImportError:
-    SP_1 = 4

@@ -16,7 +16,6 @@ from PySide6.QtWidgets import (
     QMenu,
     QPushButton,
     QTableView,
-    QToolBar,
     QVBoxLayout,
     QWidget,
     QWidgetAction,
@@ -30,6 +29,7 @@ from notion_rpadv.models.filters import TableFilterProxy
 from notion_rpadv.services.notion_facade import NotionFacade
 from notion_rpadv.theme.tokens import (
     FONT_BODY,
+    FONT_DISPLAY,
     FS_LG,
     FS_MD,
     FS_SM,
@@ -94,6 +94,9 @@ class BaseTablePage(QWidget):
         # Dirty tracking
         self._model.dirty_changed.connect(self._on_dirty_changed)
 
+        # Reload → update meta count
+        self._model.modelReset.connect(self._update_meta)
+
         self._build_ui(palette)
 
     # ------------------------------------------------------------------
@@ -105,77 +108,9 @@ class BaseTablePage(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # ---- Toolbar row ----
-        toolbar_frame = QFrame()
-        toolbar_frame.setStyleSheet(
-            f"""
-            QFrame {{
-                background-color: {p.app_panel};
-                border-bottom: 1px solid {p.app_border};
-            }}
-            """
-        )
-        toolbar_row = QHBoxLayout(toolbar_frame)
-        toolbar_row.setContentsMargins(SP_4, SP_3, SP_4, SP_3)
-        toolbar_row.setSpacing(SP_2)
-
-        # Base label
-        base_lbl = QLabel(f"← {self._base}")
-        base_lbl.setStyleSheet(
-            f"""
-            QLabel {{
-                color: {p.app_fg_muted};
-                font-family: "{FONT_BODY}", "Segoe UI", Arial, sans-serif;
-                font-size: {FS_SM2}px;
-                font-weight: {FW_MEDIUM};
-                background: transparent;
-                border: none;
-            }}
-            """
-        )
-        toolbar_row.addWidget(base_lbl)
-        toolbar_row.addStretch()
-
-        # Search
-        self._search_edit = QLineEdit()
-        self._search_edit.setPlaceholderText("Buscar…")
-        self._search_edit.setFixedHeight(32)
-        self._search_edit.setFixedWidth(240)
-        self._search_edit.setStyleSheet(
-            f"""
-            QLineEdit {{
-                background-color: {p.app_bg};
-                color: {p.app_fg};
-                font-family: "{FONT_BODY}", "Segoe UI", Arial, sans-serif;
-                font-size: {FS_MD}px;
-                border: 1px solid {p.app_border};
-                border-radius: {RADIUS_MD}px;
-                padding: 0 {SP_3}px;
-            }}
-            QLineEdit:focus {{
-                border-color: {p.app_accent};
-            }}
-            """
-        )
-        self._search_edit.textChanged.connect(self._on_search_changed)
-        toolbar_row.addWidget(self._search_edit)
-
-        # Filters button
-        self._filter_btn = self._make_secondary_btn("Filtros ▾", p)
-        self._filter_btn.clicked.connect(self._open_filter_menu)
-        toolbar_row.addWidget(self._filter_btn)
-
-        # Sync button
-        self._sync_btn = self._make_secondary_btn("Sincronizar", p)
-        self._sync_btn.clicked.connect(self.sync_now)
-        toolbar_row.addWidget(self._sync_btn)
-
-        # New record button
-        self._new_btn = self._make_primary_btn("+ Novo", p)
-        self._new_btn.clicked.connect(self._on_new)
-        toolbar_row.addWidget(self._new_btn)
-
-        root.addWidget(toolbar_frame)
+        # ---- Toolbar ----
+        self._toolbar = self._build_toolbar(p)
+        root.addWidget(self._toolbar)
 
         # ---- Table ----
         self._table = QTableView()
@@ -228,6 +163,196 @@ class BaseTablePage(QWidget):
         self._save_bar.discard_clicked.connect(self._on_discard)
         self._save_bar.setVisible(False)
 
+    def _build_toolbar(self, p: Palette) -> QFrame:
+        """Build the spec-compliant toolbar QFrame."""
+        toolbar = QFrame()
+        toolbar.setObjectName("Toolbar")
+        toolbar.setStyleSheet(
+            f"""
+            QFrame#Toolbar {{
+                background-color: {p.app_bg};
+                border-bottom: 1px solid {p.app_border};
+            }}
+            """
+        )
+
+        row = QHBoxLayout(toolbar)
+        row.setContentsMargins(20, 12, 20, 12)
+        row.setSpacing(10)
+
+        # 1. Title label — base name
+        self._toolbar_title = QLabel(self._base)
+        self._toolbar_title.setObjectName("ToolbarTitle")
+        title_font = QFont(FONT_DISPLAY)
+        title_font.setPixelSize(22)
+        title_font.setWeight(QFont.Weight(400))
+        self._toolbar_title.setFont(title_font)
+        self._toolbar_title.setStyleSheet(
+            f"""
+            QLabel#ToolbarTitle {{
+                font-family: "{FONT_DISPLAY}", "Cormorant Garamond", Georgia, serif;
+                font-size: 22px;
+                font-weight: 400;
+                color: {p.app_fg_strong};
+                background: transparent;
+                border: none;
+                margin-right: 14px;
+            }}
+            """
+        )
+        row.addWidget(self._toolbar_title)
+
+        # 2. Meta label — row count
+        self._toolbar_meta = QLabel("— registros")
+        self._toolbar_meta.setObjectName("ToolbarMeta")
+        self._toolbar_meta.setStyleSheet(
+            f"""
+            QLabel#ToolbarMeta {{
+                font-size: 11px;
+                color: {p.app_fg_subtle};
+                letter-spacing: 0.04em;
+                text-transform: uppercase;
+                font-weight: 600;
+                background: transparent;
+                border: none;
+                margin-right: 4px;
+            }}
+            """
+        )
+        row.addWidget(self._toolbar_meta)
+
+        # 3. Spacer
+        row.addStretch()
+
+        # 4. Search input
+        self._search_edit = QLineEdit()
+        self._search_edit.setObjectName("SearchInput")
+        self._search_edit.setPlaceholderText("Pesquisar… ⌘K")
+        self._search_edit.setFixedWidth(280)
+        self._search_edit.setFixedHeight(32)
+        self._search_edit.setStyleSheet(
+            f"""
+            QLineEdit#SearchInput {{
+                background-color: {p.app_panel};
+                color: {p.app_fg};
+                font-family: "{FONT_BODY}", "Segoe UI", Arial, sans-serif;
+                font-size: {FS_MD}px;
+                border: 1px solid {p.app_border};
+                border-radius: {RADIUS_MD}px;
+                padding: 0 {SP_3}px;
+            }}
+            QLineEdit#SearchInput:focus {{
+                border-color: {p.app_accent};
+            }}
+            """
+        )
+        self._search_edit.textChanged.connect(self._proxy.set_search)
+        row.addWidget(self._search_edit)
+
+        # 5. Filtros button
+        self._filter_btn = QPushButton("Filtros ▾")
+        self._filter_btn.setObjectName("BtnGhost")
+        self._filter_btn.setFixedHeight(32)
+        self._filter_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._filter_btn.setStyleSheet(
+            f"""
+            QPushButton#BtnGhost {{
+                background-color: transparent;
+                color: {p.app_fg};
+                font-family: "{FONT_BODY}", "Segoe UI", Arial, sans-serif;
+                font-size: {FS_SM2}px;
+                font-weight: {FW_MEDIUM};
+                border: 1px solid {p.app_border};
+                border-radius: {RADIUS_MD}px;
+                padding: 0 {SP_3}px;
+            }}
+            QPushButton#BtnGhost:hover {{
+                background-color: {p.app_row_hover};
+                border-color: {p.app_border_strong};
+            }}
+            QPushButton#BtnGhost:pressed {{
+                background-color: {p.app_accent_soft};
+            }}
+            """
+        )
+        self._filter_btn.clicked.connect(self._open_filter_menu)
+        row.addWidget(self._filter_btn)
+
+        # 6. Vertical divider
+        divider = QFrame()
+        divider.setFrameShape(QFrame.Shape.VLine)
+        divider.setFixedWidth(1)
+        divider.setStyleSheet(
+            f"QFrame {{ background-color: {p.app_border}; border: none; }}"
+        )
+        row.addWidget(divider)
+
+        # 7. Sincronizar button
+        self._sync_btn = QPushButton("Sincronizar")
+        self._sync_btn.setObjectName("BtnSecondary")
+        self._sync_btn.setFixedHeight(32)
+        self._sync_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._sync_btn.setStyleSheet(
+            f"""
+            QPushButton#BtnSecondary {{
+                background-color: transparent;
+                color: {p.app_fg};
+                font-family: "{FONT_BODY}", "Segoe UI", Arial, sans-serif;
+                font-size: {FS_SM2}px;
+                font-weight: {FW_MEDIUM};
+                border: 1px solid {p.app_border};
+                border-radius: {RADIUS_MD}px;
+                padding: 0 {SP_3}px;
+            }}
+            QPushButton#BtnSecondary:hover {{
+                background-color: {p.app_row_hover};
+                border-color: {p.app_border_strong};
+            }}
+            QPushButton#BtnSecondary:pressed {{
+                background-color: {p.app_accent_soft};
+            }}
+            QPushButton#BtnSecondary:disabled {{
+                color: {p.app_fg_subtle};
+            }}
+            """
+        )
+        self._sync_btn.clicked.connect(self.sync_now)
+        row.addWidget(self._sync_btn)
+
+        # 8. + Novo button
+        self._new_btn = QPushButton("+ Novo")
+        self._new_btn.setObjectName("BtnPrimary")
+        self._new_btn.setFixedHeight(32)
+        self._new_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._new_btn.setStyleSheet(
+            f"""
+            QPushButton#BtnPrimary {{
+                background-color: {p.app_accent};
+                color: {p.app_accent_fg};
+                font-family: "{FONT_BODY}", "Segoe UI", Arial, sans-serif;
+                font-size: {FS_SM2}px;
+                font-weight: {FW_BOLD};
+                border: none;
+                border-radius: {RADIUS_MD}px;
+                padding: 0 {SP_4}px;
+            }}
+            QPushButton#BtnPrimary:hover {{
+                background-color: {p.app_accent_hover};
+            }}
+            QPushButton#BtnPrimary:pressed {{
+                background-color: {p.navy_dark};
+            }}
+            QPushButton#BtnPrimary:disabled {{
+                background-color: {p.app_border};
+                color: {p.app_fg_subtle};
+            }}
+            """
+        )
+        self._new_btn.clicked.connect(self._on_new)
+        row.addWidget(self._new_btn)
+
+        return toolbar
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -241,6 +366,15 @@ class BaseTablePage(QWidget):
         self._sync_btn.setEnabled(False)
         self._sync_btn.setText("Sincronizando…")
         self._sync_manager.sync_base(self._base)
+
+    # ------------------------------------------------------------------
+    # Meta update
+    # ------------------------------------------------------------------
+
+    def _update_meta(self) -> None:
+        """Refresh the ToolbarMeta label with the current row count."""
+        n = self._model.rowCount()
+        self._toolbar_meta.setText(f"{n} registros")
 
     # ------------------------------------------------------------------
     # Layout override — keep save bar overlaid at bottom
@@ -263,9 +397,6 @@ class BaseTablePage(QWidget):
     # ------------------------------------------------------------------
     # Slots
     # ------------------------------------------------------------------
-
-    def _on_search_changed(self, text: str) -> None:
-        self._proxy.set_search(text)
 
     def _on_dirty_changed(self, has_dirty: bool) -> None:
         count = len(self._model.get_dirty_edits())
@@ -383,67 +514,3 @@ class BaseTablePage(QWidget):
                 menu.addSeparator()
 
         menu.exec(self._filter_btn.mapToGlobal(QPoint(0, self._filter_btn.height())))
-
-    # ------------------------------------------------------------------
-    # Button factory helpers
-    # ------------------------------------------------------------------
-
-    def _make_primary_btn(self, text: str, p: Palette) -> QPushButton:
-        btn = QPushButton(text)
-        btn.setFixedHeight(32)
-        btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn.setStyleSheet(
-            f"""
-            QPushButton {{
-                background-color: {p.app_accent};
-                color: {p.app_accent_fg};
-                font-family: "{FONT_BODY}", "Segoe UI", Arial, sans-serif;
-                font-size: {FS_SM2}px;
-                font-weight: {FW_BOLD};
-                border: none;
-                border-radius: {RADIUS_MD}px;
-                padding: 0 {SP_4}px;
-            }}
-            QPushButton:hover {{
-                background-color: {p.app_accent_hover};
-            }}
-            QPushButton:pressed {{
-                background-color: {p.navy_dark};
-            }}
-            QPushButton:disabled {{
-                background-color: {p.app_border};
-                color: {p.app_fg_subtle};
-            }}
-            """
-        )
-        return btn
-
-    def _make_secondary_btn(self, text: str, p: Palette) -> QPushButton:
-        btn = QPushButton(text)
-        btn.setFixedHeight(32)
-        btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn.setStyleSheet(
-            f"""
-            QPushButton {{
-                background-color: transparent;
-                color: {p.app_fg};
-                font-family: "{FONT_BODY}", "Segoe UI", Arial, sans-serif;
-                font-size: {FS_SM2}px;
-                font-weight: {FW_MEDIUM};
-                border: 1px solid {p.app_border};
-                border-radius: {RADIUS_MD}px;
-                padding: 0 {SP_3}px;
-            }}
-            QPushButton:hover {{
-                background-color: {p.app_row_hover};
-                border-color: {p.app_border_strong};
-            }}
-            QPushButton:pressed {{
-                background-color: {p.app_accent_soft};
-            }}
-            QPushButton:disabled {{
-                color: {p.app_fg_subtle};
-            }}
-            """
-        )
-        return btn

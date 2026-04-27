@@ -60,21 +60,21 @@ FONTS_DIR: pathlib.Path  = ASSETS_DIR / "fonts"
 # Ordered list of (relative_path, description) pairs for all font files.
 # Paths are relative to FONTS_DIR.
 _FONT_FILES: Sequence[tuple[str, str]] = (
-    # Nunito Sans
-    ("NunitoSans/NunitoSans-Light.ttf",    "Nunito Sans Light"),
-    ("NunitoSans/NunitoSans-Regular.ttf",  "Nunito Sans Regular"),
-    ("NunitoSans/NunitoSans-Medium.ttf",   "Nunito Sans Medium"),
-    ("NunitoSans/NunitoSans-SemiBold.ttf", "Nunito Sans SemiBold"),
-    ("NunitoSans/NunitoSans-Bold.ttf",     "Nunito Sans Bold"),
-    # Playfair Display
-    ("PlayfairDisplay/PlayfairDisplay-Regular.ttf",  "Playfair Display Regular"),
-    ("PlayfairDisplay/PlayfairDisplay-Medium.ttf",   "Playfair Display Medium"),
-    ("PlayfairDisplay/PlayfairDisplay-SemiBold.ttf", "Playfair Display SemiBold"),
-    ("PlayfairDisplay/PlayfairDisplay-Bold.ttf",     "Playfair Display Bold"),
-    # JetBrains Mono
-    ("JetBrainsMono/JetBrainsMono-Regular.ttf", "JetBrains Mono Regular"),
-    ("JetBrainsMono/JetBrainsMono-Medium.ttf",  "JetBrains Mono Medium"),
-    ("JetBrainsMono/JetBrainsMono-Bold.ttf",    "JetBrains Mono Bold"),
+    # Nunito Sans (files named NunitoSans-w{weight}.ttf)
+    ("NunitoSans/NunitoSans-w300.ttf", "Nunito Sans Light"),
+    ("NunitoSans/NunitoSans-w400.ttf", "Nunito Sans Regular"),
+    ("NunitoSans/NunitoSans-w500.ttf", "Nunito Sans Medium"),
+    ("NunitoSans/NunitoSans-w600.ttf", "Nunito Sans SemiBold"),
+    ("NunitoSans/NunitoSans-w700.ttf", "Nunito Sans Bold"),
+    # Playfair Display (files named PlayfairDisplay-w{weight}.ttf)
+    ("PlayfairDisplay/PlayfairDisplay-w400.ttf", "Playfair Display Regular"),
+    ("PlayfairDisplay/PlayfairDisplay-w500.ttf", "Playfair Display Medium"),
+    ("PlayfairDisplay/PlayfairDisplay-w600.ttf", "Playfair Display SemiBold"),
+    ("PlayfairDisplay/PlayfairDisplay-w700.ttf", "Playfair Display Bold"),
+    # JetBrains Mono (files named JetBrainsMono-w{weight}.ttf)
+    ("JetBrainsMono/JetBrainsMono-w400.ttf", "JetBrains Mono Regular"),
+    ("JetBrainsMono/JetBrainsMono-w500.ttf", "JetBrains Mono Medium"),
+    ("JetBrainsMono/JetBrainsMono-w700.ttf", "JetBrains Mono Bold"),
 )
 
 
