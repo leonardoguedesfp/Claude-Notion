@@ -29,10 +29,12 @@ from notion_rpadv.theme.tokens import (
 _BAR_HEIGHT: int = 52
 _BAR_MIN_WIDTH: int = 360
 _ANIM_DURATION: int = 220
+# §4.1 Bottom-right margin
+_BAR_MARGIN: int = 16
 
 
 class _CountBadge(QLabel):
-    """Pill-shaped badge showing the number of pending edits."""
+    """Pill-shaped badge showing the number of pending edits and base name."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -41,8 +43,8 @@ class _CountBadge(QLabel):
         self.setStyleSheet(
             f"""
             QLabel {{
-                background-color: rgba(181,138,63,0.18);
-                color: #7A5C28;
+                background-color: rgba(255,217,90,0.22);
+                color: #F5DC7A;
                 font-family: "{FONT_BODY}", "Segoe UI", Arial, sans-serif;
                 font-size: {FS_SM}px;
                 font-weight: {FW_BOLD};
@@ -52,9 +54,13 @@ class _CountBadge(QLabel):
             """
         )
 
-    def set_count(self, n: int) -> None:
-        unit = "edição" if n == 1 else "edições"
-        self.setText(f" {n} {unit} pendentes ")
+    def set_count(self, n: int, base_name: str | None = None) -> None:
+        # §4.2 include base name in badge text
+        unit = "alteração" if n == 1 else "alterações"
+        if base_name:
+            self.setText(f" {n} {unit} em {base_name} ")
+        else:
+            self.setText(f" {n} {unit} pendentes ")
         self.adjustSize()
 
 
@@ -91,23 +97,21 @@ class FloatingSaveBar(QFrame):
         self.setMinimumWidth(_BAR_MIN_WIDTH)
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
 
-        # Rounded top corners only; flat bottom so it sits at the very bottom edge
+        # §4.3 navy background — rounded pill floating above content
         self.setStyleSheet(
             f"""
             QFrame#FloatingSaveBar {{
-                background-color: #FFFFFF;
-                border: 1px solid rgba(20,36,48,0.12);
-                border-bottom: none;
-                border-top-left-radius: {RADIUS_XL}px;
-                border-top-right-radius: {RADIUS_XL}px;
+                background-color: #0C324D;
+                border: none;
+                border-radius: {RADIUS_XL}px;
             }}
             """
         )
 
         shadow = QGraphicsDropShadowEffect(self)
         shadow.setBlurRadius(24)
-        shadow.setOffset(0, -4)
-        shadow.setColor(QColor(10, 15, 20, 55))
+        shadow.setOffset(0, 4)
+        shadow.setColor(QColor(10, 15, 20, 90))
         self.setGraphicsEffect(shadow)
 
         layout = QHBoxLayout(self)
@@ -137,10 +141,10 @@ class FloatingSaveBar(QFrame):
     # Public API
     # ------------------------------------------------------------------
 
-    def set_count(self, n: int) -> None:
-        """Update the pending edit count displayed in the badge."""
+    def set_count(self, n: int, base_name: str | None = None) -> None:
+        """Update the pending edit count; §4.2 optionally include base name."""
         self._count = n
-        self._badge.set_count(n)
+        self._badge.set_count(n, base_name)
 
     def show_bar(self) -> None:
         """Slide the bar into view with an upward animation."""
@@ -158,7 +162,7 @@ class FloatingSaveBar(QFrame):
             anim.finished.connect(self.hide)
 
     def reposition(self) -> None:
-        """Snap the bar to the bottom-centre of the parent widget.
+        """Snap the bar to the bottom-right of the parent widget (§4.1).
 
         Call this from the parent's ``resizeEvent``.
         """
@@ -167,8 +171,9 @@ class FloatingSaveBar(QFrame):
         pw = self.parent().width()  # type: ignore[union-attr]
         ph = self.parent().height()  # type: ignore[union-attr]
         bar_w = min(max(_BAR_MIN_WIDTH, pw // 2), pw - 64)
-        x = (pw - bar_w) // 2
-        y = ph - _BAR_HEIGHT
+        # §4.1 bottom-right with 16px margin
+        x = pw - bar_w - _BAR_MARGIN
+        y = ph - _BAR_HEIGHT - _BAR_MARGIN
         self.setGeometry(x, y, bar_w, _BAR_HEIGHT)
 
     # ------------------------------------------------------------------
@@ -205,6 +210,7 @@ class FloatingSaveBar(QFrame):
 
     @staticmethod
     def _make_save_btn() -> QPushButton:
+        # §4.3 Save = cream/white on navy bar — visually primary
         btn = QPushButton("Salvar")
         btn.setFixedHeight(32)
         btn.setMinimumWidth(80)
@@ -212,20 +218,20 @@ class FloatingSaveBar(QFrame):
         btn.setStyleSheet(
             f"""
             QPushButton {{
-                background-color: #104063;
-                color: #FFFFFF;
+                background-color: #EDEAE4;
+                color: #0C324D;
                 font-family: "{FONT_BODY}", "Segoe UI", Arial, sans-serif;
                 font-size: {FS_SM2}px;
-                font-weight: {FW_MEDIUM};
+                font-weight: {FW_BOLD};
                 border: none;
                 border-radius: {RADIUS_MD}px;
                 padding: 0 {SP_4}px;
             }}
             QPushButton:hover {{
-                background-color: #0C324D;
+                background-color: #FFFFFF;
             }}
             QPushButton:pressed {{
-                background-color: #092840;
+                background-color: #CAD5DD;
             }}
             """
         )
@@ -233,6 +239,7 @@ class FloatingSaveBar(QFrame):
 
     @staticmethod
     def _make_discard_btn() -> QPushButton:
+        # §4.3 Discard = ghost — no border, muted cream text
         btn = QPushButton("Descartar")
         btn.setFixedHeight(32)
         btn.setMinimumWidth(90)
@@ -241,20 +248,20 @@ class FloatingSaveBar(QFrame):
             f"""
             QPushButton {{
                 background-color: transparent;
-                color: #6F6B68;
+                color: rgba(237,234,228,0.65);
                 font-family: "{FONT_BODY}", "Segoe UI", Arial, sans-serif;
                 font-size: {FS_SM2}px;
                 font-weight: {FW_MEDIUM};
-                border: 1px solid #CAD5DD;
+                border: none;
                 border-radius: {RADIUS_MD}px;
                 padding: 0 {SP_4}px;
             }}
             QPushButton:hover {{
-                background-color: rgba(20,36,48,0.04);
-                color: #3F4751;
+                background-color: rgba(237,234,228,0.08);
+                color: rgba(237,234,228,0.90);
             }}
             QPushButton:pressed {{
-                background-color: rgba(20,36,48,0.08);
+                background-color: rgba(237,234,228,0.12);
             }}
             """
         )

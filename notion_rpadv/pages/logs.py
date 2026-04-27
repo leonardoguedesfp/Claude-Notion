@@ -40,7 +40,7 @@ from notion_rpadv.theme.tokens import (
     SP_6,
     SP_8,
 )
-from notion_rpadv.widgets.modal import ConfirmModal
+from notion_rpadv.widgets.revert_dialog import RevertDialog
 
 _COLUMNS = ["Data/hora", "Usuário", "Base", "Campo", "Valor anterior", "Valor novo", "Ação"]
 _COL_DATETIME = 0
@@ -284,16 +284,9 @@ class LogsPage(QWidget):
     def _make_revert_handler(self, log_id: int, row_idx: int) -> Any:
         def handler() -> None:
             entry = self._entries[row_idx] if row_idx < len(self._entries) else {}
-            campo = str(entry.get("key", ""))
-            base = str(entry.get("base", ""))
-            confirm = ConfirmModal(
-                "Reverter alteração",
-                f"Reverter campo '{campo}' da base {base} para o valor anterior?",
-                confirm_label="Reverter",
-                danger=True,
-                parent=self,
-            )
-            if confirm.exec_and_get():
+            # §6.2 RevertDialog: ApplicationModal with diff table
+            dlg = RevertDialog(entry, parent=self.window())
+            if dlg.exec() == dlg.DialogCode.Accepted:
                 self._facade.revert_log_entry(log_id, self._user)
         return handler
 

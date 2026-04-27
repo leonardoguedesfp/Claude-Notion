@@ -84,6 +84,8 @@ class StatCard(QFrame):
         Numeric or textual value displayed prominently.
     color:
         Semantic accent color — "accent" | "success" | "warning" | "danger".
+    label_zero:
+        §2.2 Optional calm-zero text shown when value == 0 instead of "0".
     """
 
     def __init__(
@@ -92,10 +94,13 @@ class StatCard(QFrame):
         value: str | int,
         color: str = "accent",
         dark: bool = False,
+        label_zero: str | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         p: Palette = DARK if dark else LIGHT
+        self._p = p
+        self._label_zero = label_zero
 
         _COLOR_MAP: dict[str, str] = {
             "accent":  p.app_accent,
@@ -103,7 +108,7 @@ class StatCard(QFrame):
             "warning": p.app_warning,
             "danger":  p.app_danger,
         }
-        accent = _COLOR_MAP.get(color, p.app_accent)
+        self._accent = _COLOR_MAP.get(color, p.app_accent)
 
         self.setStyleSheet(
             f"""
@@ -111,7 +116,7 @@ class StatCard(QFrame):
                 background-color: {p.app_panel};
                 border: 1px solid {p.app_border};
                 border-radius: {RADIUS_XL}px;
-                border-left: 4px solid {accent};
+                border-left: 4px solid {self._accent};
             }}
             """
         )
@@ -131,14 +136,15 @@ class StatCard(QFrame):
         val_font.setWeight(QFont.Weight(FW_BOLD))
         self._val_lbl.setFont(val_font)
         self._val_lbl.setStyleSheet(
-            f"color: {accent}; background: transparent; border: none;"
+            f"color: {self._accent}; background: transparent; border: none;"
         )
         layout.addWidget(self._val_lbl)
 
-        # Label
-        cap_lbl = QLabel(label)
-        cap_lbl.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        cap_lbl.setStyleSheet(
+        # Caption label (also stored for calm-zero label swap)
+        self._cap_lbl = QLabel(label)
+        self._cap_label_default = label
+        self._cap_lbl.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self._cap_lbl.setStyleSheet(
             f"""
             QLabel {{
                 color: {p.app_fg_muted};
@@ -150,12 +156,23 @@ class StatCard(QFrame):
             }}
             """
         )
-        layout.addWidget(cap_lbl)
+        layout.addWidget(self._cap_lbl)
 
     def update_value(self, value: str | int) -> None:
-        """Update the displayed value at runtime."""
-        # BUG-27: use stored attribute instead of fragile findChildren()[0]
+        """Update the displayed value; §2.2 switches to calm-zero style when value=0."""
         self._val_lbl.setText(str(value))
+        is_zero = str(value) in ("0", "—")
+        if self._label_zero and is_zero:
+            # §2.2 calm-zero: neutral color, lighter weight, sub-label swap
+            self._val_lbl.setStyleSheet(
+                f"color: {self._p.app_fg_subtle}; background: transparent; border: none;"
+            )
+            self._cap_lbl.setText(self._label_zero)
+        else:
+            self._val_lbl.setStyleSheet(
+                f"color: {self._accent}; background: transparent; border: none;"
+            )
+            self._cap_lbl.setText(self._cap_label_default)
 
 
 # ---------------------------------------------------------------------------
@@ -357,14 +374,15 @@ class DashboardPage(QWidget):
 
         self._content_layout = QVBoxLayout(content)
         self._content_layout.setContentsMargins(SP_8, SP_6, SP_8, SP_8)
-        self._content_layout.setSpacing(SP_6)
+        self._content_layout.setSpacing(SP_8)  # §2.1 32px between sections
 
         # ---- Stat cards row ----
         cards_row = QHBoxLayout()
         cards_row.setSpacing(SP_4)
         self._card_processos = StatCard("Processos Ativos", "—", "accent", self._dark)
-        self._card_tarefas   = StatCard("Tarefas Hoje", "—", "warning", self._dark)
-        self._card_criticos  = StatCard("Prazo Crítico", "—", "danger", self._dark)
+        # §2.2 calm-zero: neutral style when count is 0
+        self._card_tarefas   = StatCard("Tarefas Hoje", "—", "warning", self._dark, label_zero="Sem tarefas hoje")
+        self._card_criticos  = StatCard("Prazo Crítico", "—", "danger", self._dark, label_zero="Nenhum prazo crítico")
         self._card_clientes  = StatCard("Clientes", "—", "success", self._dark)
         for card in (
             self._card_processos,

@@ -274,11 +274,11 @@ class ConfiguracoesPage(QWidget):
             layout.addLayout(row)
 
     def _build_aparencia(self, layout: QVBoxLayout, p: Palette) -> None:
-        row = QHBoxLayout()
-        row.setSpacing(SP_4)
-
         lbl = self._field_label("Tema", p)
         layout.addWidget(lbl)
+
+        theme_row = QHBoxLayout()
+        theme_row.setSpacing(SP_4)
 
         self._auto_radio = QRadioButton("Auto (sistema)")
         self._light_radio = QRadioButton("Claro")
@@ -311,11 +311,80 @@ class ConfiguracoesPage(QWidget):
             lambda checked: self.theme_changed.emit("dark") if checked else None
         )
 
-        row.addWidget(self._auto_radio)
-        row.addWidget(self._light_radio)
-        row.addWidget(self._dark_radio)
-        row.addStretch()
-        layout.addLayout(row)
+        theme_row.addWidget(self._auto_radio)
+        theme_row.addWidget(self._light_radio)
+        theme_row.addWidget(self._dark_radio)
+        theme_row.addStretch()
+        layout.addLayout(theme_row)
+
+        # §7.4 Density segmented control
+        density_lbl = self._field_label("Densidade", p)
+        layout.addWidget(density_lbl)
+
+        density_row = QHBoxLayout()
+        density_row.setSpacing(0)
+
+        seg_style_active = f"""
+            QPushButton {{
+                background-color: {p.app_accent};
+                color: {p.app_accent_fg};
+                font-size: {FS_SM2}px;
+                font-weight: {FW_BOLD};
+                border: 1px solid {p.app_accent};
+                padding: 4px {SP_3}px;
+            }}
+        """
+        seg_style_inactive = f"""
+            QPushButton {{
+                background-color: transparent;
+                color: {p.app_fg};
+                font-size: {FS_SM2}px;
+                font-weight: {FW_MEDIUM};
+                border: 1px solid {p.app_border_strong};
+                padding: 4px {SP_3}px;
+            }}
+            QPushButton:hover {{
+                background-color: {p.app_row_hover};
+            }}
+        """
+
+        compact_btn = QPushButton("Compacto")
+        compact_btn.setFixedHeight(30)
+        compact_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        compact_btn.setStyleSheet(
+            seg_style_active + f"QPushButton {{ border-radius: 0; border-top-left-radius: {RADIUS_MD}px; border-bottom-left-radius: {RADIUS_MD}px; }}"
+        )
+
+        comfortable_btn = QPushButton("Confortável")
+        comfortable_btn.setFixedHeight(30)
+        comfortable_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        comfortable_btn.setStyleSheet(
+            seg_style_inactive + f"QPushButton {{ border-radius: 0; border-top-right-radius: {RADIUS_MD}px; border-bottom-right-radius: {RADIUS_MD}px; border-left: none; }}"
+        )
+
+        def _on_compact() -> None:
+            compact_btn.setStyleSheet(
+                seg_style_active + f"QPushButton {{ border-radius: 0; border-top-left-radius: {RADIUS_MD}px; border-bottom-left-radius: {RADIUS_MD}px; }}"
+            )
+            comfortable_btn.setStyleSheet(
+                seg_style_inactive + f"QPushButton {{ border-radius: 0; border-top-right-radius: {RADIUS_MD}px; border-bottom-right-radius: {RADIUS_MD}px; border-left: none; }}"
+            )
+
+        def _on_comfortable() -> None:
+            comfortable_btn.setStyleSheet(
+                seg_style_active + f"QPushButton {{ border-radius: 0; border-top-right-radius: {RADIUS_MD}px; border-bottom-right-radius: {RADIUS_MD}px; }}"
+            )
+            compact_btn.setStyleSheet(
+                seg_style_inactive + f"QPushButton {{ border-radius: 0; border-top-left-radius: {RADIUS_MD}px; border-bottom-left-radius: {RADIUS_MD}px; }}"
+            )
+
+        compact_btn.clicked.connect(_on_compact)
+        comfortable_btn.clicked.connect(_on_comfortable)
+
+        density_row.addWidget(compact_btn)
+        density_row.addWidget(comfortable_btn)
+        density_row.addStretch()
+        layout.addLayout(density_row)
 
     def _build_usuarios(self, layout: QVBoxLayout, p: Palette) -> None:
         grid = QGridLayout()

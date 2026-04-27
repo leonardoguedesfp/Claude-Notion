@@ -409,14 +409,10 @@ class BaseTablePage(QWidget):
         self._reposition_save_bar()
 
     def _reposition_save_bar(self) -> None:
+        # §4.1 delegate positioning to FloatingSaveBar.reposition() for consistency
         if not hasattr(self, "_save_bar"):
             return
-        bar_height = 60
-        margin = 16
-        x = margin
-        y = self.height() - bar_height - margin
-        w = self.width() - 2 * margin
-        self._save_bar.setGeometry(x, y, w, bar_height)
+        self._save_bar.reposition()
 
     # ------------------------------------------------------------------
     # Slots
@@ -424,7 +420,7 @@ class BaseTablePage(QWidget):
 
     def _on_dirty_changed(self, has_dirty: bool) -> None:
         count = len(self._model.get_dirty_edits())
-        self._save_bar.set_count(count)
+        self._save_bar.set_count(count, self._base)  # §4.2 include base name
         self._save_bar.setVisible(has_dirty)
         if has_dirty:
             self._reposition_save_bar()

@@ -137,7 +137,7 @@ class MainWindow(QMainWindow):
 
         # ---- Overlays (parented to central so they float over content) ----
         self._toast = ToastManager(central)
-        self._command_palette = CommandPalette(parent=self)
+        self._command_palette = CommandPalette(dark=self._dark, parent=self)  # §8.1
         self._command_palette.action_selected.connect(self._on_command_action)
         self._command_palette.set_actions([
             {"id": "nav_dashboard",  "label": "Dashboard",               "section": "Navegação"},

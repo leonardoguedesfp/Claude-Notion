@@ -97,11 +97,12 @@ class CommandPalette(QDialog):
 
     action_selected: Signal = Signal(str)
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, dark: bool = False, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowFlag(Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setModal(True)
+        self._dark = dark  # §8.1 backdrop differs per theme
 
         self._actions: list[dict[str, str]] = []
         self._filtered: list[dict[str, str]] = []
@@ -235,7 +236,11 @@ class CommandPalette(QDialog):
 
     def paintEvent(self, event: QPaintEvent) -> None:  # type: ignore[override]
         painter = QPainter(self)
-        painter.fillRect(self.rect(), QColor(10, 15, 20, 100))
+        # §8.1 light: rgba(20,36,48,0.30) · dark: rgba(0,0,0,0.55)
+        if self._dark:
+            painter.fillRect(self.rect(), QColor(0, 0, 0, 140))
+        else:
+            painter.fillRect(self.rect(), QColor(20, 36, 48, 77))
         painter.end()
 
     # ------------------------------------------------------------------

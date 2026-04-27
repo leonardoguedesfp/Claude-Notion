@@ -193,37 +193,37 @@ DARK: Final[Palette] = Palette(
     petrol_base="#395A5A",
     cream="#EDEAE4",
 
-    # Surfaces
-    app_bg="#0F1A24",
-    app_panel="#142430",
-    app_elevated="#1B2D3B",
-    app_sidebar="#0A1620",
-    app_sidebar_fg="rgba(237,234,228,0.95)",
-    app_sidebar_fg_muted="rgba(237,234,228,0.55)",
-    app_sidebar_hover="rgba(237,234,228,0.07)",
-    app_sidebar_active="rgba(79,127,160,0.20)",
+    # §0.2 Surfaces — V2 spec: bg #142430, panels #1A2D3D, sidebar #0A1F2D
+    app_bg="#142430",
+    app_panel="#1A2D3D",
+    app_elevated="#243444",
+    app_sidebar="#0A1F2D",
+    app_sidebar_fg="rgba(232,228,221,0.95)",
+    app_sidebar_fg_muted="rgba(232,228,221,0.55)",
+    app_sidebar_hover="rgba(232,228,221,0.07)",
+    app_sidebar_active="rgba(90,146,186,0.20)",
 
-    # Text
-    app_fg="rgba(237,234,228,0.95)",
-    app_fg_muted="rgba(237,234,228,0.72)",
-    app_fg_subtle="rgba(237,234,228,0.48)",
-    app_fg_strong="#EDEAE4",
+    # §0.2 Text — cream base #E8E4DD
+    app_fg="rgba(232,228,221,0.95)",
+    app_fg_muted="rgba(232,228,221,0.72)",
+    app_fg_subtle="rgba(232,228,221,0.48)",
+    app_fg_strong="#E8E4DD",
 
     # Borders
-    app_border="rgba(237,234,228,0.10)",
-    app_border_strong="rgba(237,234,228,0.20)",
-    app_divider="rgba(237,234,228,0.06)",
+    app_border="rgba(232,228,221,0.10)",
+    app_border_strong="rgba(232,228,221,0.20)",
+    app_divider="rgba(232,228,221,0.06)",
 
-    # Accent
-    app_accent="#4F7FA0",
-    app_accent_hover="#6496B4",
-    app_accent_soft="rgba(79,127,160,0.14)",
+    # §0.2 Accent — brighter blue for darker surfaces
+    app_accent="#5A92BA",
+    app_accent_hover="#6DA4C8",
+    app_accent_soft="rgba(90,146,186,0.16)",
     app_accent_fg="#FFFFFF",
-    app_focus_ring="rgba(79,127,160,0.45)",
+    app_focus_ring="rgba(90,146,186,0.45)",
 
     # Table rows
-    app_row_hover="rgba(79,127,160,0.07)",
-    app_row_selected="rgba(79,127,160,0.12)",
+    app_row_hover="rgba(90,146,186,0.08)",
+    app_row_selected="rgba(90,146,186,0.14)",
 
     # Status
     app_success="#6FA487",
@@ -235,13 +235,13 @@ DARK: Final[Palette] = Palette(
     app_info="#6A9FBC",
     app_info_bg="rgba(106,159,188,0.12)",
 
-    # Dirty cell
-    app_cell_dirty="rgba(217,178,107,0.16)",
+    # §4.4 Dirty cell — V2 dark: warmer yellow with higher opacity
+    app_cell_dirty="rgba(255,217,90,0.18)",
     app_cell_dirty_border="#D9B26B",
 
-    # Chips — slightly lighter to read on dark surfaces
-    chip_default=ChipPalette(bg="rgba(237,234,228,0.09)",  fg="rgba(237,234,228,0.88)"),
-    chip_blue=ChipPalette(   bg="rgba(79,127,160,0.18)",   fg="#A8C8DF"),
+    # Chips — desaturated for dark surfaces (§0.2)
+    chip_default=ChipPalette(bg="rgba(232,228,221,0.09)",  fg="rgba(232,228,221,0.88)"),
+    chip_blue=ChipPalette(   bg="rgba(90,146,186,0.18)",   fg="#A8C8DF"),
     chip_purple=ChipPalette( bg="rgba(136,110,196,0.18)",  fg="#C0AAEE"),
     chip_green=ChipPalette(  bg="rgba(111,164,135,0.16)",  fg="#A0D4B8"),
     chip_orange=ChipPalette( bg="rgba(217,138,79,0.18)",   fg="#E0A870"),

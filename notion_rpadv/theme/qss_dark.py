@@ -444,6 +444,7 @@ QTableWidget::item:selected {{
 QTableView::item[dirty="true"] {{
     background-color: {p.app_cell_dirty};
     border-bottom: 1.5px solid {p.app_cell_dirty_border};
+    border-left: 2px solid {p.app_warning};
 }}
 
 /* ---------------------------------------------------------

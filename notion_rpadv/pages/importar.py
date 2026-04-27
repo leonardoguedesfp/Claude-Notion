@@ -286,6 +286,8 @@ class _Step2Widget(QWidget):
         self._p = p
         self._rows: list[dict[str, Any]] = []
         self._errors: list[str] = []
+        # §5.3 row state tracking: index → "err" | "warn" | "ok"
+        self._row_states: dict[int, str] = {}
         self._build_ui(p)
 
     def load_file(self, base: str, file_path: str) -> None:
@@ -293,6 +295,7 @@ class _Step2Widget(QWidget):
         # BUG-05: store ALL rows separately from the preview slice
         self._all_rows: list[dict[str, Any]] = []
         self._errors = []
+        self._row_states = {}
         try:
             import openpyxl  # type: ignore[import]
             wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
@@ -324,8 +327,11 @@ class _Step2Widget(QWidget):
                             self._errors.append(f"Linha {i + 2}: [{err.campo}] {err.mensagem}")
                         if errs:
                             error_rows.append(i)
+                            self._row_states[i] = "err"
+                        else:
+                            self._row_states[i] = "ok"
                     except Exception:  # noqa: BLE001
-                        pass
+                        self._row_states[i] = "ok"
 
             # BUG-05: _rows = preview only; _all_rows = full dataset
             self._rows = all_row_dicts[:_MAX_PREVIEW_ROWS]
@@ -351,21 +357,67 @@ class _Step2Widget(QWidget):
             error_rows = []
         self._table.clear()
         self._table.setRowCount(len(rows))
-        self._table.setColumnCount(len(headers))
-        self._table.setHorizontalHeaderLabels(headers)
+        # §5.3 add "Validação" column at end
+        col_count = len(headers) + 1
+        self._table.setColumnCount(col_count)
+        self._table.setHorizontalHeaderLabels([*headers, "Validação"])
         p = self._p
+
+        # §5.3 row colors
+        _BG: dict[str, str] = {
+            "err":  p.app_danger_bg,
+            "warn": p.app_warning_bg,
+            "ok":   "transparent",
+        }
+        _CHIP: dict[str, tuple[str, str]] = {
+            "err":  (p.app_danger,  "Erro"),
+            "warn": (p.app_warning, "Conflito"),
+            "ok":   (p.app_success, "✓ OK"),
+        }
+
         for ri, row in enumerate(rows):
+            state = self._row_states.get(ri, "ok")
+            bg_color = _BG.get(state, "transparent")
             for ci, cell in enumerate(row):
                 item = QTableWidgetItem(str(cell) if cell is not None else "")
                 item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                if ri in error_rows:
-                    item.setBackground(QColor(p.app_danger_bg))
+                if bg_color != "transparent":
+                    item.setBackground(QColor(bg_color))
                 self._table.setItem(ri, ci, item)
+
+            # Validation chip in last column
+            chip_color, chip_text = _CHIP.get(state, (p.app_fg_subtle, "—"))
+            chip_item = QTableWidgetItem(chip_text)
+            chip_item.setFlags(chip_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            chip_item.setForeground(QColor(chip_color))
+            if bg_color != "transparent":
+                chip_item.setBackground(QColor(bg_color))
+            self._table.setItem(ri, len(headers), chip_item)
+
         self._table.resizeColumnsToContents()
 
     def _update_errors(self) -> None:
+        n_err = sum(1 for s in self._row_states.values() if s == "err")
+        n_ok = sum(1 for s in self._row_states.values() if s == "ok")
+        n_total = len(self._row_states)
+
+        # §5.2 summary banner
+        if n_err > 0:
+            banner_text = (
+                f"{n_err} linha(s) com erro · {n_ok} prontas para importar"
+                " — as linhas com erro serão puladas"
+            )
+            self._banner.setText(banner_text)
+            self._banner.setVisible(True)
+        elif n_total > 0:
+            self._banner.setText(f"{n_ok} linhas prontas para importar")
+            self._banner.setVisible(True)
+        else:
+            self._banner.setVisible(False)
+
+        # Detailed error list (hidden when banner shows summary)
         if self._errors:
-            text = "\n".join(self._errors[:20])
+            text = "\n".join(self._errors[:10])
             self._error_lbl.setText(text)
             self._error_lbl.setVisible(True)
         else:
@@ -375,6 +427,25 @@ class _Step2Widget(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, SP_4, 0, SP_4)
         layout.setSpacing(SP_3)
+
+        # §5.2 summary banner (hidden until load_file)
+        self._banner = QLabel("")
+        self._banner.setWordWrap(True)
+        self._banner.setVisible(False)
+        self._banner.setStyleSheet(
+            f"""
+            QLabel {{
+                color: {p.app_warning};
+                font-size: {FS_SM2}px;
+                font-weight: {FW_MEDIUM};
+                background-color: {p.app_warning_bg};
+                border-radius: {RADIUS_MD}px;
+                padding: {SP_2}px {SP_3}px;
+                border: none;
+            }}
+            """
+        )
+        layout.addWidget(self._banner)
 
         preview_lbl = QLabel(f"Pré-visualização (até {_MAX_PREVIEW_ROWS} linhas)")
         preview_lbl.setStyleSheet(
