@@ -331,10 +331,12 @@ class BaseTablePage(QWidget):
         # zero-results keep the table visible (handled elsewhere).
         self._content_stack = QStackedWidget()
         self._content_stack.addWidget(self._table)
+        # P1-001 (Lote 1): on_create removido — EmptyState não exibe mais o
+        # botão "Criar primeiro registro" enquanto criação inline não for
+        # implementada de verdade. O usuário cria no Notion e sincroniza.
         self._empty_state = EmptyState(
             base_name=self._base,
             on_sync=self.sync_now,
-            on_create=self._on_new,
             dark=self._dark,
             parent=self._content_stack,
         )
@@ -521,37 +523,9 @@ class BaseTablePage(QWidget):
         self._sync_btn.clicked.connect(self.sync_now)
         row.addWidget(self._sync_btn)
 
-        # 8. + Novo button
-        self._new_btn = QPushButton("+ Novo")
-        self._new_btn.setObjectName("BtnPrimary")
-        self._new_btn.setFixedHeight(32)
-        self._new_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._new_btn.setStyleSheet(
-            f"""
-            QPushButton#BtnPrimary {{
-                background-color: {p.app_accent};
-                color: {p.app_accent_fg};
-                font-family: "{FONT_BODY}", "Segoe UI", Arial, sans-serif;
-                font-size: {FS_SM2}px;
-                font-weight: {FW_BOLD};
-                border: none;
-                border-radius: {RADIUS_MD}px;
-                padding: 0 {SP_4}px;
-            }}
-            QPushButton#BtnPrimary:hover {{
-                background-color: {p.app_accent_hover};
-            }}
-            QPushButton#BtnPrimary:pressed {{
-                background-color: {p.navy_dark};
-            }}
-            QPushButton#BtnPrimary:disabled {{
-                background-color: {p.app_border};
-                color: {p.app_fg_subtle};
-            }}
-            """
-        )
-        self._new_btn.clicked.connect(self._on_new)
-        row.addWidget(self._new_btn)
+        # P1-001 (Lote 1): botão "+ Novo" removido do toolbar até existir
+        # implementação real de criação inline. Stub _on_new mantido como
+        # home futuro. Ctrl+N foi desregistrado em DEFAULT_SHORTCUTS.
 
         return toolbar
 
@@ -648,7 +622,7 @@ class BaseTablePage(QWidget):
             ("_filter_btn", _btn_ghost_css),
             ("_cols_btn", _btn_ghost_css),  # Fase 4
             ("_sync_btn", _btn_secondary_css),
-            ("_new_btn", _btn_primary_css),
+            # P1-001 (Lote 1): _new_btn removido do toolbar.
         ):
             w = getattr(self, attr, None)
             if w is not None:
@@ -686,11 +660,11 @@ class BaseTablePage(QWidget):
         # Update the empty-state footer with the latest sync status
         if is_empty and hasattr(self, "_empty_state"):
             self._empty_state.set_last_sync_text(self._format_last_sync_for_empty())
-        # §9.3: gate the search input and "+ Novo" button on having rows
+        # §9.3: gate the search input on having rows.
+        # P1-001 (Lote 1): "+ Novo" foi removido do toolbar; gate específico
+        # também sai daqui.
         if hasattr(self, "_search_edit"):
             self._search_edit.setEnabled(not is_empty)
-        if hasattr(self, "_new_btn"):
-            self._new_btn.setEnabled(not is_empty)
         if hasattr(self, "_filter_btn"):
             self._filter_btn.setEnabled(not is_empty)
         # Fase 4: o picker de colunas faz sentido mesmo sem registros
@@ -879,6 +853,11 @@ class BaseTablePage(QWidget):
         self._save_bar.setVisible(False)
 
     def _on_new(self) -> None:
+        # TODO: Fase futura — criação inline de registros. P1-001 (Lote 1)
+        # removeu todos os entry points (botão "+ Novo" do toolbar, atalho
+        # Ctrl+N do ShortcutRegistry, botão "Criar primeiro registro" do
+        # EmptyState) até existir implementação real. O stub fica como
+        # home reservado.
         pass
 
     def _on_commit_finished(self, base: str, results: list[dict]) -> None:

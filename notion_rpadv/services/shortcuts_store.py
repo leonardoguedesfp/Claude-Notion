@@ -6,7 +6,10 @@ import pathlib
 
 DEFAULT_SHORTCUTS: dict[str, str] = {
     "search": "Ctrl+K",
-    "new_record": "Ctrl+N",
+    # P1-001 (Lote 1): "new_record" (Ctrl+N) removido até existir
+    # implementação real de criação inline. Reintroduzir junto com a
+    # feature, sem rebind de usuários antigos (load_user_shortcuts dropa
+    # entries que não existem mais nos defaults).
     "save": "Ctrl+S",
     "discard": "Escape",
     "refresh": "F5",

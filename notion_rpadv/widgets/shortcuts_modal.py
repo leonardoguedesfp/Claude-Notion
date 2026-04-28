@@ -35,9 +35,9 @@ from notion_rpadv.theme.tokens import (
 )
 
 # Maps action key → human-readable Portuguese label
+# P1-001 (Lote 1): "new_record" removido até existir implementação real.
 _ACTION_LABELS: dict[str, str] = {
     "search":        "Abrir paleta de comandos",
-    "new_record":    "Novo registro",
     "save":          "Salvar alterações",
     "discard":       "Descartar / Fechar",
     "refresh":       "Atualizar dados",
@@ -51,7 +51,6 @@ _ACTION_LABELS: dict[str, str] = {
 # Maps action key → section name (for grouping)
 _ACTION_SECTIONS: dict[str, str] = {
     "search":        "Geral",
-    "new_record":    "Geral",
     "save":          "Geral",
     "discard":       "Geral",
     "refresh":       "Geral",

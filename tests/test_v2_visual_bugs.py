@@ -812,9 +812,10 @@ def test_base_table_page_shows_empty_state_when_cache_empty():
 
     assert page._content_stack.currentWidget() is page._empty_state
     assert isinstance(page._empty_state, EmptyState)
-    # §9.3: search and "+ Novo" must be disabled when EmptyState is visible.
+    # §9.3: search must be disabled when EmptyState is visible.
+    # P1-001 (Lote 1): "+ Novo" foi removido do toolbar — não checamos mais.
     assert page._search_edit.isEnabled() is False
-    assert page._new_btn.isEnabled() is False
+    assert not hasattr(page, "_new_btn")
 
 
 @requires_pyside6
@@ -840,4 +841,5 @@ def test_base_table_page_shows_table_when_cache_has_rows():
 
     assert page._content_stack.currentWidget() is page._table
     assert page._search_edit.isEnabled() is True
-    assert page._new_btn.isEnabled() is True
+    # P1-001 (Lote 1): "+ Novo" foi removido do toolbar.
+    assert not hasattr(page, "_new_btn")

@@ -36,12 +36,23 @@ class ProcessosPage(BaseTablePage):
             parent=parent,
             audit_conn=audit_conn,
         )
+        # P1-002 (Lote 1): instância única do CnjDelegate cacheada e
+        # reaplicada via _install_delegates a cada modelReset.
+        self._cnj_delegate = CnjDelegate(self._table)
         # §3.8: install the CNJ-specific delegate on the CNJ column so rows
         # with a `processo_pai` render the parent CNJ inline (↳ ABOVE own).
-        # Fase 3: schema dinâmico é fonte única; slug do título é
-        # "numero_do_processo" (parser slugifica "Número do processo").
-        # Fase 4: lê cols do model (respeita user prefs em meta_user_columns).
+        self._install_delegates()
+        self._model.modelReset.connect(self._install_delegates)
+
+    def _install_delegates(self) -> None:
+        """P1-002 (Lote 1): re-resolve índice de 'numero_do_processo' a
+        partir do estado atual de ``_cols``. Em Processos o título é
+        sempre o índice 0 (não pode ser ocultado pelo picker), mas o
+        re-bind protege contra reordenações futuras."""
+        col_count = self._table.model().columnCount() if self._table.model() else 0
+        for col_idx in range(col_count):
+            self._table.setItemDelegateForColumn(col_idx, None)
         cols = self._model.cols()
         if "numero_do_processo" in cols:
             cnj_col = cols.index("numero_do_processo")
-            self._table.setItemDelegateForColumn(cnj_col, CnjDelegate(self._table))
+            self._table.setItemDelegateForColumn(cnj_col, self._cnj_delegate)

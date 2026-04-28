@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 
 from notion_bulk_edit.config import NOTION_USERS
 from notion_bulk_edit.schemas import PropSpec, get_prop
+from notion_rpadv.widgets.multi_select_editor import MultiSelectEditor
 
 # Types that cannot be edited via a delegate.
 # BUG-N11: 'people' removed — has a simple combo editor now.
@@ -104,12 +105,11 @@ class PropDelegate(QStyledItemDelegate):
             return combo
 
         if tipo == "multi_select":
-            # Simple comma-separated text editor for multi-select.
-            # A full multi-select widget would be a custom popup; QLineEdit is
-            # sufficient for the current iteration.
-            editor = QLineEdit(parent)
-            editor.setPlaceholderText("Comma-separated values…")
-            return editor
+            # P1-003 (Lote 1): popup customizado com checkboxes do
+            # spec.opcoes. Antes era QLineEdit livre, que aceitava typo do
+            # usuário e silenciosamente criava opção fantasma no schema
+            # do Notion.
+            return MultiSelectEditor(spec, parent)
 
         if tipo == "date":
             de = QDateEdit(parent)
@@ -173,13 +173,17 @@ class PropDelegate(QStyledItemDelegate):
             editor.setCurrentIndex(idx if idx >= 0 else 0)
             return
 
-        if tipo == "multi_select" and isinstance(editor, QLineEdit):
+        if tipo == "multi_select" and isinstance(editor, MultiSelectEditor):
+            # raw é list (cache) ou string CSV (fallback). MultiSelectEditor
+            # aceita lista e descarta itens fora de spec.opcoes.
             if isinstance(raw, list):
-                editor.setText(", ".join(str(v) for v in raw))
-            elif raw is not None:
-                editor.setText(str(raw))
+                editor.set_values([str(v) for v in raw])
+            elif isinstance(raw, str) and raw:
+                editor.set_values(
+                    [v.strip() for v in raw.split(",") if v.strip()],
+                )
             else:
-                editor.setText("")
+                editor.set_values([])
             return
 
         if tipo == "date" and isinstance(editor, QDateEdit):
@@ -229,12 +233,10 @@ class PropDelegate(QStyledItemDelegate):
             model.setData(index, value, Qt.ItemDataRole.EditRole)
             return
 
-        if tipo == "multi_select" and isinstance(editor, QLineEdit):
-            text = editor.text().strip()
-            if text:
-                value = [v.strip() for v in text.split(",") if v.strip()]
-            else:
-                value = []
+        if tipo == "multi_select" and isinstance(editor, MultiSelectEditor):
+            # P1-003 (Lote 1): editor.values() já garante que retorna só
+            # opções válidas em spec.opcoes (sem typo / sem ghost).
+            value = editor.values()
             model.setData(index, value, Qt.ItemDataRole.EditRole)
             return
 
@@ -425,6 +427,11 @@ class SucessorDelegate(QStyledItemDelegate):
         rect = option.rect
 
         painter.save()
+        # P0-001 (Lote 1): clip explícito ao retângulo da célula. Mesmo
+        # anti-pattern do CnjDelegate (super().paint com QModelIndex
+        # inválido + ausência de setClipRect) — proteger contra ghosts
+        # de pintura.
+        painter.setClipRect(option.rect)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         f = QFont(QApplication.font())
         f.setItalic(True)
@@ -512,6 +519,13 @@ class CnjDelegate(QStyledItemDelegate):
         own_cnj = str(index.data(Qt.ItemDataRole.DisplayRole) or "")
         rect = option.rect
         painter.save()
+        # P0-001 (Lote 1): clip explícito ao retângulo da célula. Sem isso,
+        # o ``super().paint(painter, option, QModelIndex())`` (índice
+        # inválido na linha que pinta apenas o background) deixa o painter
+        # em estado de clip indeterminado, e os ``drawText`` abaixo podem
+        # vazar texto sobre células adjacentes em paths de repaint parcial
+        # (scroll). Reportado pelo usuário como ghosts de CNJ flutuando.
+        painter.setClipRect(option.rect)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         # Pull palette tokens for the muted/strong text colours.

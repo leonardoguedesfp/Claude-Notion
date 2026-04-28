@@ -54,9 +54,9 @@ from notion_rpadv.theme.tokens import (
 )
 
 # Human-readable shortcut labels (shared with ShortcutsModal)
+# P1-001 (Lote 1): "new_record" removido até existir implementação real.
 _SHORTCUT_LABELS: dict[str, str] = {
     "search":       "Paleta de comandos",
-    "new_record":   "Novo registro",
     "save":         "Salvar alterações",
     "discard":      "Descartar",
     "refresh":      "Atualizar",
