@@ -123,5 +123,8 @@ USE_DYNAMIC_SCHEMA: bool = True
 # Fase 2a: Catálogo (resolve BUG-OP-08).
 # Fase 2b: Tarefas (resolve STATUS_TAREFA hardcoded — Notion agora tem
 #   campo Status real com opções Pendente/Concluída).
-# Fases 2c/2d adicionam Clientes, Processos. Fase 3 remove granularidade.
-DYNAMIC_BASES: set[str] = {"Catalogo", "Tarefas"}
+# Fase 2c: Clientes (32 props; slugs alinhados — cpf→cpf_cnpj, email→e_mail,
+#   notas→observacoes; cidade vira rich_text; coluna virtual n_processos
+#   é descontinuada).
+# Fase 2d adiciona Processos. Fase 3 remove granularidade.
+DYNAMIC_BASES: set[str] = {"Catalogo", "Tarefas", "Clientes"}
