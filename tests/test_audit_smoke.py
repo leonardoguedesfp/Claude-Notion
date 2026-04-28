@@ -911,6 +911,62 @@ def test_reauthentication_resumes_normal_state() -> None:
 
 
 @requires_pyside6
+def test_A3_base_table_page_reload_preserve_dirty_keeps_edits() -> None:
+    """A3 (sync individual descarta dirty cells): BaseTablePage.reload aceita
+    ``preserve_dirty=True``. Sem isso, ``MainWindow._on_sync_all_done``
+    iterava ``page.reload()`` sem o flag e sync individual via Configurações
+    perdia edições silenciosamente (mesmo bug do Round A em outro caminho).
+    """
+    import sys
+    from unittest.mock import MagicMock
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication(sys.argv)
+
+    from notion_rpadv.cache import db as cache_db
+    from notion_rpadv.pages.processos import ProcessosPage
+
+    conn = _fresh_conn()
+    cache_db.upsert_record(
+        conn, "Processos", "p1",
+        {"page_id": "p1", "cnj": "0001234-56.2023.5.10.0001", "tribunal": "TJDFT"},
+    )
+
+    page = ProcessosPage(conn=conn, token="t", user="u", facade=MagicMock())
+    page._model._dirty[("p1", "cnj")] = "EDITED-CNJ"
+    page._model._dirty_original[("p1", "cnj")] = "0001234-56.2023.5.10.0001"
+
+    # A3 fix: page.reload(preserve_dirty=True) deve manter as dirty cells.
+    page.reload(preserve_dirty=True)
+
+    assert ("p1", "cnj") in page._model._dirty
+    assert page._model._dirty[("p1", "cnj")] == "EDITED-CNJ"
+
+
+def test_A3_base_table_page_reload_default_still_clears_dirty() -> None:
+    """A3: backward-compat — chamadas a reload() sem kwarg continuam
+    limpando _dirty (comportamento original). Importante para callers
+    que explicitamente querem reset."""
+    import sys
+    from unittest.mock import MagicMock
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication(sys.argv)
+
+    from notion_rpadv.cache import db as cache_db
+    from notion_rpadv.pages.processos import ProcessosPage
+
+    conn = _fresh_conn()
+    cache_db.upsert_record(
+        conn, "Processos", "p1",
+        {"page_id": "p1", "cnj": "X", "tribunal": "TJDFT"},
+    )
+    page = ProcessosPage(conn=conn, token="t", user="u", facade=MagicMock())
+    page._model._dirty[("p1", "cnj")] = "EDITED"
+
+    page.reload()  # sem preserve_dirty
+
+    assert ("p1", "cnj") not in page._model._dirty
+
+
 def test_AUD_07_partial_save_failure_keeps_dirty_visible() -> None:
     """BUG-OP-03 (corrigido em Round B): cells que falharam continuam dirty;
     cells que tiveram sucesso são limpas individualmente. O dirty bar

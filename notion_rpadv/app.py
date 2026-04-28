@@ -615,9 +615,18 @@ class MainWindow(QMainWindow):
         self._push_toast("Sincronização concluída.", "success")
 
         # BUG-EXEC-03: refresh all pages — each page reloads its own model
+        # A3: preserve dirty cells across the post-sync reload. Without isto,
+        # sync individual via Configurações também passa por aqui (porque
+        # SyncManager emite all_done quando _pending fica vazio, mesmo após
+        # um único sync_base) e descarta edições não-salvas — exatamente o
+        # mesmo bug que Round A consertou em _on_base_done.
         for page in self._pages.values():
             if hasattr(page, "reload"):
-                page.reload()  # type: ignore[union-attr]
+                try:
+                    page.reload(preserve_dirty=True)  # type: ignore[call-arg]
+                except TypeError:
+                    # Páginas com reload() sem kwarg (legacy) — fallback.
+                    page.reload()  # type: ignore[union-attr]
             elif hasattr(page, "refresh"):
                 page.refresh()  # type: ignore[union-attr]
 
@@ -789,7 +798,11 @@ class MainWindow(QMainWindow):
     def _refresh_current_page(self) -> None:
         current = self._stack.currentWidget()
         if hasattr(current, "reload"):
-            current.reload()  # type: ignore[union-attr]
+            # A3: refresh manual (Ctrl+R) também preserva dirty.
+            try:
+                current.reload(preserve_dirty=True)  # type: ignore[call-arg]
+            except TypeError:
+                current.reload()  # type: ignore[union-attr]
         elif hasattr(current, "refresh"):
             current.refresh()  # type: ignore[union-attr]
 
