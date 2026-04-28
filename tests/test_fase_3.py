@@ -204,3 +204,104 @@ def test_FASE3_app_boot_calls_boot_refresh_all_unconditional() -> None:
     # boot_refresh_all ainda lá
     assert "boot_refresh_all(" in src
     assert "init_schema_registry(self._audit_conn)" in src
+
+
+# --- Hotfix de performance: cache em schema_for_base ---
+
+
+def test_FASE3_PERF_schema_for_base_caches_result() -> None:
+    """Layer 1 do hotfix: schema_for_base devolve a mesma instância
+    em chamadas repetidas para a mesma base. Evita reconstruir ~37
+    PropSpecs por chamada (4.65M chamadas em 102s antes do hotfix)."""
+    from notion_bulk_edit.schema_registry import get_schema_registry
+    reg = get_schema_registry()
+    a = reg.schema_for_base("Processos")
+    b = reg.schema_for_base("Processos")
+    assert a is b, "schema_for_base não está cacheando"
+    # PropSpecs também são as mesmas instâncias (cache cobre o dict inteiro).
+    assert a["tribunal"] is b["tribunal"]
+
+
+def test_FASE3_PERF_get_prop_uses_cached_schema() -> None:
+    """get_prop foi refatorado para passar por schema_for_base (cacheado),
+    em vez de chamar _dict_to_propspec direto."""
+    from notion_bulk_edit.schema_registry import get_schema_registry
+    reg = get_schema_registry()
+    a = reg.get_prop("Processos", "tribunal")
+    b = reg.get_prop("Processos", "tribunal")
+    assert a is b, "get_prop não está reusando o PropSpec do cache"
+
+
+def test_FASE3_PERF_cache_invalidates_on_load_all_from_cache() -> None:
+    """load_all_from_cache invalida o cache de PropSpecs (raw schemas
+    podem ter mudado no disco)."""
+    from notion_bulk_edit.schema_registry import get_schema_registry
+    reg = get_schema_registry()
+    a = reg.schema_for_base("Catalogo")
+    reg.load_all_from_cache()
+    b = reg.schema_for_base("Catalogo")
+    assert a is not b, "cache não foi invalidado após load_all_from_cache"
+
+
+def test_FASE3_PERF_cache_invalidates_on_refresh_from_api() -> None:
+    """refresh_from_api invalida o cache APENAS da base afetada
+    (não toca cache das outras 3)."""
+    from unittest.mock import MagicMock
+    import json
+    from notion_bulk_edit.schema_parser import parse_to_schema_json
+    from notion_bulk_edit.schema_registry import get_schema_registry
+
+    reg = get_schema_registry()
+    cat_a = reg.schema_for_base("Catalogo")
+    proc_a = reg.schema_for_base("Processos")
+
+    # Mock client: refresh_from_api de Catálogo recebe a fixture já presente
+    raw_cat = json.loads(
+        (
+            _REPO_ROOT / "tests" / "fixtures" / "schemas" / "catalogo_raw.json"
+        ).read_text(encoding="utf-8"),
+    )
+    parsed_cat = parse_to_schema_json(raw_cat, "Catalogo")
+    mock_client = MagicMock()
+    mock_client.get_data_source.return_value = raw_cat
+    reg.refresh_from_api("Catalogo", parsed_cat["data_source_id"], mock_client)
+
+    # Catálogo invalidado — nova instância
+    cat_b = reg.schema_for_base("Catalogo")
+    assert cat_a is not cat_b, "Catálogo deveria ser invalidado pelo refresh"
+    # Processos NÃO foi tocado — mesma instância
+    proc_b = reg.schema_for_base("Processos")
+    assert proc_a is proc_b, "Processos não deveria ser invalidado"
+
+
+def test_FASE3_PERF_dict_to_propspec_called_once_per_base() -> None:
+    """Sanity: _dict_to_propspec é chamado N vezes por base × 1 build,
+    não por acesso. Conta chamadas via spy."""
+    from unittest.mock import patch
+    from notion_bulk_edit.schema_registry import get_schema_registry
+    import notion_bulk_edit.schema_registry as sr
+
+    # Resetar cache para forçar rebuild
+    reg = get_schema_registry()
+    reg._propspec_cache.clear()
+
+    spy_calls = []
+    original = sr._dict_to_propspec
+
+    def counting_spec(d):
+        spy_calls.append(1)
+        return original(d)
+
+    with patch("notion_bulk_edit.schema_registry._dict_to_propspec",
+               side_effect=counting_spec):
+        # Primeira chamada: constrói tudo (37 props para Processos).
+        s = reg.schema_for_base("Processos")
+        first_count = len(spy_calls)
+        # 100 chamadas subsequentes: zero rebuilds (cache hit).
+        for _ in range(100):
+            s2 = reg.schema_for_base("Processos")
+            assert s2 is s
+        assert len(spy_calls) == first_count, (
+            f"esperado {first_count} chamadas; obtido {len(spy_calls)} — "
+            "cache não está funcionando"
+        )

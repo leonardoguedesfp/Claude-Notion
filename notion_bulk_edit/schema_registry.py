@@ -77,6 +77,14 @@ class SchemaRegistry:
         self._schemas: dict[str, dict[str, Any]] = {}
         # base_label -> data_source_id (para refresh sem precisar do dict externo)
         self._base_to_dsid: dict[str, str] = {}
+        # Hotfix Fase 3 — performance: cache de PropSpecs construídos por
+        # schema_for_base. Sem isso, chamadas no hot path (paint, data,
+        # flags em QTableView) reconstroem ~37 PropSpecs por chamada,
+        # multiplicando milhões de vezes ao longo de uma sessão (profile
+        # mostrou 4.65M de _dict_to_propspec em 102s de uso real).
+        # Invalidado em load_all_from_cache (clear) e refresh_from_api (pop
+        # da base afetada).
+        self._propspec_cache: dict[str, dict[str, PropSpec]] = {}
         self._loaded = False
 
     # ------------------------------------------------------------------
@@ -92,6 +100,8 @@ class SchemaRegistry:
         rows = cache_db.get_all_cached_schemas(self._audit_conn)
         self._schemas.clear()
         self._base_to_dsid.clear()
+        # Hotfix Fase 3 — perf: invalida cache de PropSpecs (raw dicts mudaram).
+        self._propspec_cache.clear()
         for row in rows:
             try:
                 parsed = json.loads(row["schema_json"])
@@ -156,6 +166,9 @@ class SchemaRegistry:
         )
         self._schemas[base_label] = parsed
         self._base_to_dsid[base_label] = data_source_id
+        # Hotfix Fase 3 — perf: invalida apenas a base afetada (outras
+        # mantêm seus PropSpecs cacheados sem rebuild desnecessário).
+        self._propspec_cache.pop(base_label, None)
 
         return ChangeReport(
             kind=kind, base=base_label,
@@ -171,24 +184,33 @@ class SchemaRegistry:
         return list(self._schemas.keys())
 
     def schema_for_base(self, base: str) -> dict[str, PropSpec]:
-        """Dict {key: PropSpec} para uma base. {} se base desconhecida."""
+        """Dict {key: PropSpec} para uma base. {} se base desconhecida.
+
+        Hotfix Fase 3 — perf: consulta self._propspec_cache primeiro.
+        Sem cache, hot paths em QTableView (paint, data, flags) chamavam
+        este método ~132k vezes em 102s de uso real, reconstruindo ~37
+        PropSpecs por chamada (4.65M no total).
+        """
+        cached = self._propspec_cache.get(base)
+        if cached is not None:
+            return cached
         parsed = self._schemas.get(base)
         if parsed is None:
             return {}
-        return {
+        result = {
             key: _dict_to_propspec(prop_dict)
             for key, prop_dict in parsed.get("properties", {}).items()
         }
+        self._propspec_cache[base] = result
+        return result
 
     def get_prop(self, base: str, key: str) -> PropSpec | None:
-        """Lookup por base + key. None se base ou key não existe."""
-        parsed = self._schemas.get(base)
-        if parsed is None:
-            return None
-        prop_dict = parsed.get("properties", {}).get(key)
-        if prop_dict is None:
-            return None
-        return _dict_to_propspec(prop_dict)
+        """Lookup por base + key. None se base ou key não existe.
+
+        Hotfix Fase 3 — perf: passa por schema_for_base que é cacheado,
+        em vez de reconstruir o PropSpec a cada chamada.
+        """
+        return self.schema_for_base(base).get(key)
 
     def is_nao_editavel(self, base: str, key: str) -> bool:
         """True quando o app NÃO deve permitir edição inline da célula.
