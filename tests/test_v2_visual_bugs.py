@@ -38,10 +38,12 @@ def _make_cache() -> sqlite3.Connection:
 
 @requires_pyside6
 def test_looks_like_template_row_detects_orange_square():
-    """BUG-V2-04: '🟧 Modelo — usar como template' is recognised as a template."""
+    """BUG-V2-04: '🟧 Modelo — usar como template' is recognised as a template.
+    Fase 3: assinatura voltou a (record, title_key) após cleanup do
+    defensive lookup."""
     from notion_rpadv.models.base_table_model import _looks_like_template_row
     assert _looks_like_template_row(
-        {"nome": "🟧 Modelo — usar como template"}, "nome"
+        {"nome": "🟧 Modelo — usar como template"}, "nome",
     ) is True
 
 
@@ -68,7 +70,10 @@ def test_looks_like_template_row_passes_real_data():
 @requires_pyside6
 def test_processos_table_excludes_template_row():
     """BUG-V2-04: the model filters out template rows on reload, so the table
-    only ever shows real records."""
+    only ever shows real records.
+
+    Fase 3: slug do título é 'numero_do_processo' (parser da Fase 0).
+    """
     from PySide6.QtWidgets import QApplication
     import sys
     QApplication.instance() or QApplication(sys.argv)
@@ -78,13 +83,12 @@ def test_processos_table_excludes_template_row():
 
     conn = _make_cache()
     cache_db.upsert_record(
-        conn, "Processos", "real-1", {"page_id": "real-1", "cnj": "0001234-12.2024.8.13.0024"}
+        conn, "Processos", "real-1",
+        {"page_id": "real-1", "numero_do_processo": "0001234-12.2024.8.13.0024"},
     )
     cache_db.upsert_record(
-        conn,
-        "Processos",
-        "tpl-1",
-        {"page_id": "tpl-1", "cnj": "🟧 Modelo — usar como template"},
+        conn, "Processos", "tpl-1",
+        {"page_id": "tpl-1", "numero_do_processo": "🟧 Modelo — usar como template"},
     )
 
     model = BaseTableModel("Processos", conn)
@@ -627,9 +631,19 @@ def test_relation_double_click_emits_navigation_signal():
     cache_db.upsert_record(
         conn, "Clientes", cliente_id, {"page_id": cliente_id, "nome": "Acme"}
     )
+    # Fase 2d: slug do título virou 'numero_do_processo'; relation virou 'clientes'
+    # (plural). Mantemos campo legado 'cliente' apenas se um teste rodar antes
+    # populando o registry — em isolamento, fallback ao _LEGACY_SCHEMAS exibiria
+    # 'cliente' singular. Populamos ambas as chaves para robustez.
     cache_db.upsert_record(
         conn, "Processos", "p-1",
-        {"page_id": "p-1", "cnj": "0001234", "cliente": [cliente_id]},
+        {
+            "page_id": "p-1",
+            "numero_do_processo": "0001234",
+            "cnj": "0001234",
+            "clientes": [cliente_id],
+            "cliente": [cliente_id],
+        },
     )
 
     facade = NotionFacade("dummy", conn)
@@ -638,10 +652,11 @@ def test_relation_double_click_emits_navigation_signal():
     received: list[tuple[str, str]] = []
     page.relation_clicked.connect(lambda b, p: received.append((b, p)))
 
-    # Locate the "cliente" column index in the source model.
+    # Locate the relation column index. Fase 2d: 'clientes' (plural) é o
+    # slug dinâmico; 'cliente' (singular) era o legado.
     from notion_bulk_edit.schemas import colunas_visiveis
     cols = colunas_visiveis("Processos")
-    cliente_col = cols.index("cliente")
+    cliente_col = cols.index("clientes" if "clientes" in cols else "cliente")
     src_idx = page._model.index(0, cliente_col)
     proxy_idx = page._proxy.mapFromSource(src_idx)
     page._on_table_double_clicked(proxy_idx)

@@ -148,34 +148,26 @@ class MainWindow(QMainWindow):
             # status bar isn't built yet.
             pass
 
-        # Fase 1 — schema dinâmico: inicializa o singleton SchemaRegistry
-        # (custo ínfimo; só lê meta_schemas em audit.db). Refresh real via
-        # API só acontece quando USE_DYNAMIC_SCHEMA está ativo.
-        # Fase 2a: refresh apenas das bases em DYNAMIC_BASES — economiza ~3
-        # chamadas API no boot até as Fases 2b/c/d migrarem as outras 3.
-        from notion_bulk_edit import config as bulk_config
+        # Fase 3 — schema dinâmico: inicializa o singleton SchemaRegistry
+        # e faz refresh das 4 bases via API (USE_DYNAMIC_SCHEMA/DYNAMIC_BASES
+        # foram removidas; sempre on). Refresh é tolerante a erro: se a API
+        # estiver fora ou o token inválido, o app continua usando os schemas
+        # cacheados em audit.db.meta_schemas.
         from notion_bulk_edit.schema_registry import (
             boot_refresh_all,
             init_schema_registry,
         )
         self._schema_registry = init_schema_registry(self._audit_conn)
-        if bulk_config.USE_DYNAMIC_SCHEMA:
-            data_sources_to_refresh = {
-                base: dsid
-                for base, dsid in DATA_SOURCES.items()
-                if base in bulk_config.DYNAMIC_BASES
-            }
-            if data_sources_to_refresh:
-                try:
-                    from notion_bulk_edit.notion_api import NotionClient
-                    boot_refresh_all(
-                        NotionClient(self._token),
-                        self._schema_registry,
-                        data_sources_to_refresh,
-                    )
-                except Exception:  # noqa: BLE001
-                    # Erro de boot não crasha o app; cache existente continua valendo.
-                    pass
+        try:
+            from notion_bulk_edit.notion_api import NotionClient
+            boot_refresh_all(
+                NotionClient(self._token),
+                self._schema_registry,
+                DATA_SOURCES,
+            )
+        except Exception:  # noqa: BLE001
+            # Erro de boot não crasha o app; cache existente continua valendo.
+            pass
 
         # Services
         self._facade = NotionFacade(
@@ -615,9 +607,18 @@ class MainWindow(QMainWindow):
         self._push_toast("Sincronização concluída.", "success")
 
         # BUG-EXEC-03: refresh all pages — each page reloads its own model
+        # A3: preserve dirty cells across the post-sync reload. Without isto,
+        # sync individual via Configurações também passa por aqui (porque
+        # SyncManager emite all_done quando _pending fica vazio, mesmo após
+        # um único sync_base) e descarta edições não-salvas — exatamente o
+        # mesmo bug que Round A consertou em _on_base_done.
         for page in self._pages.values():
             if hasattr(page, "reload"):
-                page.reload()  # type: ignore[union-attr]
+                try:
+                    page.reload(preserve_dirty=True)  # type: ignore[call-arg]
+                except TypeError:
+                    # Páginas com reload() sem kwarg (legacy) — fallback.
+                    page.reload()  # type: ignore[union-attr]
             elif hasattr(page, "refresh"):
                 page.refresh()  # type: ignore[union-attr]
 
@@ -721,7 +722,11 @@ class MainWindow(QMainWindow):
         """BUG-OP-03: render `<record title> (<field label>)` for up to
         *max_items* failures so the toast points the user at the rows that
         need attention. Falls back to page_id / raw key when the title or
-        schema label is missing."""
+        schema label is missing.
+
+        Fase 3: defensive _title_value_for_record removido — schema dinâmico
+        é fonte única e cache convergiu para slugs do registry.
+        """
         # Lazy imports to keep app.py startup light.
         from notion_bulk_edit.schemas import get_prop
         from notion_rpadv.cache import db as cache_db
@@ -789,7 +794,11 @@ class MainWindow(QMainWindow):
     def _refresh_current_page(self) -> None:
         current = self._stack.currentWidget()
         if hasattr(current, "reload"):
-            current.reload()  # type: ignore[union-attr]
+            # A3: refresh manual (Ctrl+R) também preserva dirty.
+            try:
+                current.reload(preserve_dirty=True)  # type: ignore[call-arg]
+            except TypeError:
+                current.reload()  # type: ignore[union-attr]
         elif hasattr(current, "refresh"):
             current.refresh()  # type: ignore[union-attr]
 

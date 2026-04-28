@@ -12,7 +12,7 @@
     "object": "user",
     "id": "22fd872b-594c-81bf-847e-000262ec6682"
   },
-  "last_edited_time": "2026-04-18T22:31:00.000Z",
+  "last_edited_time": "2026-04-28T04:32:00.000Z",
   "title": [
     {
       "type": "text",
@@ -129,6 +129,28 @@
         "function": "show_original"
       }
     },
+    "Status": {
+      "id": "a%3A%3Bk",
+      "name": "Status",
+      "description": null,
+      "type": "select",
+      "select": {
+        "options": [
+          {
+            "id": "eb8fc277-2733-4762-a2c6-577653d23f69",
+            "name": "Pendente",
+            "color": "blue",
+            "description": null
+          },
+          {
+            "id": "cf27be3a-5003-46e6-b3f2-8d0aa3143c19",
+            "name": "Concluída",
+            "color": "yellow",
+            "description": null
+          }
+        ]
+      }
+    },
     "Revisor 2": {
       "id": "c%5Eg%3F",
       "name": "Revisor 2",
@@ -227,5 +249,5 @@
   "public_url": null,
   "in_trash": false,
   "archived": false,
-  "request_id": "d17f65a5-27b9-42cb-a958-6974b9e18b9e"
+  "request_id": "289787ae-fbb8-4a0f-8b20-2a005bbbb484"
 }

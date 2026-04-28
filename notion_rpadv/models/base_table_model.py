@@ -12,15 +12,15 @@ from notion_bulk_edit.schemas import PropSpec, colunas_visiveis, get_prop, is_na
 from notion_rpadv.cache import db as cache_db
 from notion_rpadv.theme.tokens import LIGHT
 
-# BUG-V3: title key used when resolving relation page_ids to display names
-# Fase 2a: Catalogo virou schema dinâmico — slug do title é "nome"
-# (parser slugifica "Nome" → "nome"), não mais o "titulo" do _LEGACY_SCHEMAS.
-# Outras 3 bases continuam com slugs do legado até suas respectivas Fases 2b/c/d.
+# BUG-V3: title key used when resolving relation page_ids to display names.
+# Fase 3: defensive fallbacks legados (_LEGACY_TITLE_KEYS_BY_BASE,
+# _title_value_for_record) removidos — cache convergiu para slugs do schema
+# dinâmico (verificado via cache.db.records antes da Fase 3).
 _TITLE_KEY_BY_BASE: dict[str, str] = {
     "Clientes": "nome",
-    "Processos": "cnj",
-    "Tarefas": "titulo",
-    "Catalogo": "nome",  # Fase 2a — slug do schema dinâmico
+    "Processos": "numero_do_processo",  # parser slugifica "Número do processo"
+    "Tarefas": "tarefa",                # parser slugifica "Tarefa"
+    "Catalogo": "nome",                 # parser slugifica "Nome"
 }
 
 # BUG-V2-04: title fragments that mark a Notion "template" row that must
@@ -35,8 +35,12 @@ _TEMPLATE_TITLE_FRAGMENTS: tuple[str, ...] = (
 
 
 def _looks_like_template_row(record: dict, title_key: str) -> bool:
-    """BUG-V2-04: detect rows whose title matches the "Modelo — usar como template"
-    convention. The check is case-insensitive and tolerant to em/en-dash variants."""
+    """BUG-V2-04: detect rows whose title matches the "Modelo — usar como
+    template" convention. Case-insensitive, tolerant to em/en-dash variants.
+
+    Fase 3: assinatura revertida para (record, title_key) — defensive
+    fallback legado removido após cache convergir.
+    """
     title = record.get(title_key)
     if not isinstance(title, str) or not title:
         return False

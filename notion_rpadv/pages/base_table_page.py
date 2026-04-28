@@ -539,9 +539,17 @@ class BaseTablePage(QWidget):
     # Public API
     # ------------------------------------------------------------------
 
-    def reload(self) -> None:
-        """Reload data from cache."""
-        self._model.reload()
+    def reload(self, preserve_dirty: bool = False) -> None:
+        """Reload data from cache.
+
+        A3: ``preserve_dirty=True`` propaga o flag para o model.reload, que
+        snapshota e restaura `_dirty` em torno do reset (igual ao que o
+        Round A já fazia em ``_on_base_done``). Usado por chamadas externas
+        que disparam reload no fim de um sync (``_on_sync_all_done``) ou
+        em refresh manual (``_refresh_current_page``) para que edições
+        não-salvas sobrevivam.
+        """
+        self._model.reload(preserve_dirty=preserve_dirty)
 
     def apply_theme(self, dark: bool) -> None:
         """N5: rebuild palette-derived inline styles after a theme toggle.

@@ -1139,11 +1139,19 @@ class DashboardPage(QWidget):
         for i, row in enumerate(self._urgent_rows):
             if i < len(capped):
                 days, record = capped[i]
+                # Fase 3: fallbacks legados removidos — slugs dinâmicos são
+                # fonte única após convergência do cache. Lê primeiro o slug
+                # de Tarefas (caminho mais comum aqui), depois Processos.
                 title = str(
-                    record.get("titulo", record.get("title", record.get("cnj", "")))
-                    or ""
+                    record.get("tarefa")             # Tarefas
+                    or record.get("numero_do_processo")  # Processos
+                    or "",
                 )
-                processo = str(record.get("processo", record.get("cnj", "")) or "")
+                processo = str(
+                    record.get("processo")            # Tarefas → relation com Processo
+                    or record.get("numero_do_processo")  # Processos direto
+                    or "",
+                )
                 row.update_row(title, processo, days)
                 row.setVisible(True)
             else:

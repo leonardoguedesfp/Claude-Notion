@@ -123,16 +123,22 @@ def test_AUD_01_no_placeholder_garbage() -> None:
 
 @requires_cache
 def test_AUD_01_n_processos_lookup_matches_join() -> None:
-    """Contagem de processos por cliente computada localmente bate com COUNT JOIN."""
+    """Contagem de processos por cliente computada localmente bate com COUNT JOIN.
+
+    Fase 2d: o slug da relation virou 'clientes' (plural — slugify de
+    'Clientes'). Mantemos fallback 'cliente' singular para compat com
+    cache pré-Fase 2d.
+    """
     conn = _readonly(_REAL_CACHE)
     actual: dict[str, int] = {}
     for r in conn.execute("SELECT data_json FROM records WHERE base='Processos'"):
         d = json.loads(r["data_json"])
-        for cid in (d.get("cliente") or []):
+        # Fase 2d: 'clientes' é o slug atual; 'cliente' era o legado.
+        rel = d.get("clientes") or d.get("cliente") or []
+        for cid in rel:
             actual[cid] = actual.get(cid, 0) + 1
-    # the cached n_processos rollup is None for every cliente — fallback
-    # in BaseTableModel computes the count at render time. Sanity-check:
-    # at least one client has >0 processes.
+    # Fase 2c: a coluna virtual n_processos foi descontinuada, mas o
+    # cache continua tendo a relation; ao menos um cliente tem ≥1 processo.
     assert sum(actual.values()) > 0
     assert max(actual.values()) > 1  # at least one client with multiple processos
 
@@ -284,15 +290,17 @@ def test_save_partial_failure_keeps_pending_for_failed_only() -> None:
     from notion_bulk_edit.notion_api import NotionAPIError
 
     conn = _fresh_conn()
+    # Fase 3: slug do título é 'numero_do_processo' (era 'cnj' no legado).
     cache_db.upsert_record(conn, "Processos", "p1", {
-        "page_id": "p1", "cnj": "X", "tribunal": "TJDFT", "fase": "Cognitiva",
+        "page_id": "p1", "numero_do_processo": "X",
+        "tribunal": "TJDFT", "fase": "Cognitiva",
     })
-    id_a = cache_db.add_pending_edit(conn, "Processos", "p1", "cnj", "X", "Y")
+    id_a = cache_db.add_pending_edit(conn, "Processos", "p1", "numero_do_processo", "X", "Y")
     id_b = cache_db.add_pending_edit(conn, "Processos", "p1", "tribunal", "TJDFT", "TRT/10")
     id_c = cache_db.add_pending_edit(conn, "Processos", "p1", "fase", "Cognitiva", "Executiva")
 
     edits = [
-        {"id": id_a, "base": "Processos", "page_id": "p1", "key": "cnj",
+        {"id": id_a, "base": "Processos", "page_id": "p1", "key": "numero_do_processo",
          "old_value": "X", "new_value": "Y"},
         {"id": id_b, "base": "Processos", "page_id": "p1", "key": "tribunal",
          "old_value": "TJDFT", "new_value": "TRT/10"},
@@ -318,7 +326,7 @@ def test_save_partial_failure_keeps_pending_for_failed_only() -> None:
     log = cache_db.get_edit_log(conn, limit=10)
     pending = cache_db.get_pending_edits(conn)
     assert len(log) == 2
-    assert {e["key"] for e in log} == {"cnj", "fase"}
+    assert {e["key"] for e in log} == {"numero_do_processo", "fase"}
     assert len(pending) == 1
     assert pending[0]["key"] == "tribunal"
 
@@ -414,10 +422,11 @@ def test_AUD_04_sync_diff_updates_existing() -> None:
     from notion_rpadv.cache import db as cache_db
 
     conn = _fresh_conn()
+    # Fase 3: slug do título é 'numero_do_processo' (era 'cnj' no legado).
     cache_db.upsert_record(conn, "Processos", "p1",
-                           {"page_id": "p1", "cnj": "OLD"})
+                           {"page_id": "p1", "numero_do_processo": "OLD"})
     cache_db.upsert_record(conn, "Processos", "p_gone",
-                           {"page_id": "p_gone", "cnj": "DEAD"})
+                           {"page_id": "p_gone", "numero_do_processo": "DEAD"})
 
     api_pages = [
         {"id": "p1", "properties": {
@@ -442,8 +451,8 @@ def test_AUD_04_sync_diff_updates_existing() -> None:
 
     rows = {r["page_id"]: r for r in cache_db.get_all_records(conn, "Processos")}
     assert "p_gone" not in rows
-    assert rows["p1"]["cnj"] == "NEW"
-    assert rows["p_new"]["cnj"] == "FRESH"
+    assert rows["p1"]["numero_do_processo"] == "NEW"
+    assert rows["p_new"]["numero_do_processo"] == "FRESH"
 
 
 # ---------------------------------------------------------------------------
@@ -465,9 +474,11 @@ def test_AUD_06_search_matches_both_iso_and_br_dates() -> None:
     from notion_rpadv.models.filters import TableFilterProxy
 
     conn = _fresh_conn()
+    # Fase 3: slugs dinâmicos — title é 'numero_do_processo', distribuição
+    # é 'data_de_distribuicao'.
     cache_db.upsert_record(conn, "Processos", "p1",
-                           {"page_id": "p1", "cnj": "0000001-00",
-                            "distribuicao": "2025-03-20"})
+                           {"page_id": "p1", "numero_do_processo": "0000001-00",
+                            "data_de_distribuicao": "2025-03-20"})
 
     model = BaseTableModel("Processos", conn)
     proxy = TableFilterProxy()
@@ -629,8 +640,9 @@ def test_commit_worker_returns_per_cell_results() -> None:
     from notion_bulk_edit.notion_api import NotionAPIError
 
     conn = _fresh_conn()
+    # Fase 3: slug do título é 'numero_do_processo'.
     edits = [
-        {"id": 1, "base": "Processos", "page_id": "p1", "key": "cnj",
+        {"id": 1, "base": "Processos", "page_id": "p1", "key": "numero_do_processo",
          "old_value": "X", "new_value": "Y"},
         {"id": 2, "base": "Processos", "page_id": "p1", "key": "tribunal",
          "old_value": "TJDFT", "new_value": "TRT/10"},
@@ -660,7 +672,9 @@ def test_commit_worker_returns_per_cell_results() -> None:
     assert base == "Processos"
     assert len(results) == 3
     keys = [(r["page_id"], r["key"]) for r in results]
-    assert keys == [("p1", "cnj"), ("p1", "tribunal"), ("p2", "fase")]
+    assert keys == [
+        ("p1", "numero_do_processo"), ("p1", "tribunal"), ("p2", "fase"),
+    ]
     assert [r["ok"] for r in results] == [True, False, True]
     assert results[1]["error"]  # failure carries an error message
     assert results[0]["error"] is None
@@ -738,13 +752,14 @@ def test_toast_message_lists_failed_cells_by_record_name() -> None:
     from notion_rpadv.cache import db as cache_db
     from notion_rpadv.app import MainWindow
 
-    # Build the cache that the toast formatter looks at
+    # Build the cache that the toast formatter looks at.
+    # Fase 3: title slug é 'numero_do_processo' (era 'cnj' no legado).
     conn = _fresh_conn()
     cache_db.upsert_record(conn, "Processos", "p-maria", {
-        "page_id": "p-maria", "cnj": "0001-Maria Silva",
+        "page_id": "p-maria", "numero_do_processo": "0001-Maria Silva",
     })
     cache_db.upsert_record(conn, "Processos", "p-pedro", {
-        "page_id": "p-pedro", "cnj": "0002-Pedro Costa",
+        "page_id": "p-pedro", "numero_do_processo": "0002-Pedro Costa",
     })
 
     # Avoid the heavy MainWindow.__init__ — we only need the formatter.
@@ -911,6 +926,62 @@ def test_reauthentication_resumes_normal_state() -> None:
 
 
 @requires_pyside6
+def test_A3_base_table_page_reload_preserve_dirty_keeps_edits() -> None:
+    """A3 (sync individual descarta dirty cells): BaseTablePage.reload aceita
+    ``preserve_dirty=True``. Sem isso, ``MainWindow._on_sync_all_done``
+    iterava ``page.reload()`` sem o flag e sync individual via Configurações
+    perdia edições silenciosamente (mesmo bug do Round A em outro caminho).
+    """
+    import sys
+    from unittest.mock import MagicMock
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication(sys.argv)
+
+    from notion_rpadv.cache import db as cache_db
+    from notion_rpadv.pages.processos import ProcessosPage
+
+    conn = _fresh_conn()
+    cache_db.upsert_record(
+        conn, "Processos", "p1",
+        {"page_id": "p1", "cnj": "0001234-56.2023.5.10.0001", "tribunal": "TJDFT"},
+    )
+
+    page = ProcessosPage(conn=conn, token="t", user="u", facade=MagicMock())
+    page._model._dirty[("p1", "cnj")] = "EDITED-CNJ"
+    page._model._dirty_original[("p1", "cnj")] = "0001234-56.2023.5.10.0001"
+
+    # A3 fix: page.reload(preserve_dirty=True) deve manter as dirty cells.
+    page.reload(preserve_dirty=True)
+
+    assert ("p1", "cnj") in page._model._dirty
+    assert page._model._dirty[("p1", "cnj")] == "EDITED-CNJ"
+
+
+def test_A3_base_table_page_reload_default_still_clears_dirty() -> None:
+    """A3: backward-compat — chamadas a reload() sem kwarg continuam
+    limpando _dirty (comportamento original). Importante para callers
+    que explicitamente querem reset."""
+    import sys
+    from unittest.mock import MagicMock
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication(sys.argv)
+
+    from notion_rpadv.cache import db as cache_db
+    from notion_rpadv.pages.processos import ProcessosPage
+
+    conn = _fresh_conn()
+    cache_db.upsert_record(
+        conn, "Processos", "p1",
+        {"page_id": "p1", "cnj": "X", "tribunal": "TJDFT"},
+    )
+    page = ProcessosPage(conn=conn, token="t", user="u", facade=MagicMock())
+    page._model._dirty[("p1", "cnj")] = "EDITED"
+
+    page.reload()  # sem preserve_dirty
+
+    assert ("p1", "cnj") not in page._model._dirty
+
+
 def test_AUD_07_partial_save_failure_keeps_dirty_visible() -> None:
     """BUG-OP-03 (corrigido em Round B): cells que falharam continuam dirty;
     cells que tiveram sucesso são limpas individualmente. O dirty bar
@@ -1273,7 +1344,14 @@ def test_clear_cache_does_not_affect_audit() -> None:
 def _proxy_with_processo(distribuicao: str | None = None,
                          valor_causa: float | None = None) -> Any:
     """Helper: build a proxy + model with a single Processos row carrying
-    the date / number under test."""
+    the date / number under test.
+
+    Fase 3:
+    - 'cnj' → 'numero_do_processo' (slug do título no schema dinâmico)
+    - 'distribuicao' → 'data_de_distribuicao' (slug da data)
+    - 'valor_causa' (REMOVIDO no Notion) → 'id_legal_one' (number existente)
+    O parâmetro mantém o nome ``valor_causa`` por compat de assinatura.
+    """
     import sys
     from PySide6.QtWidgets import QApplication
     QApplication.instance() or QApplication(sys.argv)
@@ -1282,11 +1360,14 @@ def _proxy_with_processo(distribuicao: str | None = None,
     from notion_rpadv.models.filters import TableFilterProxy
 
     conn = _fresh_conn()
-    record: dict = {"page_id": "p1", "cnj": "0000001-00.0000.0.00.0000"}
+    record: dict = {"page_id": "p1",
+                    "numero_do_processo": "0000001-00.0000.0.00.0000"}
     if distribuicao is not None:
-        record["distribuicao"] = distribuicao
+        record["data_de_distribuicao"] = distribuicao
     if valor_causa is not None:
-        record["valor_causa"] = valor_causa
+        # 'id_legal_one' é o número genérico que substitui valor_causa
+        # (este é editável e armazena float).
+        record["id_legal_one"] = valor_causa
     cache_db.upsert_record(conn, "Processos", "p1", record)
 
     model = BaseTableModel("Processos", conn)
@@ -1328,6 +1409,12 @@ def test_search_matches_either_role_for_dates() -> None:
 
 
 @requires_pyside6
+@pytest.mark.skip(
+    reason="Fase 2d: valor_causa foi dropado do Notion. Helper substitui "
+    "por id_legal_one (number sem formato BRL); o vocabulário de número "
+    "formatado em moeda não existe mais no schema. Teste preservado para "
+    "histórico — re-habilitar se um número BRL voltar ao schema."
+)
 def test_search_matches_plain_number_in_edit_role() -> None:
     """`78500` (no thousands sep) matches a cell whose canonical value
     is the float 78500.0 even though DisplayRole shows `R$ 78.500,00`."""
@@ -1337,6 +1424,9 @@ def test_search_matches_plain_number_in_edit_role() -> None:
 
 
 @requires_pyside6
+@pytest.mark.skip(
+    reason="Fase 2d: valor_causa removido; ver test acima."
+)
 def test_search_matches_formatted_currency_in_display_role() -> None:
     """Searching the BR-formatted prefix still matches via DisplayRole.
 
@@ -1359,18 +1449,22 @@ def test_search_matches_formatted_currency_in_display_role() -> None:
 
 
 def test_catalogo_schema_notion_names_are_well_formed() -> None:
-    """Documentary snapshot of the current Catalogo schema. If a future
-    change drops/renames a notion_name without updating this list, the
-    test fails so the deviation is noticed."""
+    """Documentary snapshot do schema do Catalogo após Fase 2a/3.
+
+    As 4 chaves inventadas legacy (area, tempo_estimado,
+    responsavel_padrao, revisado) NÃO existem mais. O Notion real expõe
+    apenas: nome (title), categoria (select), prazo (number),
+    observacoes (rich_text), tarefas (relation), + 2 system properties
+    (criado_em, atualizado_em).
+    """
     from notion_bulk_edit.schemas import SCHEMAS
     cat = SCHEMAS["Catalogo"]
     expected = {
-        "titulo":             ("Nome",                "title"),
-        "categoria":          ("Categoria",           "select"),
-        "area":               ("Área",                "select"),
-        "tempo_estimado":     ("Tempo Estimado",      "rich_text"),
-        "responsavel_padrao": ("Responsável Padrão",  "people"),
-        "revisado":           ("Última Revisão",      "date"),
+        "nome":         ("Nome",         "title"),
+        "categoria":    ("Categoria",    "select"),
+        "prazo":        ("Prazo",        "number"),
+        "observacoes":  ("Observações",  "rich_text"),
+        "tarefas":      ("Tarefas",      "relation"),
     }
     for key, (notion_name, tipo) in expected.items():
         spec = cat.get(key)
@@ -1381,6 +1475,11 @@ def test_catalogo_schema_notion_names_are_well_formed() -> None:
         )
         assert spec.tipo == tipo, (
             f"{key}: tipo expected {tipo!r}, got {spec.tipo!r}"
+        )
+    # Tripwire: chaves inventadas removidas
+    for inventada in ("area", "tempo_estimado", "responsavel_padrao", "revisado"):
+        assert inventada not in cat, (
+            f"chave inventada {inventada!r} reapareceu em Catalogo"
         )
 
 
@@ -1397,26 +1496,23 @@ def test_catalogo_record_after_sync_has_populated_secondary_fields() -> None:
 
     cat = SCHEMAS["Catalogo"]
     # Build one Notion-shaped page using each spec's actual notion_name.
+    # Fase 2a/3: schema do Catálogo agora reflete o Notion real — apenas 5
+    # propriedades editáveis + 2 system. As 4 chaves inventadas legacy
+    # (area, tempo_estimado, responsavel_padrao, revisado) não existem mais.
     page = {
         "id": "cat-1",
         "properties": {
-            cat["titulo"].notion_name: {
+            cat["nome"].notion_name: {
                 "title": [{"plain_text": "Embargos"}],
             },
             cat["categoria"].notion_name: {
-                "select": {"name": "Recursos"},
+                "select": {"name": "Peças processuais"},
             },
-            cat["area"].notion_name: {
-                "select": {"name": "Trabalhista"},
+            cat["prazo"].notion_name: {
+                "number": 15,
             },
-            cat["tempo_estimado"].notion_name: {
-                "rich_text": [{"plain_text": "2h"}],
-            },
-            cat["responsavel_padrao"].notion_name: {
-                "people": [{"id": "u-1"}],
-            },
-            cat["revisado"].notion_name: {
-                "date": {"start": "2026-04-27"},
+            cat["observacoes"].notion_name: {
+                "rich_text": [{"plain_text": "Prazo legal de 15 dias"}],
             },
         },
     }
@@ -1435,12 +1531,10 @@ def test_catalogo_record_after_sync_has_populated_secondary_fields() -> None:
     rows = cache_db.get_all_records(conn, "Catalogo")
     assert len(rows) == 1
     rec = rows[0]
-    assert rec["titulo"]             == "Embargos"
-    assert rec["categoria"]          == "Recursos"
-    assert rec["area"]               == "Trabalhista"
-    assert rec["tempo_estimado"]     == "2h"
-    assert rec["responsavel_padrao"] == ["u-1"]
-    assert rec["revisado"]           == "2026-04-27"
+    assert rec["nome"]         == "Embargos"
+    assert rec["categoria"]    == "Peças processuais"
+    assert rec["prazo"]        == 15
+    assert rec["observacoes"]  == "Prazo legal de 15 dias"
 
 
 @requires_cache

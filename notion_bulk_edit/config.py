@@ -108,18 +108,7 @@ def get_cache_db_path() -> pathlib.Path:
 # Staleness threshold — cache mais antigo que isto sugere refresh
 CACHE_STALE_HOURS: Final = 2
 
-# ---------------------------------------------------------------------------
-# Schema dinâmico (Fases 1+)
-# ---------------------------------------------------------------------------
-
-# Fase 1 — adapter shim em schemas.py: quando False, o SCHEMAS proxy devolve
-# sempre o conteúdo legado hardcoded; quando True, lê do registry dinâmico
-# para as bases listadas em DYNAMIC_BASES. Ativado na Fase 2a (Catálogo).
-# Removida na Fase 3 (assumido sempre on).
-USE_DYNAMIC_SCHEMA: bool = True
-
-# Fase 2 — granularidade por base. Bases ausentes caem no _LEGACY_SCHEMAS
-# mesmo com USE_DYNAMIC_SCHEMA=True. Permite migração base-a-base.
-# Fase 2a: Catálogo (resolve BUG-OP-08). Fases 2b/2c/2d adicionam Tarefas,
-# Clientes, Processos. Fase 3 remove esta granularidade.
-DYNAMIC_BASES: set[str] = {"Catalogo"}
+# Fase 3: USE_DYNAMIC_SCHEMA e DYNAMIC_BASES foram removidos. Todas as 4
+# bases servem do registry dinâmico (notion_bulk_edit.schema_registry).
+# O proxy SCHEMAS em notion_bulk_edit.schemas consulta o registry direto;
+# não há mais fallback condicional para schema legado hardcoded.

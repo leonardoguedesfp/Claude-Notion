@@ -12,7 +12,7 @@
     "object": "user",
     "id": "22fd872b-594c-81bf-847e-000262ec6682"
   },
-  "last_edited_time": "2026-04-26T22:27:00.000Z",
+  "last_edited_time": "2026-04-28T13:29:00.000Z",
   "title": [
     {
       "type": "text",
@@ -135,13 +135,6 @@
       "description": "Ex: 2ª Vara Cível de Brasília",
       "type": "rich_text",
       "rich_text": {}
-    },
-    "Criado em 1": {
-      "id": "DKAF",
-      "name": "Criado em 1",
-      "description": null,
-      "type": "created_time",
-      "created_time": {}
     },
     "Detalhamento da ação": {
       "id": "Fudi",
@@ -803,5 +796,5 @@
   "public_url": null,
   "in_trash": false,
   "archived": false,
-  "request_id": "cb06c47c-5a4d-4b45-82c1-9b40b888508f"
+  "request_id": "cd89959f-ed93-477f-8828-4443aa683a93"
 }

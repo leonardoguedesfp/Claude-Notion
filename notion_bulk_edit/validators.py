@@ -199,8 +199,10 @@ def validar_valor(base: str, campo: str, valor: Any) -> list[ValidationError]:
         return erros  # Nada mais a validar se vazio e não obrigatório
 
     # Validações específicas por tipo
+    # Fase 3: schema dinâmico é fonte única; slug do título de Processos
+    # é "numero_do_processo".
     match spec.tipo:
-        case "title" if campo == "cnj":
+        case "title" if campo == "numero_do_processo":
             erros.extend(validar_cnj(str(valor)))
 
         case "rich_text" if campo == "cpf":

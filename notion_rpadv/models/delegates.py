@@ -488,13 +488,15 @@ class CnjDelegate(QStyledItemDelegate):
             parent_ids = []
 
         # Resolve parent CNJ from cache (may be empty if parent not synced).
+        # Fase 3: fallback legado 'cnj' removido — schema dinâmico já é a
+        # fonte única e cache convergiu para 'numero_do_processo'.
         parent_cnj = ""
         if isinstance(parent_ids, list) and parent_ids:
             try:
                 from notion_rpadv.cache import db as cache_db
                 parent_rec = cache_db.get_record(conn, "Processos", str(parent_ids[0]))
                 if parent_rec is not None:
-                    parent_cnj = str(parent_rec.get("cnj") or "")
+                    parent_cnj = str(parent_rec.get("numero_do_processo") or "")
             except Exception:  # noqa: BLE001
                 parent_cnj = ""
 
