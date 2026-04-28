@@ -18,7 +18,6 @@ from pathlib import Path
 
 import pytest
 
-from notion_bulk_edit import config
 from notion_bulk_edit.schema_parser import (
     compute_schema_hash,
     parse_to_schema_json,
@@ -71,12 +70,10 @@ def _populate_clientes_in_registry() -> sqlite3.Connection:
 # --- Configuração ---
 
 
-def test_FASE2C_clientes_in_dynamic_bases() -> None:
-    """Fase 2c adiciona Clientes; Catálogo/Tarefas continuam migradas.
-    Processos foi adicionada na Fase 2d (ver test_FASE2D_processos_in_dynamic_bases)."""
-    assert "Clientes" in config.DYNAMIC_BASES
-    assert "Catalogo" in config.DYNAMIC_BASES
-    assert "Tarefas" in config.DYNAMIC_BASES
+def test_FASE2C_clientes_title_key_redundancy() -> None:
+    """Sanity: Clientes migrada para schema dinâmico (Fase 2c).
+    Fase 3 removeu DYNAMIC_BASES — todas as 4 bases são dinâmicas agora."""
+    assert _TITLE_KEY_BY_BASE.get("Clientes") == "nome"
 
 
 def test_FASE2C_title_key_clientes_remains_nome() -> None:
@@ -153,11 +150,15 @@ def test_FASE2C_cpf_cnpj_is_rich_text(reset_registry) -> None:
 # --- Outras bases continuam intactas ---
 
 
-def test_FASE2C_processos_still_legacy(reset_registry) -> None:
-    """Processos ainda no legado (Fase 2d futura)."""
+def test_FASE2C_outras_bases_via_registry_quando_populadas(
+    reset_registry,
+) -> None:
+    """Fase 3: todas as 4 bases servem do registry. Quando só Clientes
+    está populada, Processos retorna mapping vazio (sem _LEGACY_SCHEMAS)."""
     _populate_clientes_in_registry()
-    # Fallback ao legado: chave 'cnj' do _LEGACY_SCHEMAS
-    assert "cnj" in SCHEMAS["Processos"]
+    assert len(SCHEMAS["Processos"]) == 0
+    # Clientes populada funciona
+    assert "nome" in SCHEMAS["Clientes"]
 
 
 # --- Tripwire (informativo): n_processos consumer está inerte ---

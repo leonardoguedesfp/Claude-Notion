@@ -332,17 +332,41 @@ def boot_refresh_all(
 
 
 def _dict_to_propspec(prop_dict: dict[str, Any]) -> PropSpec:
-    """Constrói um PropSpec (legado) a partir do dict canônico do parser.
+    """Constrói um PropSpec a partir do dict canônico do parser.
 
-    PropSpec.opcoes hoje é tuple[str, ...] — extraímos apenas os ``name``
-    para preservar a API. Cores ficam disponíveis via ``vocabulario_full``.
+    Fase 3:
+    - cor_por_valor populada via notion_colors (mapeamento Notion → hex).
+    - target_base resolvido via DATA_SOURCES (lookup reverso de
+      data_source_id → base_label) para que double-click em relations
+      navegue corretamente.
 
-    Campos do PropSpec não cobertos pelo schema dinâmico (cor_por_valor,
-    largura_col, mono, formato, target_base, min_width_px) ficam com
-    valores default — a Fase 1 vai introduzir overrides em
-    ``labels_overrides.py`` se necessário.
+    Campos restantes do PropSpec não cobertos pelo schema dinâmico
+    (largura_col, mono, formato, min_width_px) ficam com valores default —
+    overrides custom podem entrar em labels_overrides.py em fase futura.
     """
-    opcoes = tuple(opt.get("name", "") for opt in prop_dict.get("opcoes", []))
+    from notion_bulk_edit.config import DATA_SOURCES
+    from notion_rpadv.theme.notion_colors import color_to_hex
+
+    opcoes_dicts = prop_dict.get("opcoes", []) or []
+    opcoes = tuple(opt.get("name", "") for opt in opcoes_dicts)
+
+    # cor_por_valor: traduz cor nominal do Notion para hex do RPADV.
+    cor_por_valor: dict[str, str] = {
+        opt.get("name", ""): color_to_hex(opt.get("color", "default"))
+        for opt in opcoes_dicts
+        if opt.get("name")
+    }
+
+    # target_base: lookup reverso de data_source_id → base_label.
+    # Usado por delegates/_on_table_double_clicked para navegação.
+    target_base = ""
+    target_dsid = prop_dict.get("target_data_source_id", "")
+    if target_dsid:
+        for label, dsid in DATA_SOURCES.items():
+            if dsid == target_dsid:
+                target_base = label
+                break
+
     return PropSpec(
         notion_name=prop_dict.get("notion_name", ""),
         tipo=prop_dict.get("tipo", "rich_text"),
@@ -350,6 +374,8 @@ def _dict_to_propspec(prop_dict: dict[str, Any]) -> PropSpec:
         editavel=prop_dict.get("editavel", True),
         obrigatorio=prop_dict.get("obrigatorio", False),
         opcoes=opcoes,
+        cor_por_valor=cor_por_valor,
+        target_base=target_base,
     )
 
 

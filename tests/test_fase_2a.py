@@ -92,27 +92,27 @@ def test_FASE2A_title_key_clientes_unchanged() -> None:
     assert _TITLE_KEY_BY_BASE["Clientes"] == "nome"
 
 
-# --- Componente 4: boot wiring com filtro por DYNAMIC_BASES ---
+# --- Componente 4: boot wiring (sem filtro DYNAMIC_BASES após Fase 3) ---
 
 
-def test_FASE2A_app_boot_filters_by_dynamic_bases() -> None:
-    """app.py constrói data_sources_to_refresh filtrando por DYNAMIC_BASES."""
-    src = (_REPO_ROOT / "notion_rpadv" / "app.py").read_text(encoding="utf-8")
-    assert "data_sources_to_refresh" in src
-    assert "if base in bulk_config.DYNAMIC_BASES" in src
-    assert "boot_refresh_all(" in src
+def test_FASE2A_app_boot_calls_boot_refresh_all() -> None:
+    """app.py chama boot_refresh_all com DATA_SOURCES no boot.
 
-
-# --- Componente 5: tripwire — props inventadas só dentro de _LEGACY_SCHEMAS ---
-
-
-def test_FASE2A_invented_keys_only_in_legacy_schemas() -> None:
-    """Tripwire: as 4 chaves inventadas do _LEGACY_SCHEMAS['Catalogo']
-    só podem aparecer dentro do próprio schemas.py (no bloco _LEGACY_SCHEMAS).
-
-    Se alguém adicionar consumer dessas chaves em pages/widgets/models, este
-    teste pega — o schema dinâmico não vai entregar elas.
+    Fase 3 removeu o filtro DYNAMIC_BASES — todas as 4 bases são dinâmicas
+    e refrescam no boot.
     """
+    src = (_REPO_ROOT / "notion_rpadv" / "app.py").read_text(encoding="utf-8")
+    assert "boot_refresh_all(" in src
+    assert "init_schema_registry(self._audit_conn)" in src
+
+
+# --- Componente 5: tripwire — props inventadas removidas do código ---
+
+
+def test_FASE2A_invented_keys_absent_from_code() -> None:
+    """Tripwire Fase 3: as chaves inventadas que existiam no _LEGACY_SCHEMAS
+    do Catálogo (já removido na Fase 3) NÃO devem aparecer em lugar nenhum
+    de notion_rpadv/ ou notion_bulk_edit/. Schema dinâmico é fonte única."""
     pattern = re.compile(
         r"""['"](?:""" + "|".join(_CATALOGO_INVENTED_KEYS) + r""")['"]"""
     )
@@ -120,17 +120,13 @@ def test_FASE2A_invented_keys_only_in_legacy_schemas() -> None:
     for sub in ("notion_rpadv", "notion_bulk_edit"):
         root = _REPO_ROOT / sub
         for fp in root.rglob("*.py"):
-            # Skip o próprio _LEGACY_SCHEMAS
-            if fp.name == "schemas.py" and fp.parent.name == "notion_bulk_edit":
-                continue
             text = fp.read_text(encoding="utf-8", errors="ignore")
             for m in pattern.finditer(text):
-                # Localiza a linha
                 line_no = text.count("\n", 0, m.start()) + 1
                 offenders.append(f"{fp.relative_to(_REPO_ROOT)}:{line_no} → {m.group(0)}")
     assert offenders == [], (
-        "Chaves inventadas do _LEGACY_SCHEMAS['Catalogo'] usadas fora de "
-        f"schemas.py:\n  " + "\n  ".join(offenders)
+        "Chaves inventadas do schema legado de Catálogo presentes em código:\n  "
+        + "\n  ".join(offenders)
     )
 
 
@@ -170,12 +166,16 @@ def test_FASE2A_catalogo_categoria_options_match_real_notion(
     assert set(spec.opcoes) == expected_options
 
 
-def test_FASE2A_other_bases_still_use_legacy(reset_registry) -> None:
-    """Processos/Clientes/Tarefas continuam vindo do _LEGACY_SCHEMAS mesmo com
-    flag ON, porque não estão em DYNAMIC_BASES."""
+def test_FASE2A_outras_bases_via_registry_quando_populadas(
+    reset_registry,
+) -> None:
+    """Fase 3: todas as 4 bases servem do registry. Se apenas Catálogo
+    estiver populado, as outras retornam mapping vazio em vez de cair
+    no _LEGACY_SCHEMAS (que não existe mais)."""
     _populate_catalogo_in_registry()  # popula só Catálogo
-
-    # Processos.cnj é a chave LEGADA (slug do parser seria 'numero_do_processo')
-    assert "cnj" in SCHEMAS["Processos"]
-    # Tarefas.titulo é a chave LEGADA (slug do parser seria 'tarefa')
-    assert "titulo" in SCHEMAS["Tarefas"]
+    # Outras 3 bases sem registry específico → empty mapping (sem crash)
+    assert len(SCHEMAS["Processos"]) == 0
+    assert len(SCHEMAS["Tarefas"]) == 0
+    assert len(SCHEMAS["Clientes"]) == 0
+    # Catálogo populado funciona
+    assert "nome" in SCHEMAS["Catalogo"]

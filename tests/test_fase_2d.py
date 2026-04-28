@@ -1,7 +1,6 @@
 """Fase 2d — Processos no schema dinâmico (última base a migrar).
 
 Cobertura:
-- Processos em DYNAMIC_BASES (4 bases dinâmicas total).
 - _TITLE_KEY_BY_BASE["Processos"] == "numero_do_processo" (slug do parser;
   era "cnj" no legado).
 - SCHEMAS["Processos"] retorna 37 chaves reais (era 38 antes de drops).
@@ -9,8 +8,10 @@ Cobertura:
 - Tribunal com 17 opções incluindo TRT/2 (era 8 no legado).
 - Em-dash U+2014 preservado em 7 valores de Tipo de ação.
 - Status com 3 opções (sem regressão).
-- Defensive lookup: helper _title_value_for_record cobre fallback durante
-  decay do cache pré-Fase 2d.
+
+Fase 3: testes de defensive lookup removidos (helpers
+_LEGACY_TITLE_KEYS_BY_BASE e _title_value_for_record foram removidos
+após cache convergir).
 """
 from __future__ import annotations
 
@@ -20,7 +21,6 @@ from pathlib import Path
 
 import pytest
 
-from notion_bulk_edit import config
 from notion_bulk_edit.schema_parser import (
     compute_schema_hash,
     parse_to_schema_json,
@@ -28,10 +28,8 @@ from notion_bulk_edit.schema_parser import (
 from notion_bulk_edit.schemas import SCHEMAS
 from notion_rpadv.cache import db as cache_db
 from notion_rpadv.models.base_table_model import (
-    _LEGACY_TITLE_KEYS_BY_BASE,
     _TITLE_KEY_BY_BASE,
     _looks_like_template_row,
-    _title_value_for_record,
 )
 
 
@@ -91,23 +89,10 @@ def _populate_processos_in_registry() -> sqlite3.Connection:
 # --- Configuração ---
 
 
-def test_FASE2D_processos_in_dynamic_bases() -> None:
-    """Fase 2d adiciona Processos; total de 4 bases dinâmicas."""
-    assert "Processos" in config.DYNAMIC_BASES
-    assert len(config.DYNAMIC_BASES) == 4
-    assert config.DYNAMIC_BASES == {"Catalogo", "Tarefas", "Clientes", "Processos"}
-
-
 def test_FASE2D_title_key_processos_is_numero_do_processo() -> None:
-    """Slug primário virou 'numero_do_processo' (era 'cnj' no legado)."""
+    """Slug primário virou 'numero_do_processo' (era 'cnj' no legado).
+    Fase 3: defensive fallback _LEGACY_TITLE_KEYS_BY_BASE removido."""
     assert _TITLE_KEY_BY_BASE["Processos"] == "numero_do_processo"
-
-
-def test_FASE2D_legacy_title_key_cnj_kept_as_fallback() -> None:
-    """Defensive: cnj continua disponível como fallback durante o decay
-    do cache pré-Fase 2d (records antigos ainda têm chave 'cnj' até a
-    primeira sync re-popular com 'numero_do_processo')."""
-    assert "cnj" in _LEGACY_TITLE_KEYS_BY_BASE.get("Processos", ())
 
 
 # --- SCHEMAS via proxy ---
@@ -224,30 +209,15 @@ def test_FASE2D_tripwire_obsolete_keys_in_consumers() -> None:
 # --- Defensive lookup helper ---
 
 
-def test_FASE2D_title_value_for_record_uses_primary_first() -> None:
-    """_title_value_for_record retorna o slug primário quando presente."""
-    record = {"numero_do_processo": "0001-NEW", "cnj": "0002-OLD"}
-    assert _title_value_for_record(record, "Processos") == "0001-NEW"
-
-
-def test_FASE2D_title_value_for_record_falls_back_to_legacy() -> None:
-    """_title_value_for_record cai no slug legado quando primário ausente.
-    Cenário: record do cache pré-Fase 2d ainda só tem 'cnj' até re-sync."""
-    record = {"cnj": "0002-OLD-ONLY"}
-    assert _title_value_for_record(record, "Processos") == "0002-OLD-ONLY"
-
-
-def test_FASE2D_looks_like_template_row_uses_fallback_for_legacy_cache() -> None:
-    """Filter de template row funciona com record que só tem slug legado.
-    Cenário: cache.db.records[Processos] de syncs pré-Fase 2d ainda tem
-    chave 'cnj' até a primeira sync re-popular com slug novo."""
-    # Record só com slug legado (simula cache pré-Fase 2d)
-    legacy_template = {"cnj": "🟧 Modelo — usar como template"}
-    assert _looks_like_template_row(legacy_template, "Processos") is True
-
-    # Record com slug novo (pós-sync)
+def test_FASE2D_looks_like_template_row_uses_primary_slug() -> None:
+    """Filter de template row funciona com slug primário 'numero_do_processo'.
+    Fase 3: assinatura voltou a ser (record, title_key) — sem fallback legado.
+    """
     new_template = {"numero_do_processo": "🟧 Modelo — usar como template"}
-    assert _looks_like_template_row(new_template, "Processos") is True
+    assert _looks_like_template_row(new_template, "numero_do_processo") is True
+
+    real_record = {"numero_do_processo": "0001234-12.2024.8.13.0024"}
+    assert _looks_like_template_row(real_record, "numero_do_processo") is False
 
 
 # --- Outras 3 bases sem regressão ---

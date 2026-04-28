@@ -18,7 +18,6 @@ from pathlib import Path
 
 import pytest
 
-from notion_bulk_edit import config
 from notion_bulk_edit.schema_parser import (
     compute_schema_hash,
     parse_to_schema_json,
@@ -77,10 +76,11 @@ def _populate_tarefas_in_registry() -> sqlite3.Connection:
 # --- Configuração ---
 
 
-def test_FASE2B_tarefas_in_dynamic_bases() -> None:
-    """Fase 2b adiciona Tarefas; Catálogo continua presente da Fase 2a."""
-    assert "Tarefas" in config.DYNAMIC_BASES
-    assert "Catalogo" in config.DYNAMIC_BASES
+def test_FASE2B_title_key_tarefas_is_tarefa_redundancy() -> None:
+    """Sanity: Tarefas migrada para schema dinâmico (Fase 2b).
+    Fase 3 removeu DYNAMIC_BASES — todas as 4 bases são dinâmicas agora."""
+    # Mantido apenas como documento histórico; teste real do slug está abaixo.
+    assert _TITLE_KEY_BY_BASE.get("Tarefas") == "tarefa"
 
 
 def test_FASE2B_title_key_tarefas_is_tarefa() -> None:
@@ -165,19 +165,14 @@ def test_FASE2B_tripwire_legacy_status_labels_not_in_consumers() -> None:
 # --- Outras bases continuam intactas ---
 
 
-def test_FASE2B_catalogo_still_dynamic_after_2b(reset_registry) -> None:
-    """Adicionar Tarefas em DYNAMIC_BASES não afeta Catálogo."""
-    _populate_tarefas_in_registry()
-    # Catalogo existe? (registry só tem Tarefas, mas proxy faz fallback)
-    # Catalogo não está populado neste registry — proxy cai no _LEGACY_SCHEMAS.
-    cat = SCHEMAS["Catalogo"]
-    # _LEGACY_SCHEMAS["Catalogo"] usa "titulo" como key do title (legado errado)
-    # mas o que importa: Catalogo continua existindo no SCHEMAS.
-    assert len(cat) > 0, "Catalogo sumiu?"
-
-
-def test_FASE2B_processos_still_legacy(reset_registry) -> None:
-    """Processos continua no _LEGACY_SCHEMAS — entra na Fase 2d."""
+def test_FASE2B_outras_bases_via_registry_quando_populadas(
+    reset_registry,
+) -> None:
+    """Fase 3: todas as 4 bases servem do registry. Quando só Tarefas está
+    populada, as outras retornam mapping vazio (sem _LEGACY_SCHEMAS)."""
     _populate_tarefas_in_registry()  # popula só Tarefas
-    # Processos não está em DYNAMIC_BASES → fallback legado → key 'cnj'
-    assert "cnj" in SCHEMAS["Processos"]
+    assert len(SCHEMAS["Catalogo"]) == 0
+    assert len(SCHEMAS["Clientes"]) == 0
+    assert len(SCHEMAS["Processos"]) == 0
+    # Tarefas populada funciona
+    assert "tarefa" in SCHEMAS["Tarefas"]

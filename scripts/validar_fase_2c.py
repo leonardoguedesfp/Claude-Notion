@@ -25,7 +25,6 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from notion_bulk_edit import config  # noqa: E402
 from notion_bulk_edit.schema_parser import (  # noqa: E402
     compute_schema_hash,
     parse_to_schema_json,
@@ -52,12 +51,11 @@ def main() -> int:
     print("=== VALIDACAO FASE 2C ===")
     print()
 
-    assert config.USE_DYNAMIC_SCHEMA is True
-    assert "Clientes" in config.DYNAMIC_BASES, (
-        f"Clientes deveria estar em DYNAMIC_BASES; obtido: {config.DYNAMIC_BASES}"
-    )
-    print(f"flags: USE_DYNAMIC_SCHEMA={config.USE_DYNAMIC_SCHEMA}, "
-          f"DYNAMIC_BASES={config.DYNAMIC_BASES}")
+    # Fase 3: flags removidas — registry é fonte única.
+    from notion_bulk_edit import config
+    assert not hasattr(config, "USE_DYNAMIC_SCHEMA")
+    assert not hasattr(config, "DYNAMIC_BASES")
+    print("flags removidas (Fase 3): registry serve todas as bases")
 
     with tempfile.TemporaryDirectory(prefix="rpadv_fase2c_") as tmp:
         db_path = Path(tmp) / "audit_test.db"

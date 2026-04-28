@@ -1139,21 +1139,17 @@ class DashboardPage(QWidget):
         for i, row in enumerate(self._urgent_rows):
             if i < len(capped):
                 days, record = capped[i]
-                # Fase 2d: title slug de Processos virou "numero_do_processo"
-                # (era "cnj"). Mantemos fallbacks legados para records pré-2d
-                # no cache até decay natural via re-sync.
+                # Fase 3: fallbacks legados removidos — slugs dinâmicos são
+                # fonte única após convergência do cache. Lê primeiro o slug
+                # de Tarefas (caminho mais comum aqui), depois Processos.
                 title = str(
-                    record.get("tarefa")              # Tarefas (slug dinâmico)
-                    or record.get("titulo")           # legacy / outras bases
-                    or record.get("title")            # caminho defensivo
-                    or record.get("numero_do_processo")  # Processos (Fase 2d)
-                    or record.get("cnj")              # Processos legacy
+                    record.get("tarefa")             # Tarefas
+                    or record.get("numero_do_processo")  # Processos
                     or "",
                 )
                 processo = str(
-                    record.get("processo")            # Tarefas → Processo (relation)
-                    or record.get("numero_do_processo")  # Processos (Fase 2d)
-                    or record.get("cnj")              # Processos legacy
+                    record.get("processo")            # Tarefas → relation com Processo
+                    or record.get("numero_do_processo")  # Processos direto
                     or "",
                 )
                 row.update_row(title, processo, days)

@@ -148,34 +148,26 @@ class MainWindow(QMainWindow):
             # status bar isn't built yet.
             pass
 
-        # Fase 1 — schema dinâmico: inicializa o singleton SchemaRegistry
-        # (custo ínfimo; só lê meta_schemas em audit.db). Refresh real via
-        # API só acontece quando USE_DYNAMIC_SCHEMA está ativo.
-        # Fase 2a: refresh apenas das bases em DYNAMIC_BASES — economiza ~3
-        # chamadas API no boot até as Fases 2b/c/d migrarem as outras 3.
-        from notion_bulk_edit import config as bulk_config
+        # Fase 3 — schema dinâmico: inicializa o singleton SchemaRegistry
+        # e faz refresh das 4 bases via API (USE_DYNAMIC_SCHEMA/DYNAMIC_BASES
+        # foram removidas; sempre on). Refresh é tolerante a erro: se a API
+        # estiver fora ou o token inválido, o app continua usando os schemas
+        # cacheados em audit.db.meta_schemas.
         from notion_bulk_edit.schema_registry import (
             boot_refresh_all,
             init_schema_registry,
         )
         self._schema_registry = init_schema_registry(self._audit_conn)
-        if bulk_config.USE_DYNAMIC_SCHEMA:
-            data_sources_to_refresh = {
-                base: dsid
-                for base, dsid in DATA_SOURCES.items()
-                if base in bulk_config.DYNAMIC_BASES
-            }
-            if data_sources_to_refresh:
-                try:
-                    from notion_bulk_edit.notion_api import NotionClient
-                    boot_refresh_all(
-                        NotionClient(self._token),
-                        self._schema_registry,
-                        data_sources_to_refresh,
-                    )
-                except Exception:  # noqa: BLE001
-                    # Erro de boot não crasha o app; cache existente continua valendo.
-                    pass
+        try:
+            from notion_bulk_edit.notion_api import NotionClient
+            boot_refresh_all(
+                NotionClient(self._token),
+                self._schema_registry,
+                DATA_SOURCES,
+            )
+        except Exception:  # noqa: BLE001
+            # Erro de boot não crasha o app; cache existente continua valendo.
+            pass
 
         # Services
         self._facade = NotionFacade(
@@ -732,23 +724,24 @@ class MainWindow(QMainWindow):
         need attention. Falls back to page_id / raw key when the title or
         schema label is missing.
 
-        Fase 2d: usa _title_value_for_record para suportar tanto o slug
-        primário (numero_do_processo) quanto o legado (cnj) durante o
-        decay do cache.
+        Fase 3: defensive _title_value_for_record removido — schema dinâmico
+        é fonte única e cache convergiu para slugs do registry.
         """
         # Lazy imports to keep app.py startup light.
         from notion_bulk_edit.schemas import get_prop
         from notion_rpadv.cache import db as cache_db
-        from notion_rpadv.models.base_table_model import _title_value_for_record
+        from notion_rpadv.models.base_table_model import _TITLE_KEY_BY_BASE
+        title_key = _TITLE_KEY_BY_BASE.get(base, "")
         snippets: list[str] = []
         for r in failed[:max_items]:
             pid = str(r.get("page_id", ""))
             key = str(r.get("key", ""))
-            # Title (record name) — defensive lookup com fallback para slugs legados.
+            # Title (record name)
             title = ""
-            rec = cache_db.get_record(self._conn, base, pid)
-            if rec is not None:
-                title = _title_value_for_record(rec, base).strip()
+            if title_key:
+                rec = cache_db.get_record(self._conn, base, pid)
+                if rec is not None:
+                    title = str(rec.get(title_key) or "").strip()
             if not title:
                 title = pid[:8] or "?"
             # Field label

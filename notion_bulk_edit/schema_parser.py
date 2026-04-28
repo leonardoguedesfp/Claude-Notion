@@ -178,6 +178,14 @@ def parse_to_schema_json(raw: dict[str, Any], base_label: str) -> dict[str, Any]
             visible = False
         else:
             editavel = _is_editavel(tipo)
+        # Fase 3: capturar data_source_id da relation para o registry
+        # resolver target_base depois (lookup reverso em DATA_SOURCES).
+        # Sem isso, _on_table_double_clicked em Processos não sabe para qual
+        # base navegar (PropSpec.target_base ficaria vazio).
+        target_data_source_id = ""
+        if tipo == "relation":
+            rel_block = block.get("relation", {}) or {}
+            target_data_source_id = rel_block.get("data_source_id", "") or ""
         return {
             "notion_name": notion_name,
             "tipo": tipo,
@@ -187,6 +195,7 @@ def parse_to_schema_json(raw: dict[str, Any], base_label: str) -> dict[str, Any]
             "opcoes": opcoes,
             "default_visible": visible,
             "default_order": order,
+            "target_data_source_id": target_data_source_id,
         }
 
     # Title primeiro (se existe)

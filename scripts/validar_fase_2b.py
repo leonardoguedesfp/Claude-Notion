@@ -28,7 +28,6 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from notion_bulk_edit import config  # noqa: E402
 from notion_bulk_edit.schema_parser import (  # noqa: E402
     compute_schema_hash,
     parse_to_schema_json,
@@ -54,13 +53,12 @@ def main() -> int:
     print("=== VALIDACAO FASE 2B ===")
     print()
 
-    # 1. Flags
-    assert config.USE_DYNAMIC_SCHEMA is True
-    assert "Tarefas" in config.DYNAMIC_BASES, (
-        f"Tarefas deveria estar em DYNAMIC_BASES; obtido: {config.DYNAMIC_BASES}"
-    )
-    print(f"flags: USE_DYNAMIC_SCHEMA={config.USE_DYNAMIC_SCHEMA}, "
-          f"DYNAMIC_BASES={config.DYNAMIC_BASES}")
+    # 1. Fase 3 removeu USE_DYNAMIC_SCHEMA/DYNAMIC_BASES — registry é fonte
+    # única. Validamos que o cleanup foi feito.
+    from notion_bulk_edit import config
+    assert not hasattr(config, "USE_DYNAMIC_SCHEMA")
+    assert not hasattr(config, "DYNAMIC_BASES")
+    print("flags removidas (Fase 3): registry serve todas as bases")
 
     # 2. Cache temporário + popular Tarefas
     with tempfile.TemporaryDirectory(prefix="rpadv_fase2b_") as tmp:
