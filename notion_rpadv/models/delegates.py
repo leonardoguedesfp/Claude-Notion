@@ -80,46 +80,37 @@ def _get_spec_from_index(index: QModelIndex) -> PropSpec | None:
     return get_prop(base, key)
 
 
-def _paint_background_only(
-    painter: QPainter,
-    option: QStyleOptionViewItem,
-    index: QModelIndex,
-    delegate: QStyledItemDelegate,
-) -> None:
-    """Hotfix paint ghosts (Lote 1): pinta apenas o background da célula
-    via Qt's default rendering, sem desenhar o texto.
-
-    Usado por delegates customizados (CnjDelegate two-line, PropDelegate
-    chips) que renderizam seu próprio conteúdo por cima e querem
-    preservar selection / alternating row / dirty cell highlight do Qt
-    sem que o ``super().paint()`` deixe vazar texto subjacente quando o
-    desenho customizado não cobre 100% da célula (clássico: chip
-    arredondado cobre apenas o texto exato; sobra a letra final).
-
-    Implementação:
-    1. Cópia rasa do ``QStyleOptionViewItem`` (segura — Qt não mantém
-       referência interna).
-    2. ``initStyleOption(opt, index)`` para popular palette/state
-       corretamente — sem isso, alternating row e dirty highlight podem
-       não pintar.
-    3. ``opt.text = ""`` e remoção de ``HasDisplay`` DEPOIS do
-       initStyleOption (que repopula o texto se chamado antes).
-    4. ``super(type(delegate), delegate).paint(painter, opt, index)``
-       chama o paint da classe pai do delegate concreto. Como as 3
-       classes que usam este helper (PropDelegate, CnjDelegate,
-       SucessorDelegate) herdam DIRETAMENTE de QStyledItemDelegate,
-       isto resolve para QStyledItemDelegate.paint — exatamente o
-       background sem texto que queremos.
-    """
-    opt = QStyleOptionViewItem(option)
-    delegate.initStyleOption(opt, index)
-    opt.text = ""
-    opt.features &= ~QStyleOptionViewItem.ViewItemFeature.HasDisplay
-    super(type(delegate), delegate).paint(painter, opt, index)
-
-
 class PropDelegate(QStyledItemDelegate):
     """Universal delegate — creates the right editor widget based on PropSpec.tipo."""
+
+    def initStyleOption(
+        self,
+        option: QStyleOptionViewItem,
+        index: QModelIndex,
+    ) -> None:
+        """Hotfix paint ghosts v2: zera ``option.text`` para tipos que
+        renderizam chips customizados. Sem isso, ``super().paint()`` no
+        caminho desses tipos pinta o display text como background, e o
+        chip arredondado por cima não cobre 100% — sobra letra final
+        vazando à direita.
+
+        O override é virtual e Qt o invoca de dentro de
+        ``QStyledItemDelegate.paint`` antes de pintar — daí termos que
+        zerar AQUI, não no chamador (o helper v1 zerava na cópia mas Qt
+        chamava ``initStyleOption`` de novo internamente, repopulando
+        opt.text).
+
+        Para tipos sem chip (rich_text, number, date, checkbox como
+        texto), preserva o comportamento padrão de Qt — texto é pintado
+        normalmente.
+        """
+        super().initStyleOption(option, index)
+        spec = _get_spec_from_index(index)
+        if spec is not None and spec.tipo in (
+            "relation", "select", "multi_select",
+        ):
+            option.text = ""
+            option.features &= ~QStyleOptionViewItem.ViewItemFeature.HasDisplay
 
     def createEditor(
         self,
@@ -316,14 +307,26 @@ class PropDelegate(QStyledItemDelegate):
         if spec is not None and spec.tipo == "relation":
             raw: Any = index.data(Qt.ItemDataRole.DisplayRole)
             text = str(raw) if raw else ""
-            # Hotfix paint ghosts: background only — antes, super().paint
-            # com índice válido pintava o texto bruto que ficava parcial-
-            # mente coberto pelos chips arredondados (sobrava letra solta).
-            _paint_background_only(painter, option, index, self)
+            # Hotfix paint ghosts v2: super().paint pinta background sem
+            # texto porque o initStyleOption override desta classe zera
+            # opt.text para tipos de chip. Sem o override, Qt chamava
+            # initStyleOption internamente e repopulava o text — o helper
+            # _paint_background_only do v1 era furado por isso.
+            super().paint(painter, option, index)
             if not text or text == "—":
-                # Sem chips para desenhar — pintar texto via path padrão
-                # para preservar o "—" placeholder com formatação certa.
-                super().paint(painter, option, index)
+                # Sem chips para desenhar — pintar "—" manualmente
+                # porque initStyleOption zerou o text default.
+                if text == "—":
+                    painter.save()
+                    painter.setClipRect(option.rect)
+                    painter.setPen(QPen(QColor("#9CA3AF")))
+                    painter.drawText(
+                        option.rect.adjusted(8, 0, -4, 0),
+                        Qt.AlignmentFlag.AlignVCenter
+                        | Qt.AlignmentFlag.AlignLeft,
+                        text,
+                    )
+                    painter.restore()
                 return
             # Split the comma-resolved name list back into chips.
             names = [n.strip() for n in text.split(",") if n.strip()]
@@ -387,16 +390,29 @@ class PropDelegate(QStyledItemDelegate):
             else:
                 values = [str(raw)] if raw else []
 
-            # Hotfix paint ghosts: background only — antes, super().paint
-            # com índice válido pintava o display text (ex: "Cognitiva") e
-            # o chip arredondado cobria só a região do texto exato, deixando
-            # a letra final ("a") vazando à direita do chip.
-            _paint_background_only(painter, option, index, self)
+            # Hotfix paint ghosts v2: super().paint pinta background sem
+            # texto porque o initStyleOption override desta classe zera
+            # opt.text para tipos de chip. O helper v1 era furado porque
+            # Qt repopulava opt.text via initStyleOption interno.
+            super().paint(painter, option, index)
 
             if not values:
-                # Sem valores — pintar texto via path padrão para preservar
-                # placeholder ("—" ou vazio) com formatação certa.
-                super().paint(painter, option, index)
+                # Sem valores — pintar "—" manualmente porque
+                # initStyleOption zerou o text default.
+                raw_display = index.data(Qt.ItemDataRole.DisplayRole)
+                placeholder = (
+                    "—" if raw_display in (None, "", "—") else str(raw_display)
+                )
+                painter.save()
+                painter.setClipRect(option.rect)
+                painter.setPen(QPen(QColor("#9CA3AF")))
+                painter.drawText(
+                    option.rect.adjusted(8, 0, -4, 0),
+                    Qt.AlignmentFlag.AlignVCenter
+                    | Qt.AlignmentFlag.AlignLeft,
+                    placeholder,
+                )
+                painter.restore()
                 return
 
             painter.save()
@@ -460,16 +476,37 @@ class SucessorDelegate(QStyledItemDelegate):
     visually anchors the user back to the parent record.
     """
 
+    def initStyleOption(
+        self,
+        option: QStyleOptionViewItem,
+        index: QModelIndex,
+    ) -> None:
+        """Hotfix paint ghosts v2: zera ``option.text`` quando há valor a
+        renderizar customizado. Quando não há valor (vazio ou ``—``),
+        preserva o text para Qt pintar o placeholder normalmente."""
+        super().initStyleOption(option, index)
+        text = str(index.data(Qt.ItemDataRole.DisplayRole) or "")
+        if text and text != "—":
+            option.text = ""
+            option.features &= ~QStyleOptionViewItem.ViewItemFeature.HasDisplay
+
     def paint(
         self,
         painter: QPainter,
         option: QStyleOptionViewItem,
         index: QModelIndex,
     ) -> None:
-        super().paint(painter, option, QModelIndex())
+        # Hotfix paint ghosts v2: super().paint pinta o background sempre
+        # com índice válido. Quando há valor a renderizar customizado, o
+        # initStyleOption override desta classe zera opt.text — Qt pinta
+        # apenas background. Quando não há valor (vazio ou "—"),
+        # initStyleOption preserva o text e Qt pinta o placeholder
+        # normalmente. Antes, o ``super().paint(... QModelIndex())`` com
+        # índice inválido era hack para suprimir o text — não é mais
+        # necessário.
+        super().paint(painter, option, index)
         text = str(index.data(Qt.ItemDataRole.DisplayRole) or "")
         if not text or text == "—":
-            super().paint(painter, option, index)
             return
 
         from notion_rpadv.theme.tokens import LIGHT
@@ -477,10 +514,8 @@ class SucessorDelegate(QStyledItemDelegate):
         rect = option.rect
 
         painter.save()
-        # P0-001 (Lote 1): clip explícito ao retângulo da célula. Mesmo
-        # anti-pattern do CnjDelegate (super().paint com QModelIndex
-        # inválido + ausência de setClipRect) — proteger contra ghosts
-        # de pintura.
+        # P0-001 (Lote 1): clip explícito ao retângulo da célula —
+        # defesa em profundidade contra paint hints distantes.
         painter.setClipRect(option.rect)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         f = QFont(QApplication.font())
@@ -511,6 +546,25 @@ class CnjDelegate(QStyledItemDelegate):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+
+    def initStyleOption(
+        self,
+        option: QStyleOptionViewItem,
+        index: QModelIndex,
+    ) -> None:
+        """Hotfix paint ghosts v2: zera sempre ``option.text``.
+        CnjDelegate sempre renderiza o CNJ com pintura customizada —
+        seja two-line (com parent) ou single-line bold no fallback. O
+        texto padrão de Qt nunca é desejado nesta coluna.
+
+        Consequência: o caminho fallback (sem parent) não pode mais usar
+        ``super().paint(painter, option, index)`` esperando que Qt
+        desenhe o texto — ele agora pinta o CNJ próprio manualmente
+        (ver ``paint``).
+        """
+        super().initStyleOption(option, index)
+        option.text = ""
+        option.features &= ~QStyleOptionViewItem.ViewItemFeature.HasDisplay
 
     def paint(
         self,
@@ -558,27 +612,59 @@ class CnjDelegate(QStyledItemDelegate):
                 parent_cnj = ""
 
         if not parent_cnj:
-            # No (resolvable) parent — let the default delegate paint.
+            # Hotfix paint ghosts v2: sem parent, fallback single-line.
+            # super().paint pinta apenas background (initStyleOption zera
+            # o text). Pintamos o CNJ próprio manualmente em monospace
+            # bold consistente com o bot_rect do two-line render.
             super().paint(painter, option, index)
+            own_cnj_fb = str(index.data(Qt.ItemDataRole.DisplayRole) or "")
+            if own_cnj_fb and own_cnj_fb != "—":
+                from notion_rpadv.theme.tokens import LIGHT
+                strong_fb = QColor(LIGHT.app_fg_strong)
+                fb_font = QFont("Courier New")
+                fb_font.setPixelSize(12)
+                fb_font.setBold(True)
+                painter.save()
+                painter.setClipRect(option.rect)
+                painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+                painter.setFont(fb_font)
+                painter.setPen(QPen(strong_fb))
+                painter.drawText(
+                    option.rect.adjusted(8, 0, -4, 0),
+                    Qt.AlignmentFlag.AlignVCenter
+                    | Qt.AlignmentFlag.AlignLeft,
+                    own_cnj_fb,
+                )
+                painter.restore()
+            elif own_cnj_fb == "—":
+                # Placeholder — desenhar manualmente em cinza.
+                painter.save()
+                painter.setClipRect(option.rect)
+                painter.setPen(QPen(QColor("#9CA3AF")))
+                painter.drawText(
+                    option.rect.adjusted(8, 0, -4, 0),
+                    Qt.AlignmentFlag.AlignVCenter
+                    | Qt.AlignmentFlag.AlignLeft,
+                    own_cnj_fb,
+                )
+                painter.restore()
             return
 
         # ----- Two-line render -----
-        # Hotfix paint ghosts: pinta SÓ background (selection / dirty /
-        # alternating), sem texto. Antes, ``super().paint(painter, option,
-        # QModelIndex())`` com índice inválido era um hack instável — em
-        # alguns paths Qt ainda inicializa o option e pinta texto bruto,
-        # que ficava por baixo da renderização two-line e vazava como
-        # ghost sobre linhas adjacentes em scroll/resize.
-        _paint_background_only(painter, option, index, self)
+        # Hotfix paint ghosts v2: super().paint(painter, option, index)
+        # pinta SÓ o background (selection / dirty / alternating) porque
+        # o initStyleOption override desta classe zera opt.text. Antes,
+        # o ``super().paint(... QModelIndex())`` com índice inválido era
+        # um hack instável; o helper v1 era furado porque Qt repopulava
+        # opt.text via initStyleOption interno.
+        super().paint(painter, option, index)
 
         own_cnj = str(index.data(Qt.ItemDataRole.DisplayRole) or "")
         rect = option.rect
         painter.save()
         # P0-001 (Lote 1): clip explícito ao retângulo da célula como
         # defesa em profundidade contra paint hints distantes (scroll com
-        # repaint parcial). O fix primário do hotfix é o
-        # _paint_background_only acima — o setClipRect aqui protege
-        # contra cenários residuais.
+        # repaint parcial).
         painter.setClipRect(option.rect)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
