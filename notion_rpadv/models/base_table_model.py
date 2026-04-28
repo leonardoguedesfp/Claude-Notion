@@ -13,11 +13,14 @@ from notion_rpadv.cache import db as cache_db
 from notion_rpadv.theme.tokens import LIGHT
 
 # BUG-V3: title key used when resolving relation page_ids to display names
+# Fase 2a: Catalogo virou schema dinâmico — slug do title é "nome"
+# (parser slugifica "Nome" → "nome"), não mais o "titulo" do _LEGACY_SCHEMAS.
+# Outras 3 bases continuam com slugs do legado até suas respectivas Fases 2b/c/d.
 _TITLE_KEY_BY_BASE: dict[str, str] = {
     "Clientes": "nome",
     "Processos": "cnj",
     "Tarefas": "titulo",
-    "Catalogo": "titulo",
+    "Catalogo": "nome",  # Fase 2a — slug do schema dinâmico
 }
 
 # BUG-V2-04: title fragments that mark a Notion "template" row that must

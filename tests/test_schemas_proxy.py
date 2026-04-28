@@ -68,17 +68,21 @@ def reset_registry():
     sr._registry = saved
 
 
-# --- Componente 3: USE_DYNAMIC_SCHEMA flag default ---
+# --- Componente 3: USE_DYNAMIC_SCHEMA + DYNAMIC_BASES (estado atual) ---
+#
+# A Fase 2a virou o default — flag ON e Catálogo na whitelist. Estes testes
+# documentam o estado atual de config.py e servem como tripwire: alguém
+# revertendo a flag ou removendo Catálogo precisa também atualizar aqui.
 
 
-def test_FASE1_use_dynamic_schema_default_false() -> None:
-    """Componente 3: flag default off para preservar comportamento do baseline."""
-    assert config.USE_DYNAMIC_SCHEMA is False
+def test_FASE2A_use_dynamic_schema_is_active() -> None:
+    """Fase 2a: flag global ON (era False na Fase 1; ativada agora)."""
+    assert config.USE_DYNAMIC_SCHEMA is True
 
 
-def test_FASE1_dynamic_bases_default_empty() -> None:
-    """Componente 3: nenhuma base usa o registry até a Fase 2 escolher."""
-    assert config.DYNAMIC_BASES == set()
+def test_FASE2A_dynamic_bases_contains_only_catalogo() -> None:
+    """Fase 2a: só Catálogo migrado. Outras 3 entram nas Fases 2b/2c/2d."""
+    assert config.DYNAMIC_BASES == {"Catalogo"}
 
 
 # --- Componente 1: OptionSpec re-export lazy ---

@@ -112,13 +112,14 @@ CACHE_STALE_HOURS: Final = 2
 # Schema dinâmico (Fases 1+)
 # ---------------------------------------------------------------------------
 
-# Fase 1 — adapter shim em schemas.py: quando False (default) o SCHEMAS proxy
-# devolve sempre o conteúdo legado hardcoded; quando True, lê do registry
-# dinâmico para as bases listadas em DYNAMIC_BASES.
+# Fase 1 — adapter shim em schemas.py: quando False, o SCHEMAS proxy devolve
+# sempre o conteúdo legado hardcoded; quando True, lê do registry dinâmico
+# para as bases listadas em DYNAMIC_BASES. Ativado na Fase 2a (Catálogo).
 # Removida na Fase 3 (assumido sempre on).
-USE_DYNAMIC_SCHEMA: bool = False
+USE_DYNAMIC_SCHEMA: bool = True
 
 # Fase 2 — granularidade por base. Bases ausentes caem no _LEGACY_SCHEMAS
 # mesmo com USE_DYNAMIC_SCHEMA=True. Permite migração base-a-base.
-# Vazio na Fase 1; Catálogo entra na Fase 2a; demais nas Fases 2b/2c/2d.
-DYNAMIC_BASES: set[str] = set()
+# Fase 2a: Catálogo (resolve BUG-OP-08). Fases 2b/2c/2d adicionam Tarefas,
+# Clientes, Processos. Fase 3 remove esta granularidade.
+DYNAMIC_BASES: set[str] = {"Catalogo"}
