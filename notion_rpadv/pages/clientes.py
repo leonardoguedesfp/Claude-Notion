@@ -5,7 +5,6 @@ import sqlite3
 
 from PySide6.QtWidgets import QWidget
 
-from notion_bulk_edit.schemas import colunas_visiveis
 from notion_rpadv.cache.sync import SyncManager
 from notion_rpadv.models.delegates import SucessorDelegate
 from notion_rpadv.pages.base_table_page import BaseTablePage
@@ -38,7 +37,8 @@ class ClientesPage(BaseTablePage):
             audit_conn=audit_conn,
         )
         # §3.7: render "Sucessor de" with the ↳ Name (†) chip-rel treatment.
-        cols = colunas_visiveis("Clientes")
+        # Fase 4: lê cols do model (respeita user prefs em meta_user_columns).
+        cols = self._model.cols()
         if "sucessor_de" in cols:
             sd_col = cols.index("sucessor_de")
             self._table.setItemDelegateForColumn(sd_col, SucessorDelegate(self._table))

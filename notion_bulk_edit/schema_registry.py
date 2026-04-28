@@ -237,17 +237,28 @@ class SchemaRegistry:
         """Lista de keys visíveis em ordem de exibição.
 
         Sem user_id → defaults do schema (default_visible=True ordenados
-        por default_order). Com user_id → leitura de meta_user_columns
-        (Fase 4); por enquanto apenas faz fallback ao default.
+        por default_order).
+        Com user_id → consulta meta_user_columns(user_id, dsid). Se há
+        entrada, retorna na ordem armazenada (filtra slugs que não existem
+        mais no schema atual — proteção contra schema drift). Sem entrada,
+        fallback ao default.
         """
         parsed = self._schemas.get(base)
         if parsed is None:
             return []
         properties = parsed.get("properties", {})
 
-        # Fase 4 vai consultar meta_user_columns aqui. Por enquanto, ignora user_id.
-        # Mantém parâmetro na assinatura para a Fase 1 já chamar com a forma final.
-        _ = user_id  # parâmetro reservado para Fase 4
+        # Fase 4: lookup das prefs do usuário em meta_user_columns.
+        if user_id is not None:
+            dsid = self._base_to_dsid.get(base)
+            if dsid is not None:
+                user_keys = cache_db.get_user_columns(
+                    self._audit_conn, user_id, dsid,
+                )
+                if user_keys is not None:
+                    # Drift protection: filtra slugs que não estão mais no
+                    # schema. Mantém ordem definida pelo usuário.
+                    return [k for k in user_keys if k in properties]
 
         # Defaults: keys com default_visible=True, ordenados por default_order
         visible = [

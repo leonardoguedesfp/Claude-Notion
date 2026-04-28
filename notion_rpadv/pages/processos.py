@@ -5,7 +5,6 @@ import sqlite3
 
 from PySide6.QtWidgets import QWidget
 
-from notion_bulk_edit.schemas import colunas_visiveis
 from notion_rpadv.cache.sync import SyncManager
 from notion_rpadv.models.delegates import CnjDelegate
 from notion_rpadv.pages.base_table_page import BaseTablePage
@@ -41,7 +40,8 @@ class ProcessosPage(BaseTablePage):
         # with a `processo_pai` render the parent CNJ inline (↳ ABOVE own).
         # Fase 3: schema dinâmico é fonte única; slug do título é
         # "numero_do_processo" (parser slugifica "Número do processo").
-        cols = colunas_visiveis("Processos")
+        # Fase 4: lê cols do model (respeita user prefs em meta_user_columns).
+        cols = self._model.cols()
         if "numero_do_processo" in cols:
             cnj_col = cols.index("numero_do_processo")
             self._table.setItemDelegateForColumn(cnj_col, CnjDelegate(self._table))

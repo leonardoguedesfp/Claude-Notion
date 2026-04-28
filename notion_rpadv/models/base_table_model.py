@@ -180,6 +180,7 @@ class BaseTableModel(QAbstractTableModel):
         conn: sqlite3.Connection,
         parent: Any = None,
         audit_conn: sqlite3.Connection | None = None,
+        user_id: str | None = None,
     ) -> None:
         super().__init__(parent)
         self._base = base
@@ -189,7 +190,10 @@ class BaseTableModel(QAbstractTableModel):
         # audit_conn; in-memory tests that share one conn for both schemas
         # fall back to the same handle.
         self._audit_conn: sqlite3.Connection = audit_conn or conn
-        self._cols: list[str] = colunas_visiveis(base)
+        # Fase 4: user_id habilita prefs persistidas em meta_user_columns.
+        # None mantém comportamento default (defaults do schema).
+        self._user_id: str | None = user_id
+        self._cols: list[str] = colunas_visiveis(base, user_id=user_id)
         self._rows: list[dict[str, Any]] = []
         # BUG-24: keyed by (page_id, key) instead of (row_idx, key)
         self._dirty: dict[tuple[str, str], Any] = {}
@@ -215,6 +219,11 @@ class BaseTableModel(QAbstractTableModel):
         self.beginResetModel()
         saved_dirty = dict(self._dirty) if preserve_dirty else {}
         saved_originals = dict(self._dirty_original) if preserve_dirty else {}
+
+        # Fase 4: recalcula _cols a partir das prefs atuais. O picker salva
+        # em meta_user_columns e chama reload() — sem este recalc, a tabela
+        # continua mostrando as colunas antigas até o próximo restart.
+        self._cols = colunas_visiveis(self._base, user_id=self._user_id)
 
         rows = cache_db.get_all_records(self._conn, self._base)
         # BUG-V2-04: filter out template/sentinel rows by title pattern so the
@@ -580,6 +589,15 @@ class BaseTableModel(QAbstractTableModel):
     # ------------------------------------------------------------------
     # Row accessors
     # ------------------------------------------------------------------
+
+    def cols(self) -> list[str]:
+        """Fase 4: getter público da lista atual de colunas visíveis.
+
+        Retorna uma cópia para que callers não mutilem o cache interno.
+        Recalculado em ``reload()`` a partir do registry — pages e widgets
+        externos devem chamar este getter em vez de tocar ``_cols``
+        diretamente ou recalcular via ``colunas_visiveis(base)``."""
+        return list(self._cols)
 
     def get_page_id(self, row: int) -> str:
         """Return the Notion page_id for a given row index."""

@@ -290,6 +290,69 @@ def get_all_cached_schemas(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
+# ---------------------------------------------------------------------------
+# Fase 4 — picker de colunas: helpers para meta_user_columns
+# ---------------------------------------------------------------------------
+
+
+def get_user_columns(
+    conn: sqlite3.Connection, user_id: str, data_source_id: str,
+) -> list[str] | None:
+    """Fase 4: retorna a lista ordenada de slugs visíveis para
+    (user_id, data_source_id), ou None se o usuário não definiu prefs
+    (caller cai no default do schema)."""
+    row = conn.execute(
+        "SELECT visible_keys FROM meta_user_columns "
+        "WHERE user_id=? AND data_source_id=?",
+        (user_id, data_source_id),
+    ).fetchone()
+    if row is None:
+        return None
+    try:
+        keys = json.loads(row["visible_keys"])
+        if isinstance(keys, list):
+            return [str(k) for k in keys]
+        return None
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
+def set_user_columns(
+    conn: sqlite3.Connection,
+    user_id: str,
+    data_source_id: str,
+    visible_keys: list[str],
+) -> None:
+    """Fase 4: persiste a lista ordenada de slugs visíveis. Upsert por
+    (user_id, data_source_id). Commit imediato — adequado para clique de
+    usuário no picker."""
+    now = time.time()
+    keys_json = json.dumps(list(visible_keys), ensure_ascii=False)
+    conn.execute(
+        """
+        INSERT INTO meta_user_columns (user_id, data_source_id, visible_keys, updated_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(user_id, data_source_id) DO UPDATE SET
+            visible_keys = excluded.visible_keys,
+            updated_at   = excluded.updated_at
+        """,
+        (user_id, data_source_id, keys_json, now),
+    )
+    conn.commit()
+
+
+def clear_user_columns(
+    conn: sqlite3.Connection, user_id: str, data_source_id: str,
+) -> None:
+    """Fase 4: apaga prefs do usuário para uma base. Próximo lookup cai
+    no default do schema. Usado pelo botão 'Restaurar padrão' do picker."""
+    conn.execute(
+        "DELETE FROM meta_user_columns WHERE user_id=? AND data_source_id=?",
+        (user_id, data_source_id),
+    )
+    conn.commit()
+
+
 def migrate_audit_from_cache_if_needed(
     cache_conn: sqlite3.Connection,
     audit_conn: sqlite3.Connection,

@@ -94,17 +94,22 @@ def main() -> int:
             print(f"_TITLE_KEY_BY_BASE['Catalogo'] = {_TITLE_KEY_BY_BASE['Catalogo']!r}")
             assert _TITLE_KEY_BY_BASE["Catalogo"] == "nome"
 
-            # 5. colunas_visiveis legacy helper
+            # 5. colunas_visiveis helper
+            # Fase 4: helper agora delega ao registry e retorna apenas
+            # default_visible=True ordenado por default_order. Para Catalogo,
+            # title (nome) + select (categoria) + relation (tarefas) = 3.
+            # System properties (criado_em, atualizado_em) NÃO aparecem.
             cols = colunas_visiveis("Catalogo")
             print(f"colunas_visiveis('Catalogo') = {cols}")
-            # Nota: helper legacy filtra por largura_col != '0'. No registry
-            # dinamico, PropSpec.largura_col tem default '10%' (vem do _dict_to_propspec
-            # em schema_registry.py), entao TODAS as 5 chaves devem aparecer.
-            # Se viesse algo errado, alguma chave sumiria.
-            assert len(cols) == len(keys), (
-                f"colunas_visiveis filtrou {len(keys) - len(cols)} chaves "
-                "inesperadamente — verificar largura_col defaults"
+            assert cols[0] == "nome", (
+                f"título deve ser primeiro; obtido {cols!r}"
             )
+            for sys_prop in ("criado_em", "atualizado_em"):
+                assert sys_prop not in cols, (
+                    f"system property {sys_prop!r} não deveria aparecer "
+                    "no default visible (regressão da Fase 3 já corrigida)"
+                )
+            assert "categoria" in cols, "select 'categoria' deveria estar visível"
 
             # 6. Spot check: opcoes de categoria
             cat_spec = cat["categoria"]

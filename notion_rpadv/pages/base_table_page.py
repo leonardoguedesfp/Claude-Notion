@@ -5,7 +5,7 @@ import sqlite3
 from typing import Any
 
 from PySide6.QtCore import QPoint, Qt, Signal
-from PySide6.QtGui import QBrush, QColor, QFont, QPaintEvent, QPainter
+from PySide6.QtGui import QAction, QBrush, QColor, QFont, QPaintEvent, QPainter
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -22,7 +22,9 @@ from PySide6.QtWidgets import (
     QWidgetAction,
 )
 
+from notion_bulk_edit.config import DATA_SOURCES
 from notion_bulk_edit.schemas import SCHEMAS
+from notion_rpadv.cache import db as cache_db
 from notion_rpadv.cache.sync import SyncManager
 from notion_rpadv.models.base_table_model import BaseTableModel
 from notion_rpadv.models.delegates import PropDelegate
@@ -212,8 +214,11 @@ class BaseTablePage(QWidget):
         palette: Palette = DARK if dark else LIGHT
 
         # Model layer
+        # Fase 4: passa user_id para o model resolver prefs em
+        # meta_user_columns. None mantém defaults do schema.
         self._model = BaseTableModel(
             base, conn, parent=self, audit_conn=self._audit_conn,
+            user_id=user,
         )
         self._proxy = TableFilterProxy(self)
         self._proxy.setSourceModel(self._model)
@@ -335,6 +340,12 @@ class BaseTablePage(QWidget):
         )
         self._content_stack.addWidget(self._empty_state)
         root.addWidget(self._content_stack)
+
+        # Fase 4: header context menu — clique direito no cabeçalho de
+        # uma coluna oferece "Esconder coluna" (Componente 7). Não permite
+        # ocultar a coluna do título — o handler protege contra isso.
+        header.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        header.customContextMenuRequested.connect(self._on_header_context_menu)
 
         # ---- Floating save bar (overlay) ----
         self._save_bar = FloatingSaveBar(parent=self)
@@ -459,6 +470,15 @@ class BaseTablePage(QWidget):
         )
         self._filter_btn.clicked.connect(self._open_filter_menu)
         row.addWidget(self._filter_btn)
+
+        # 5b. Colunas button (Fase 4 — picker de visibilidade)
+        self._cols_btn = QPushButton("⋮ Colunas")
+        self._cols_btn.setObjectName("BtnGhost")
+        self._cols_btn.setFixedHeight(32)
+        self._cols_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._cols_btn.setStyleSheet(_btn_ghost_css(p))
+        self._cols_btn.clicked.connect(self._open_columns_picker)
+        row.addWidget(self._cols_btn)
 
         # 6. Vertical divider
         divider = QFrame()
@@ -626,6 +646,7 @@ class BaseTablePage(QWidget):
             ("_toolbar_meta", _toolbar_meta_css),
             ("_search_edit", _search_input_css),
             ("_filter_btn", _btn_ghost_css),
+            ("_cols_btn", _btn_ghost_css),  # Fase 4
             ("_sync_btn", _btn_secondary_css),
             ("_new_btn", _btn_primary_css),
         ):
@@ -672,6 +693,9 @@ class BaseTablePage(QWidget):
             self._new_btn.setEnabled(not is_empty)
         if hasattr(self, "_filter_btn"):
             self._filter_btn.setEnabled(not is_empty)
+        # Fase 4: o picker de colunas faz sentido mesmo sem registros
+        # (usuário pode querer pré-configurar antes do primeiro sync). Sem
+        # desabilitar.
 
     def _format_last_sync_for_empty(self) -> str:
         """Build the EmptyState footer text from the cache's last sync ts."""
@@ -709,7 +733,7 @@ class BaseTablePage(QWidget):
         if not hasattr(self, "_table"):
             return
         from PySide6.QtGui import QFont, QFontMetrics
-        from notion_bulk_edit.schemas import get_prop, colunas_visiveis
+        from notion_bulk_edit.schemas import get_prop
 
         header = self._table.horizontalHeader()
         # Header QSS: font-size 10px, weight 700, letter-spacing 0.06em,
@@ -722,7 +746,9 @@ class BaseTablePage(QWidget):
         padding_px = 12 * 2  # left + right
         sort_indicator_px = 16
 
-        cols = colunas_visiveis(self._base)
+        # Fase 4: lê do cache do model (recalculado em reload) em vez de
+        # consultar colunas_visiveis(base) repetidamente.
+        cols = self._model.cols()
         for col in range(self._model.columnCount()):
             label = self._model.headerData(col, Qt.Orientation.Horizontal) or ""
             text = str(label).upper()  # QSS text-transform: uppercase
@@ -790,17 +816,17 @@ class BaseTablePage(QWidget):
 
     def _on_filter_chip_removed(self, key: str) -> None:
         """§3.9: × on a chip clears that single column's filter."""
-        from notion_bulk_edit.schemas import colunas_visiveis
+        # Fase 4: usa cache do model (recalculado em reload).
         self._active_filters.pop(key, None)
-        cols = colunas_visiveis(self._base)
+        cols = self._model.cols()
         if key in cols:
             self._proxy.set_col_filter(cols.index(key), None)
         self._refresh_filter_bar()
 
     def _on_clear_all_filters(self) -> None:
         """§3.9: 'Limpar todos' clears every active column filter at once."""
-        from notion_bulk_edit.schemas import colunas_visiveis
-        cols = colunas_visiveis(self._base)
+        # Fase 4: usa cache do model (recalculado em reload).
+        cols = self._model.cols()
         for key in list(self._active_filters.keys()):
             if key in cols:
                 self._proxy.set_col_filter(cols.index(key), None)
@@ -811,10 +837,11 @@ class BaseTablePage(QWidget):
         """§3.2: navigate to the related record when a relation cell is
         double-clicked. The cell stores list[page_id] in EditRole; we pick
         the first id and emit (target_base, page_id) for MainWindow."""
-        from notion_bulk_edit.schemas import colunas_visiveis, get_prop
+        from notion_bulk_edit.schemas import get_prop
         if not index.isValid():
             return
-        cols = colunas_visiveis(self._base)
+        # Fase 4: usa cache do model (recalculado em reload).
+        cols = self._model.cols()
         col = index.column()
         if col >= len(cols):
             return
@@ -987,3 +1014,195 @@ class BaseTablePage(QWidget):
                 menu.addSeparator()
 
         menu.exec(self._filter_btn.mapToGlobal(QPoint(0, self._filter_btn.height())))
+
+    # ------------------------------------------------------------------
+    # Fase 4 — picker de colunas + header context menu
+    # ------------------------------------------------------------------
+
+    def _qmenu_stylesheet(self, p: Palette) -> str:
+        """CSS compartilhado pelo picker e pelo header context menu.
+        Espelha o pattern usado em ``_open_filter_menu``."""
+        return (
+            f"QMenu {{"
+            f" background-color: {p.app_panel}; color: {p.app_fg};"
+            f" border: 1px solid {p.app_border};"
+            f" border-radius: {RADIUS_MD}px; padding: {SP_2}px; }}"
+            f"QMenu::item {{ padding: {SP_2}px {SP_3}px; }}"
+            f"QMenu::item:selected {{"
+            f" background-color: {p.app_row_hover}; }}"
+            f"QMenu::separator {{ height: 1px;"
+            f" background-color: {p.app_border};"
+            f" margin: {SP_1}px {SP_2}px; }}"
+        )
+
+    def _open_columns_picker(self) -> None:
+        """Fase 4: abre QMenu com checkboxes de visibilidade. Toggle salva
+        em ``meta_user_columns``; reload do model reflete a mudança.
+
+        Layout: seção "Visíveis" (atual ``_cols`` na ordem) → divider →
+        seção "Ocultas" (resto do schema, ordenado por ``default_order``)
+        → divider → "Restaurar padrão". Coluna do título aparece
+        desabilitada.
+        """
+        p: Palette = DARK if self._dark else LIGHT
+        menu = QMenu(self)
+        menu.setStyleSheet(self._qmenu_stylesheet(p))
+
+        # Schema completo da base (todas as keys disponíveis).
+        schema = SCHEMAS.get(self._base, {})
+        visible_set = set(self._model.cols())
+
+        # Title slug — não permite ocultar.
+        from notion_rpadv.models.base_table_model import _TITLE_KEY_BY_BASE
+        title_key = _TITLE_KEY_BY_BASE.get(self._base, "")
+
+        section_label_css = (
+            f"QLabel {{"
+            f" color: {p.app_fg_muted}; font-size: {FS_SM}px;"
+            f" font-weight: {FW_BOLD}; padding: {SP_1}px {SP_3}px;"
+            f" background: transparent; }}"
+        )
+        checkbox_css = (
+            f"QCheckBox {{"
+            f" color: {p.app_fg}; font-size: {FS_MD}px;"
+            f" padding: {SP_1}px {SP_3}px; background: transparent; }}"
+            f"QCheckBox:disabled {{ color: {p.app_fg_subtle}; }}"
+        )
+
+        # Seção "Visíveis" — atual _cols, mantém ordem.
+        if self._model.cols():
+            label_visible = QWidgetAction(menu)
+            lbl = QLabel("  Visíveis")
+            lbl.setStyleSheet(section_label_css)
+            label_visible.setDefaultWidget(lbl)
+            menu.addAction(label_visible)
+
+            for slug in self._model.cols():
+                spec = schema.get(slug)
+                if spec is None:
+                    continue
+                wa = QWidgetAction(menu)
+                cb = QCheckBox(f"  {spec.label}")
+                cb.setChecked(True)
+                if slug == title_key:
+                    cb.setEnabled(False)
+                    cb.setToolTip(
+                        "A coluna do título não pode ser ocultada.",
+                    )
+                cb.setStyleSheet(checkbox_css)
+                cb.toggled.connect(self._make_columns_picker_handler(slug))
+                wa.setDefaultWidget(cb)
+                menu.addAction(wa)
+
+        # Seção "Ocultas" — slugs do schema fora de _cols, ordenados pela
+        # ordem canônica da API (default_order ascending).
+        # SCHEMAS proxy retorna PropSpec mas não expõe default_order — vamos
+        # ler do schema parsed do registry para ordenar corretamente.
+        from notion_bulk_edit.schema_registry import get_schema_registry
+        try:
+            parsed = get_schema_registry()._schemas.get(self._base, {})
+        except RuntimeError:
+            parsed = {}
+        properties = parsed.get("properties", {})
+        hidden_with_order = [
+            (properties.get(k, {}).get("default_order", 999), k)
+            for k in schema if k not in visible_set
+        ]
+        hidden_with_order.sort(key=lambda t: t[0])
+        hidden_keys = [k for _, k in hidden_with_order]
+
+        if hidden_keys:
+            menu.addSeparator()
+            label_hidden = QWidgetAction(menu)
+            lbl_h = QLabel("  Ocultas")
+            lbl_h.setStyleSheet(section_label_css)
+            label_hidden.setDefaultWidget(lbl_h)
+            menu.addAction(label_hidden)
+
+            for slug in hidden_keys:
+                spec = schema.get(slug)
+                if spec is None:
+                    continue
+                wa = QWidgetAction(menu)
+                cb = QCheckBox(f"  {spec.label}")
+                cb.setChecked(False)
+                cb.setStyleSheet(checkbox_css)
+                cb.toggled.connect(self._make_columns_picker_handler(slug))
+                wa.setDefaultWidget(cb)
+                menu.addAction(wa)
+
+        menu.addSeparator()
+
+        # Botão "Restaurar padrão"
+        reset_action = QAction("Restaurar padrão", menu)
+        reset_action.triggered.connect(self._reset_columns_to_default)
+        menu.addAction(reset_action)
+
+        menu.exec(
+            self._cols_btn.mapToGlobal(QPoint(0, self._cols_btn.height())),
+        )
+
+    def _make_columns_picker_handler(self, slug: str) -> Any:
+        """Retorna closure que persiste a nova lista de visíveis e recarrega
+        o model. Closure captura ``slug`` para que o handler saiba qual
+        coluna está sendo togglada."""
+        def handler(checked: bool) -> None:
+            dsid = DATA_SOURCES.get(self._base)
+            if dsid is None:
+                return  # base desconhecida — silent no-op
+
+            current = list(self._model.cols())
+            if checked:
+                # Adiciona ao final (ordem do schema é preservada na primeira
+                # visualização; novas adições vão pro fim).
+                if slug not in current:
+                    current.append(slug)
+            else:
+                current = [k for k in current if k != slug]
+
+            cache_db.set_user_columns(
+                self._audit_conn, self._user, dsid, current,
+            )
+            # Recarrega — _cols é recalculado a partir do registry. Preserva
+            # edições não-salvas (pattern do A3/Round A).
+            self._model.reload(preserve_dirty=True)
+        return handler
+
+    def _reset_columns_to_default(self) -> None:
+        """Apaga prefs do usuário para esta base; próximo reload cai no
+        default do schema (default_visible=True)."""
+        dsid = DATA_SOURCES.get(self._base)
+        if dsid is None:
+            return
+        cache_db.clear_user_columns(self._audit_conn, self._user, dsid)
+        self._model.reload(preserve_dirty=True)
+
+    def _on_header_context_menu(self, pos: QPoint) -> None:
+        """Fase 4: clique direito no header oferece 'Esconder coluna'."""
+        header = self._table.horizontalHeader()
+        section = header.logicalIndexAt(pos)
+        cols = self._model.cols()
+        if section < 0 or section >= len(cols):
+            return
+        slug = cols[section]
+
+        # Não permite ocultar coluna do título.
+        from notion_rpadv.models.base_table_model import _TITLE_KEY_BY_BASE
+        if slug == _TITLE_KEY_BY_BASE.get(self._base, ""):
+            return
+
+        p: Palette = DARK if self._dark else LIGHT
+        menu = QMenu(self)
+        menu.setStyleSheet(self._qmenu_stylesheet(p))
+
+        schema = SCHEMAS.get(self._base, {})
+        spec = schema.get(slug)
+        label = spec.label if spec is not None else slug
+
+        hide_action = QAction(f"Esconder coluna '{label}'", menu)
+        hide_action.triggered.connect(
+            lambda: self._make_columns_picker_handler(slug)(False),
+        )
+        menu.addAction(hide_action)
+
+        menu.exec(header.mapToGlobal(pos))
