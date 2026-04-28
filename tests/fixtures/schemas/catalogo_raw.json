@@ -1,0 +1,156 @@
+{
+  "object": "data_source",
+  "id": "79afc833-77e2-4574-98ba-ebed7bd7e66c",
+  "cover": null,
+  "icon": null,
+  "created_time": "2026-04-17T17:05:00.000Z",
+  "created_by": {
+    "object": "user",
+    "id": "22fd872b-594c-81bf-847e-000262ec6682"
+  },
+  "last_edited_by": {
+    "object": "user",
+    "id": "22fd872b-594c-81bf-847e-000262ec6682"
+  },
+  "last_edited_time": "2026-04-21T12:48:00.000Z",
+  "title": [
+    {
+      "type": "text",
+      "text": {
+        "content": "📚 Catálogo de Tarefas",
+        "link": null
+      },
+      "annotations": {
+        "bold": false,
+        "italic": false,
+        "strikethrough": false,
+        "underline": false,
+        "code": false,
+        "color": "default"
+      },
+      "plain_text": "📚 Catálogo de Tarefas",
+      "href": null
+    }
+  ],
+  "description": [
+    {
+      "type": "text",
+      "text": {
+        "content": "Catálogo central de todos os tipos de tarefa que o escritório pode realizar. Cada tarefa em 📋 Tarefas aponta para um registro aqui, permitindo padronizar prazos, checklists e base legal.",
+        "link": null
+      },
+      "annotations": {
+        "bold": false,
+        "italic": false,
+        "strikethrough": false,
+        "underline": false,
+        "code": false,
+        "color": "default"
+      },
+      "plain_text": "Catálogo central de todos os tipos de tarefa que o escritório pode realizar. Cada tarefa em 📋 Tarefas aponta para um registro aqui, permitindo padronizar prazos, checklists e base legal.",
+      "href": null
+    }
+  ],
+  "is_inline": false,
+  "properties": {
+    "Categoria": {
+      "id": "%3EDCv",
+      "name": "Categoria",
+      "description": null,
+      "type": "select",
+      "select": {
+        "options": [
+          {
+            "id": "5ebb7b28-bf67-4d34-a492-163d51f6daba",
+            "name": "Peças processuais",
+            "color": "blue",
+            "description": null
+          },
+          {
+            "id": "9bf0ee2a-e6f9-460b-9edf-d40dcba5ea93",
+            "name": "Outras tarefas jurídicas",
+            "color": "purple",
+            "description": null
+          },
+          {
+            "id": "48fcede6-00e9-4b5d-9c8c-be8d5db4d5dd",
+            "name": "Administrativo",
+            "color": "gray",
+            "description": null
+          },
+          {
+            "id": "a27f8db6-fb39-4ea8-bc23-550b829d1e3d",
+            "name": "Diversos",
+            "color": "orange",
+            "description": null
+          }
+        ]
+      }
+    },
+    "Prazo": {
+      "id": "NY%7B%7D",
+      "name": "Prazo",
+      "description": "Prazo legal em dias. Corridos ou úteis conforme a natureza - anotar em Observações se houver dúvida",
+      "type": "number",
+      "number": {
+        "format": "number"
+      }
+    },
+    "Observações": {
+      "id": "oDhn",
+      "name": "Observações",
+      "description": "Instruções internas, dicas, armadilhas conhecidas",
+      "type": "rich_text",
+      "rich_text": {}
+    },
+    "Tarefas": {
+      "id": "xc%5Ch",
+      "name": "Tarefas",
+      "description": null,
+      "type": "relation",
+      "relation": {
+        "database_id": "b40831f4-657a-4c75-80bc-db276b082729",
+        "data_source_id": "3a8bb311-5c1b-42ac-a3b2-859b75911e91",
+        "type": "dual_property",
+        "dual_property": {
+          "synced_property_name": "Tipo de tarefa",
+          "synced_property_id": "f%3Bd%5B"
+        }
+      }
+    },
+    "Atualizado em": {
+      "id": "xo%60g",
+      "name": "Atualizado em",
+      "description": null,
+      "type": "last_edited_time",
+      "last_edited_time": {}
+    },
+    "Criado em": {
+      "id": "%7B%40Z%3E",
+      "name": "Criado em",
+      "description": null,
+      "type": "created_time",
+      "created_time": {}
+    },
+    "Nome": {
+      "id": "title",
+      "name": "Nome",
+      "description": null,
+      "type": "title",
+      "title": {}
+    }
+  },
+  "parent": {
+    "type": "database_id",
+    "database_id": "992e641b-c0f8-437d-9217-99e7804beb82"
+  },
+  "database_parent": {
+    "type": "page_id",
+    "page_id": "34530d90-c916-8121-bc9e-fc5aa10ab7c9"
+  },
+  "url": "https://www.notion.so/992e641bc0f8437d921799e7804beb82",
+  "public_url": null,
+  "in_trash": false,
+  "archived": false,
+  "request_id": "62db04a6-f6fc-45e0-ad67-5fbec30da552"
+}

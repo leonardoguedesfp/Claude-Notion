@@ -69,7 +69,12 @@ def init_cache_db(conn: sqlite3.Connection) -> None:
 
 def init_audit_db(conn: sqlite3.Connection) -> None:
     """BUG-OP-09: create only the audit-side tables (pending_edits +
-    edit_log + meta). Idempotent."""
+    edit_log + meta). Idempotent.
+
+    Fase 0 — schema dinâmico: também cria meta_schemas (cache do schema das
+    bases Notion, descoberto via API) e meta_user_columns (preferências
+    de visibilidade de colunas por usuário; populada pela Fase 4).
+    """
     _init_meta(conn)
     conn.executescript(
         """
@@ -94,6 +99,29 @@ def init_audit_db(conn: sqlite3.Connection) -> None:
             applied_at REAL    NOT NULL,
             user       TEXT    NOT NULL,
             reverted   INTEGER NOT NULL DEFAULT 0
+        );
+
+        -- Fase 0 — schema dinâmico: cache do schema das bases Notion.
+        CREATE TABLE IF NOT EXISTS meta_schemas (
+            data_source_id TEXT PRIMARY KEY,
+            base_label     TEXT    NOT NULL,
+            title_property TEXT,
+            schema_json    TEXT    NOT NULL,
+            schema_hash    TEXT    NOT NULL,
+            fetched_at     REAL    NOT NULL,
+            api_version    TEXT    NOT NULL DEFAULT '2025-09-03',
+            cache_version  INTEGER NOT NULL DEFAULT 1
+        );
+
+        -- Fase 0 — schema dinâmico: tabela criada agora; populada pela Fase 4
+        -- (picker de colunas). Mantém preferências de visibilidade e ordem
+        -- de colunas por usuário e por base.
+        CREATE TABLE IF NOT EXISTS meta_user_columns (
+            user_id        TEXT NOT NULL,
+            data_source_id TEXT NOT NULL,
+            visible_keys   TEXT NOT NULL,
+            updated_at     REAL NOT NULL,
+            PRIMARY KEY (user_id, data_source_id)
         );
         """
     )
@@ -198,6 +226,68 @@ def _get_meta(conn: sqlite3.Connection, key: str) -> str | None:
         "SELECT value FROM meta WHERE key=?", (key,)
     ).fetchone()
     return None if row is None else str(row["value"])
+
+
+# ---------------------------------------------------------------------------
+# Fase 0 — schema dinâmico: helpers para meta_schemas
+# ---------------------------------------------------------------------------
+
+
+def upsert_schema(
+    conn: sqlite3.Connection,
+    data_source_id: str,
+    base_label: str,
+    title_property: str | None,
+    schema_json: str,
+    schema_hash: str,
+    fetched_at: float,
+    api_version: str = "2025-09-03",
+    cache_version: int = 1,
+) -> None:
+    """Fase 0 — schema dinâmico: insere ou atualiza o schema cacheado de
+    uma base. Usa data_source_id como chave; chamadas repetidas atualizam
+    a mesma linha (não duplicam)."""
+    conn.execute(
+        """
+        INSERT INTO meta_schemas (
+            data_source_id, base_label, title_property, schema_json,
+            schema_hash, fetched_at, api_version, cache_version
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(data_source_id) DO UPDATE SET
+            base_label    = excluded.base_label,
+            title_property = excluded.title_property,
+            schema_json   = excluded.schema_json,
+            schema_hash   = excluded.schema_hash,
+            fetched_at    = excluded.fetched_at,
+            api_version   = excluded.api_version,
+            cache_version = excluded.cache_version
+        """,
+        (
+            data_source_id, base_label, title_property, schema_json,
+            schema_hash, fetched_at, api_version, cache_version,
+        ),
+    )
+    conn.commit()
+
+
+def get_cached_schema(
+    conn: sqlite3.Connection, data_source_id: str,
+) -> dict[str, Any] | None:
+    """Fase 0 — schema dinâmico: retorna o registro de meta_schemas como
+    dict (com schema_json ainda como string), ou None se não cacheado."""
+    row = conn.execute(
+        "SELECT * FROM meta_schemas WHERE data_source_id=?",
+        (data_source_id,),
+    ).fetchone()
+    return None if row is None else dict(row)
+
+
+def get_all_cached_schemas(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    """Fase 0 — schema dinâmico: retorna todos os schemas cacheados como
+    lista de dicts. Usado no boot do registry."""
+    rows = conn.execute("SELECT * FROM meta_schemas").fetchall()
+    return [dict(r) for r in rows]
 
 
 def migrate_audit_from_cache_if_needed(
