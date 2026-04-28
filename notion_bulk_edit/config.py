@@ -126,5 +126,8 @@ USE_DYNAMIC_SCHEMA: bool = True
 # Fase 2c: Clientes (32 props; slugs alinhados — cpf→cpf_cnpj, email→e_mail,
 #   notas→observacoes; cidade vira rich_text; coluna virtual n_processos
 #   é descontinuada).
-# Fase 2d adiciona Processos. Fase 3 remove granularidade.
-DYNAMIC_BASES: set[str] = {"Catalogo", "Tarefas", "Clientes"}
+# Fase 2d: Processos (37 props, era 38; valor_causa e Criado em 1 dropados
+#   no Notion; tribunal cresceu para 17 opções incl. TRT/2; em-dash U+2014
+#   preservado em 7 valores de Tipo de ação; slug do título passa de
+#   "cnj" para "numero_do_processo"). Fase 3 remove esta granularidade.
+DYNAMIC_BASES: set[str] = {"Catalogo", "Tarefas", "Clientes", "Processos"}

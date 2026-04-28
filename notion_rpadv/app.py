@@ -730,22 +730,25 @@ class MainWindow(QMainWindow):
         """BUG-OP-03: render `<record title> (<field label>)` for up to
         *max_items* failures so the toast points the user at the rows that
         need attention. Falls back to page_id / raw key when the title or
-        schema label is missing."""
+        schema label is missing.
+
+        Fase 2d: usa _title_value_for_record para suportar tanto o slug
+        primário (numero_do_processo) quanto o legado (cnj) durante o
+        decay do cache.
+        """
         # Lazy imports to keep app.py startup light.
         from notion_bulk_edit.schemas import get_prop
         from notion_rpadv.cache import db as cache_db
-        from notion_rpadv.models.base_table_model import _TITLE_KEY_BY_BASE
-        title_key = _TITLE_KEY_BY_BASE.get(base, "")
+        from notion_rpadv.models.base_table_model import _title_value_for_record
         snippets: list[str] = []
         for r in failed[:max_items]:
             pid = str(r.get("page_id", ""))
             key = str(r.get("key", ""))
-            # Title (record name)
+            # Title (record name) — defensive lookup com fallback para slugs legados.
             title = ""
-            if title_key:
-                rec = cache_db.get_record(self._conn, base, pid)
-                if rec is not None:
-                    title = str(rec.get(title_key) or "").strip()
+            rec = cache_db.get_record(self._conn, base, pid)
+            if rec is not None:
+                title = _title_value_for_record(rec, base).strip()
             if not title:
                 title = pid[:8] or "?"
             # Field label

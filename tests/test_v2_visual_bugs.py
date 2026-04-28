@@ -38,10 +38,12 @@ def _make_cache() -> sqlite3.Connection:
 
 @requires_pyside6
 def test_looks_like_template_row_detects_orange_square():
-    """BUG-V2-04: '🟧 Modelo — usar como template' is recognised as a template."""
+    """BUG-V2-04: '🟧 Modelo — usar como template' is recognised as a template.
+    Fase 2d: assinatura virou (record, base) — base resolve title slug."""
     from notion_rpadv.models.base_table_model import _looks_like_template_row
+    # Clientes usa slug "nome" — válido tanto no legado quanto no dinâmico.
     assert _looks_like_template_row(
-        {"nome": "🟧 Modelo — usar como template"}, "nome"
+        {"nome": "🟧 Modelo — usar como template"}, "Clientes",
     ) is True
 
 
@@ -54,7 +56,7 @@ def test_looks_like_template_row_handles_dash_variants():
         "modelo – usar como template",  # en-dash
         "MODELO — USAR COMO TEMPLATE",
     ):
-        assert _looks_like_template_row({"nome": title}, "nome") is True, title
+        assert _looks_like_template_row({"nome": title}, "Clientes") is True, title
 
 
 @requires_pyside6
@@ -62,7 +64,7 @@ def test_looks_like_template_row_passes_real_data():
     """BUG-V2-04: real client/process names are NOT flagged as templates."""
     from notion_rpadv.models.base_table_model import _looks_like_template_row
     for title in ("João da Silva", "0001234-12.2024.8.13.0024", "Empresa XYZ"):
-        assert _looks_like_template_row({"nome": title}, "nome") is False, title
+        assert _looks_like_template_row({"nome": title}, "Clientes") is False, title
 
 
 @requires_pyside6

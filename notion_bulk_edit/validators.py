@@ -199,8 +199,11 @@ def validar_valor(base: str, campo: str, valor: Any) -> list[ValidationError]:
         return erros  # Nada mais a validar se vazio e não obrigatório
 
     # Validações específicas por tipo
+    # Fase 2d: o slug do título de Processos virou "numero_do_processo".
+    # Aceitar ambos para robustez quando USE_DYNAMIC_SCHEMA estiver
+    # desligado e o legado servir "cnj".
     match spec.tipo:
-        case "title" if campo == "cnj":
+        case "title" if campo in ("cnj", "numero_do_processo"):
             erros.extend(validar_cnj(str(valor)))
 
         case "rich_text" if campo == "cpf":

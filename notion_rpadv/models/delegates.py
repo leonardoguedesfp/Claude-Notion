@@ -488,13 +488,20 @@ class CnjDelegate(QStyledItemDelegate):
             parent_ids = []
 
         # Resolve parent CNJ from cache (may be empty if parent not synced).
+        # Fase 2d: title slug mudou para "numero_do_processo" (schema dinâmico);
+        # tentamos primeiro o slug novo e fazemos fallback no antigo "cnj"
+        # para registros legados ainda no cache até a próxima sync.
         parent_cnj = ""
         if isinstance(parent_ids, list) and parent_ids:
             try:
                 from notion_rpadv.cache import db as cache_db
                 parent_rec = cache_db.get_record(conn, "Processos", str(parent_ids[0]))
                 if parent_rec is not None:
-                    parent_cnj = str(parent_rec.get("cnj") or "")
+                    parent_cnj = str(
+                        parent_rec.get("numero_do_processo")
+                        or parent_rec.get("cnj")
+                        or "",
+                    )
             except Exception:  # noqa: BLE001
                 parent_cnj = ""
 

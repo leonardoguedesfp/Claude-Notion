@@ -39,7 +39,13 @@ class ProcessosPage(BaseTablePage):
         )
         # §3.8: install the CNJ-specific delegate on the CNJ column so rows
         # with a `processo_pai` render the parent CNJ inline (↳ ABOVE own).
+        # Fase 2d: o slug do título virou "numero_do_processo" no schema
+        # dinâmico. Mantemos fallback "cnj" para o caso (improvável) de
+        # USE_DYNAMIC_SCHEMA estar desligado e o legado servir o schema.
         cols = colunas_visiveis("Processos")
-        if "cnj" in cols:
-            cnj_col = cols.index("cnj")
-            self._table.setItemDelegateForColumn(cnj_col, CnjDelegate(self._table))
+        for slug in ("numero_do_processo", "cnj"):
+            if slug in cols:
+                self._table.setItemDelegateForColumn(
+                    cols.index(slug), CnjDelegate(self._table),
+                )
+                break

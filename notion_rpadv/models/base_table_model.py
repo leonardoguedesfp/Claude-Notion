@@ -12,16 +12,46 @@ from notion_bulk_edit.schemas import PropSpec, colunas_visiveis, get_prop, is_na
 from notion_rpadv.cache import db as cache_db
 from notion_rpadv.theme.tokens import LIGHT
 
-# BUG-V3: title key used when resolving relation page_ids to display names
-# Fase 2a: Catalogo virou schema dinâmico — slug do title é "nome"
-# (parser slugifica "Nome" → "nome"), não mais o "titulo" do _LEGACY_SCHEMAS.
-# Outras 3 bases continuam com slugs do legado até suas respectivas Fases 2b/c/d.
+# BUG-V3: title key used when resolving relation page_ids to display names.
+# Slug primário do título de cada base (vem do schema dinâmico após Fase 2*).
 _TITLE_KEY_BY_BASE: dict[str, str] = {
     "Clientes": "nome",
-    "Processos": "cnj",
-    "Tarefas": "tarefa",  # Fase 2b — slug do schema dinâmico (parser slugifica "Tarefa")
-    "Catalogo": "nome",   # Fase 2a — slug do schema dinâmico (parser slugifica "Nome")
+    "Processos": "numero_do_processo",  # Fase 2d — parser slugifica "Número do processo"
+    "Tarefas": "tarefa",   # Fase 2b — slug do schema dinâmico (parser slugifica "Tarefa")
+    "Catalogo": "nome",    # Fase 2a — slug do schema dinâmico (parser slugifica "Nome")
 }
+
+# Fase 2d: slugs legados que podem aparecer em records do cache ainda não
+# re-syncados após a migração (decay natural). Usado como fallback de
+# defensive lookup. Vazio quando o slug primário == slug legado (Clientes,
+# Catalogo) ou quando a base nunca teve outro slug.
+_LEGACY_TITLE_KEYS_BY_BASE: dict[str, tuple[str, ...]] = {
+    "Processos": ("cnj",),
+    "Tarefas": ("titulo",),
+    # Clientes e Catalogo têm slug primário == slug legado, sem fallback.
+}
+
+
+def _title_value_for_record(record: dict, base: str) -> str:
+    """Retorna o título de um record tentando primeiro o slug primário e
+    depois fallbacks legados. String vazia se nenhum slot tem valor.
+
+    Resolve o problema da migração: cache.db.records[Processos] de syncs
+    pré-Fase 2d ainda usa key 'cnj'; após primeira sync pós-2d usa
+    'numero_do_processo'. Helpers que dependem do título (filtro de
+    template, toast de falha de save, render do CnjDelegate, etc.)
+    precisam funcionar nos dois cenários durante o decay.
+    """
+    primary = _TITLE_KEY_BY_BASE.get(base)
+    if primary:
+        v = record.get(primary)
+        if isinstance(v, str) and v:
+            return v
+    for legacy in _LEGACY_TITLE_KEYS_BY_BASE.get(base, ()):
+        v = record.get(legacy)
+        if isinstance(v, str) and v:
+            return v
+    return ""
 
 # BUG-V2-04: title fragments that mark a Notion "template" row that must
 # never appear in the user-facing tables, even if the sync filter missed it.
@@ -34,11 +64,16 @@ _TEMPLATE_TITLE_FRAGMENTS: tuple[str, ...] = (
 )
 
 
-def _looks_like_template_row(record: dict, title_key: str) -> bool:
-    """BUG-V2-04: detect rows whose title matches the "Modelo — usar como template"
-    convention. The check is case-insensitive and tolerant to em/en-dash variants."""
-    title = record.get(title_key)
-    if not isinstance(title, str) or not title:
+def _looks_like_template_row(record: dict, base: str) -> bool:
+    """BUG-V2-04: detect rows whose title matches the "Modelo — usar como
+    template" convention. Case-insensitive, tolerant to em/en-dash variants.
+
+    Fase 2d: assinatura mudou de (record, title_key) para (record, base) para
+    suportar fallback legado durante o decay do cache (record sem o slug
+    primário cai no slug legado via _title_value_for_record).
+    """
+    title = _title_value_for_record(record, base)
+    if not title:
         return False
     lowered = title.lower()
     return any(frag.lower() in lowered for frag in _TEMPLATE_TITLE_FRAGMENTS)
@@ -215,9 +250,10 @@ class BaseTableModel(QAbstractTableModel):
         rows = cache_db.get_all_records(self._conn, self._base)
         # BUG-V2-04: filter out template/sentinel rows by title pattern so the
         # "🟧 Modelo — usar como template" row never reaches the table view.
-        title_key = _TITLE_KEY_BY_BASE.get(self._base, "")
-        if title_key:
-            rows = [r for r in rows if not _looks_like_template_row(r, title_key)]
+        # Fase 2d: helper agora recebe a base (não a title_key) e faz fallback
+        # para slugs legados (decay natural do cache pré-migração).
+        if self._base in _TITLE_KEY_BY_BASE:
+            rows = [r for r in rows if not _looks_like_template_row(r, self._base)]
         self._rows = rows
 
         if not preserve_dirty:

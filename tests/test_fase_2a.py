@@ -85,10 +85,10 @@ def test_FASE2A_title_key_for_catalogo_is_nome() -> None:
     assert _TITLE_KEY_BY_BASE["Catalogo"] == "nome"
 
 
-def test_FASE2A_title_key_for_other_bases_unchanged() -> None:
-    """Bases ainda no legado (Processos, Clientes) mantêm slugs do legado.
-    Tarefas migrou na Fase 2b (slug "tarefa"); ver test_FASE2B_title_key."""
-    assert _TITLE_KEY_BY_BASE["Processos"] == "cnj"
+def test_FASE2A_title_key_clientes_unchanged() -> None:
+    """Clientes manteve slug 'nome' (já alinhado entre legado e dinâmico).
+    Processos virou 'numero_do_processo' na Fase 2d (ver test_FASE2D_*).
+    Tarefas virou 'tarefa' na Fase 2b (ver test_FASE2B_*)."""
     assert _TITLE_KEY_BY_BASE["Clientes"] == "nome"
 
 

@@ -72,12 +72,11 @@ def _populate_clientes_in_registry() -> sqlite3.Connection:
 
 
 def test_FASE2C_clientes_in_dynamic_bases() -> None:
-    """Fase 2c adiciona Clientes; Catálogo/Tarefas continuam migradas."""
+    """Fase 2c adiciona Clientes; Catálogo/Tarefas continuam migradas.
+    Processos foi adicionada na Fase 2d (ver test_FASE2D_processos_in_dynamic_bases)."""
     assert "Clientes" in config.DYNAMIC_BASES
     assert "Catalogo" in config.DYNAMIC_BASES
     assert "Tarefas" in config.DYNAMIC_BASES
-    # Processos ainda no legado
-    assert "Processos" not in config.DYNAMIC_BASES
 
 
 def test_FASE2C_title_key_clientes_remains_nome() -> None:
