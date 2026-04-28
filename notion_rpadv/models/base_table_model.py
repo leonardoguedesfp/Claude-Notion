@@ -19,8 +19,8 @@ from notion_rpadv.theme.tokens import LIGHT
 _TITLE_KEY_BY_BASE: dict[str, str] = {
     "Clientes": "nome",
     "Processos": "cnj",
-    "Tarefas": "titulo",
-    "Catalogo": "nome",  # Fase 2a — slug do schema dinâmico
+    "Tarefas": "tarefa",  # Fase 2b — slug do schema dinâmico (parser slugifica "Tarefa")
+    "Catalogo": "nome",   # Fase 2a — slug do schema dinâmico (parser slugifica "Nome")
 }
 
 # BUG-V2-04: title fragments that mark a Notion "template" row that must

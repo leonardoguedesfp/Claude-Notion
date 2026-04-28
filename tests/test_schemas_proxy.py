@@ -80,9 +80,10 @@ def test_FASE2A_use_dynamic_schema_is_active() -> None:
     assert config.USE_DYNAMIC_SCHEMA is True
 
 
-def test_FASE2A_dynamic_bases_contains_only_catalogo() -> None:
-    """Fase 2a: só Catálogo migrado. Outras 3 entram nas Fases 2b/2c/2d."""
-    assert config.DYNAMIC_BASES == {"Catalogo"}
+def test_FASE2A_dynamic_bases_contains_catalogo() -> None:
+    """Fase 2a migrou Catálogo. Bases adicionais entram nas Fases
+    seguintes (2b adicionou Tarefas; ver test_FASE2B_*)."""
+    assert "Catalogo" in config.DYNAMIC_BASES
 
 
 # --- Componente 1: OptionSpec re-export lazy ---

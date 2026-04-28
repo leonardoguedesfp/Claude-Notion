@@ -120,6 +120,8 @@ USE_DYNAMIC_SCHEMA: bool = True
 
 # Fase 2 — granularidade por base. Bases ausentes caem no _LEGACY_SCHEMAS
 # mesmo com USE_DYNAMIC_SCHEMA=True. Permite migração base-a-base.
-# Fase 2a: Catálogo (resolve BUG-OP-08). Fases 2b/2c/2d adicionam Tarefas,
-# Clientes, Processos. Fase 3 remove esta granularidade.
-DYNAMIC_BASES: set[str] = {"Catalogo"}
+# Fase 2a: Catálogo (resolve BUG-OP-08).
+# Fase 2b: Tarefas (resolve STATUS_TAREFA hardcoded — Notion agora tem
+#   campo Status real com opções Pendente/Concluída).
+# Fases 2c/2d adicionam Clientes, Processos. Fase 3 remove granularidade.
+DYNAMIC_BASES: set[str] = {"Catalogo", "Tarefas"}

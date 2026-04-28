@@ -86,10 +86,10 @@ def test_FASE2A_title_key_for_catalogo_is_nome() -> None:
 
 
 def test_FASE2A_title_key_for_other_bases_unchanged() -> None:
-    """Outras 3 bases não foram tocadas — entram nas Fases 2b/c/d."""
+    """Bases ainda no legado (Processos, Clientes) mantêm slugs do legado.
+    Tarefas migrou na Fase 2b (slug "tarefa"); ver test_FASE2B_title_key."""
     assert _TITLE_KEY_BY_BASE["Processos"] == "cnj"
     assert _TITLE_KEY_BY_BASE["Clientes"] == "nome"
-    assert _TITLE_KEY_BY_BASE["Tarefas"] == "titulo"
 
 
 # --- Componente 4: boot wiring com filtro por DYNAMIC_BASES ---
