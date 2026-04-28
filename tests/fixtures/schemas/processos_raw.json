@@ -1,0 +1,807 @@
+{
+  "object": "data_source",
+  "id": "5e93b734-4043-4c89-a513-5e00a14081bb",
+  "cover": null,
+  "icon": null,
+  "created_time": "2026-04-17T12:43:00.000Z",
+  "created_by": {
+    "object": "user",
+    "id": "22fd872b-594c-81bf-847e-000262ec6682"
+  },
+  "last_edited_by": {
+    "object": "user",
+    "id": "22fd872b-594c-81bf-847e-000262ec6682"
+  },
+  "last_edited_time": "2026-04-26T22:27:00.000Z",
+  "title": [
+    {
+      "type": "text",
+      "text": {
+        "content": "⚖️ Processos",
+        "link": null
+      },
+      "annotations": {
+        "bold": false,
+        "italic": false,
+        "strikethrough": false,
+        "underline": false,
+        "code": false,
+        "color": "default"
+      },
+      "plain_text": "⚖️ Processos",
+      "href": null
+    }
+  ],
+  "description": [
+    {
+      "type": "text",
+      "text": {
+        "content": "Database central de processos. Cada linha é um processo (principal, incidente ou recurso com numeração própria). Recursos e incidentes que mantêm a mesma numeração CNJ do processo principal NÃO são linhas separadas — vira só mudança de Instância no mesmo registro.",
+        "link": null
+      },
+      "annotations": {
+        "bold": false,
+        "italic": false,
+        "strikethrough": false,
+        "underline": false,
+        "code": false,
+        "color": "default"
+      },
+      "plain_text": "Database central de processos. Cada linha é um processo (principal, incidente ou recurso com numeração própria). Recursos e incidentes que mantêm a mesma numeração CNJ do processo principal NÃO são linhas separadas — vira só mudança de Instância no mesmo registro.",
+      "href": null
+    }
+  ],
+  "is_inline": false,
+  "properties": {
+    "Turma no STJ/TST": {
+      "id": "%3AtYk",
+      "name": "Turma no STJ/TST",
+      "description": "Turma/Seção do STJ (ex: 3ª Turma, 2ª Seção)",
+      "type": "rich_text",
+      "rich_text": {}
+    },
+    "Tema 955 — Sobrestado": {
+      "id": "%3EhBG",
+      "name": "Tema 955 — Sobrestado",
+      "description": null,
+      "type": "checkbox",
+      "checkbox": {}
+    },
+    "Número STJ/TST": {
+      "id": "%3FXCC",
+      "name": "Número STJ/TST",
+      "description": "Numeração autônoma do STJ quando o processo sobe",
+      "type": "rich_text",
+      "rich_text": {}
+    },
+    "Clientes": {
+      "id": "%40B%3FI",
+      "name": "Clientes",
+      "description": null,
+      "type": "relation",
+      "relation": {
+        "database_id": "b015580a-d079-43a3-a57c-9e021c2a4615",
+        "data_source_id": "939e5dcf-51bd-4ffa-a28e-0313899fd229",
+        "type": "dual_property",
+        "dual_property": {
+          "synced_property_name": "Processos",
+          "synced_property_id": "cMK~"
+        }
+      }
+    },
+    "Fase": {
+      "id": "A%3Dut",
+      "name": "Fase",
+      "description": null,
+      "type": "select",
+      "select": {
+        "options": [
+          {
+            "id": "2ce6ee05-5e2e-46b8-af6d-f24253e7fd11",
+            "name": "Cognitiva",
+            "color": "blue",
+            "description": null
+          },
+          {
+            "id": "73bfccaf-0c25-4f80-96d4-2ef7f3636eba",
+            "name": "Executiva",
+            "color": "orange",
+            "description": null
+          },
+          {
+            "id": "d9aa1f38-6723-4922-b00b-1a9d056da300",
+            "name": "Liquidação pendente",
+            "color": "yellow",
+            "description": null
+          },
+          {
+            "id": "5c96419a-1ec2-473c-9afa-ff20351e93bd",
+            "name": "Liquidação de sentença",
+            "color": "red",
+            "description": null
+          },
+          {
+            "id": "d37a7848-29e6-4676-be98-a65d514d56e9",
+            "name": "TJ - sentença não será executada",
+            "color": "green",
+            "description": null
+          }
+        ]
+      }
+    },
+    "Vara": {
+      "id": "BCaf",
+      "name": "Vara",
+      "description": "Ex: 2ª Vara Cível de Brasília",
+      "type": "rich_text",
+      "rich_text": {}
+    },
+    "Criado em 1": {
+      "id": "DKAF",
+      "name": "Criado em 1",
+      "description": null,
+      "type": "created_time",
+      "created_time": {}
+    },
+    "Detalhamento da ação": {
+      "id": "Fudi",
+      "name": "Detalhamento da ação",
+      "description": "Detalhes e especificidades da ação. Para Execução de AC, preencher com o número da ação coletiva (ex: \"Ação coletiva 1097\"). Outros usos: 15 min, LS, particularidades do caso.",
+      "type": "rich_text",
+      "rich_text": {}
+    },
+    "Tipo de ação": {
+      "id": "L%60%3Dr",
+      "name": "Tipo de ação",
+      "description": null,
+      "type": "multi_select",
+      "multi_select": {
+        "options": [
+          {
+            "id": "cd8f436d-c0b9-4bb3-93a5-d1629dac9b49",
+            "name": "Revisão de benefício (Tema 955)",
+            "color": "blue",
+            "description": null
+          },
+          {
+            "id": "ca068c3d-1737-46fd-9577-4541dec5e405",
+            "name": "Revisão de benefício (antigo)",
+            "color": "blue",
+            "description": null
+          },
+          {
+            "id": "9e897336-a0b6-4e86-bbc6-8cc9c3d4268b",
+            "name": "Indenização — I",
+            "color": "orange",
+            "description": null
+          },
+          {
+            "id": "2dce26e1-b215-4c42-9b08-2cb85106facd",
+            "name": "Indenização — IR",
+            "color": "orange",
+            "description": null
+          },
+          {
+            "id": "6a74e525-34ae-44cf-a353-fa006cc8adf0",
+            "name": "Indenização — RI",
+            "color": "orange",
+            "description": null
+          },
+          {
+            "id": "1c9e9754-9c0a-4600-8ba4-08ac75d81dcf",
+            "name": "Indenização — R",
+            "color": "orange",
+            "description": null
+          },
+          {
+            "id": "c89ec572-ae4e-4b0f-a7e9-537ffac8a6dd",
+            "name": "Verbas trabalhistas",
+            "color": "orange",
+            "description": null
+          },
+          {
+            "id": "cbb7a690-7c83-414e-9d06-97074c27112c",
+            "name": "Horas extras",
+            "color": "yellow",
+            "description": null
+          },
+          {
+            "id": "80bb0898-e4a5-4834-8707-1f31dcd0958e",
+            "name": "Anuênios",
+            "color": "yellow",
+            "description": null
+          },
+          {
+            "id": "7ae209e1-a799-4a88-b915-d9e5981b0fc4",
+            "name": "Ação de 15 minutos",
+            "color": "yellow",
+            "description": null
+          },
+          {
+            "id": "8aa1ab50-6c9a-452b-ab69-074cac122885",
+            "name": "Ação PREVI",
+            "color": "purple",
+            "description": null
+          },
+          {
+            "id": "3ab74c6c-fb3d-46dc-b05f-db21e109cd2d",
+            "name": "Ação CASSI",
+            "color": "purple",
+            "description": null
+          },
+          {
+            "id": "2c81a2bf-c7e0-4cab-9dba-93e725499c70",
+            "name": "Execução de AC",
+            "color": "red",
+            "description": null
+          },
+          {
+            "id": "e62f8685-c251-4a86-8deb-3090ae4cf211",
+            "name": "Periculosidade",
+            "color": "green",
+            "description": null
+          },
+          {
+            "id": "c98ecfb8-f3ec-432a-ad02-55c2798de345",
+            "name": "Redução Salarial — HE",
+            "color": "pink",
+            "description": null
+          },
+          {
+            "id": "ecbd2c47-45a0-401b-9a3a-d7a40c7424f6",
+            "name": "Redução Salarial — PCS",
+            "color": "pink",
+            "description": null
+          },
+          {
+            "id": "5615c701-a1ef-4e38-856c-a27edf3aba5d",
+            "name": "Descomissionamento",
+            "color": "brown",
+            "description": null
+          },
+          {
+            "id": "2a4cc9f7-287d-433e-b537-2cd4682650d5",
+            "name": "Descomissionamento — LS",
+            "color": "brown",
+            "description": null
+          },
+          {
+            "id": "1ead57d4-0f3b-4154-a8e4-5df5acdfaf61",
+            "name": "Preservação",
+            "color": "gray",
+            "description": null
+          },
+          {
+            "id": "0b74d107-9e88-47e2-863c-a4011d004a69",
+            "name": "Plano de Saúde",
+            "color": "gray",
+            "description": null
+          },
+          {
+            "id": "a830a1e4-5758-4f9a-8da4-6ca7e18b8d80",
+            "name": "Outra",
+            "color": "gray",
+            "description": null
+          }
+        ]
+      }
+    },
+    "Desdobramentos": {
+      "id": "MklA",
+      "name": "Desdobramentos",
+      "description": null,
+      "type": "relation",
+      "relation": {
+        "database_id": "78f11cd7-1d0d-4a1e-9df5-8be085e5bb33",
+        "data_source_id": "5e93b734-4043-4c89-a513-5e00a14081bb",
+        "type": "dual_property",
+        "dual_property": {
+          "synced_property_name": "Processo pai",
+          "synced_property_id": "mg%5BH"
+        }
+      }
+    },
+    "Tarefas": {
+      "id": "MsRA",
+      "name": "Tarefas",
+      "description": null,
+      "type": "relation",
+      "relation": {
+        "database_id": "b40831f4-657a-4c75-80bc-db276b082729",
+        "data_source_id": "3a8bb311-5c1b-42ac-a3b2-859b75911e91",
+        "type": "dual_property",
+        "dual_property": {
+          "synced_property_name": "Processo",
+          "synced_property_id": "KqtX"
+        }
+      }
+    },
+    "Turma no 2º grau": {
+      "id": "Q%3EIq",
+      "name": "Turma no 2º grau",
+      "description": "Turma/Câmara julgadora em 2º grau (ex: 1ª Turma do TRT/10, 3ª Câmara Cível do TJDFT)",
+      "type": "rich_text",
+      "rich_text": {}
+    },
+    "Natureza": {
+      "id": "RGon",
+      "name": "Natureza",
+      "description": null,
+      "type": "select",
+      "select": {
+        "options": [
+          {
+            "id": "afa4e524-9ea1-4381-9bb9-94c08942de28",
+            "name": "Trabalhista",
+            "color": "blue",
+            "description": null
+          },
+          {
+            "id": "337d639a-2236-4e42-9c5c-1c9dd27ae313",
+            "name": "Cível",
+            "color": "green",
+            "description": null
+          }
+        ]
+      }
+    },
+    "Atualizado em": {
+      "id": "UK%3AY",
+      "name": "Atualizado em",
+      "description": null,
+      "type": "last_edited_time",
+      "last_edited_time": {}
+    },
+    "Turma no STF": {
+      "id": "US%3Fv",
+      "name": "Turma no STF",
+      "description": "Turma do STF (ex: 1ª Turma, 2ª Turma, Plenário)",
+      "type": "rich_text",
+      "rich_text": {}
+    },
+    "Observações": {
+      "id": "UUnD",
+      "name": "Observações",
+      "description": null,
+      "type": "rich_text",
+      "rich_text": {}
+    },
+    "Sobrestado - IRR 20": {
+      "id": "Vrpp",
+      "name": "Sobrestado - IRR 20",
+      "description": null,
+      "type": "checkbox",
+      "checkbox": {}
+    },
+    "ID Legal One": {
+      "id": "XQZe",
+      "name": "ID Legal One",
+      "description": null,
+      "type": "number",
+      "number": {
+        "format": "number"
+      }
+    },
+    "Relator no STJ/TST": {
+      "id": "Z%7Dk%5D",
+      "name": "Relator no STJ/TST",
+      "description": "Ministro(a) relator(a) no STJ",
+      "type": "rich_text",
+      "rich_text": {}
+    },
+    "Link externo": {
+      "id": "%5BykF",
+      "name": "Link externo",
+      "description": "Link direto para o processo no PJe, TJDFT etc.",
+      "type": "url",
+      "url": {}
+    },
+    "Partes adversas": {
+      "id": "%5Dk%7C%5C",
+      "name": "Partes adversas",
+      "description": null,
+      "type": "multi_select",
+      "multi_select": {
+        "options": [
+          {
+            "id": "c410ffac-ad38-4f5d-b9ea-6bf572fbbfc1",
+            "name": "Banco do Brasil",
+            "color": "orange",
+            "description": null
+          },
+          {
+            "id": "15882767-1ec9-4037-b930-cf9e7d70d39b",
+            "name": "PREVI",
+            "color": "blue",
+            "description": null
+          },
+          {
+            "id": "d1c3b0b9-2c93-4e29-a260-f0b440f0ad78",
+            "name": "CASSI",
+            "color": "purple",
+            "description": null
+          },
+          {
+            "id": "c93c4c9a-73f0-4694-924a-ae2bf4b46e58",
+            "name": "Bradesco Saúde",
+            "color": "red",
+            "description": null
+          },
+          {
+            "id": "6cad75a9-d15d-434a-af16-2f75929bcab2",
+            "name": "Outro",
+            "color": "gray",
+            "description": null
+          },
+          {
+            "id": "ab4a34db-2caf-4b8d-9c6b-1c1edde7a48f",
+            "name": "BB administradora de Consórcios S.A",
+            "color": "default",
+            "description": null
+          }
+        ]
+      }
+    },
+    "Data do trânsito em julgado (executiva)": {
+      "id": "fgHj",
+      "name": "Data do trânsito em julgado (executiva)",
+      "description": "Marca fim da execução / encerramento definitivo",
+      "type": "date",
+      "date": {}
+    },
+    "Número STF": {
+      "id": "fkQt",
+      "name": "Número STF",
+      "description": "Numeração autônoma do STF quando o processo sobe",
+      "type": "rich_text",
+      "rich_text": {}
+    },
+    "Sobrestado - TJ conexa": {
+      "id": "hdDy",
+      "name": "Sobrestado - TJ conexa",
+      "description": null,
+      "type": "checkbox",
+      "checkbox": {}
+    },
+    "Status": {
+      "id": "km%3AY",
+      "name": "Status",
+      "description": null,
+      "type": "select",
+      "select": {
+        "options": [
+          {
+            "id": "2c2c4759-ac5d-45ea-9f5c-02a29cc74634",
+            "name": "Ativo",
+            "color": "green",
+            "description": null
+          },
+          {
+            "id": "20cdaec9-7b9b-4826-a6ef-bbb685969984",
+            "name": "Arquivado provisoriamente (tema 955)",
+            "color": "orange",
+            "description": null
+          },
+          {
+            "id": "24a7ca5c-67e5-47a1-8bb8-cfe3ca7ec365",
+            "name": "Arquivado",
+            "color": "red",
+            "description": null
+          }
+        ]
+      }
+    },
+    "Relator no STF": {
+      "id": "l%7Bhn",
+      "name": "Relator no STF",
+      "description": "Ministro(a) relator(a) no STF",
+      "type": "rich_text",
+      "rich_text": {}
+    },
+    "Processo pai": {
+      "id": "mg%5BH",
+      "name": "Processo pai",
+      "description": null,
+      "type": "relation",
+      "relation": {
+        "database_id": "78f11cd7-1d0d-4a1e-9df5-8be085e5bb33",
+        "data_source_id": "5e93b734-4043-4c89-a513-5e00a14081bb",
+        "type": "dual_property",
+        "dual_property": {
+          "synced_property_name": "Desdobramentos",
+          "synced_property_id": "MklA"
+        }
+      }
+    },
+    "Instância": {
+      "id": "nRDc",
+      "name": "Instância",
+      "description": null,
+      "type": "select",
+      "select": {
+        "options": [
+          {
+            "id": "235cdeee-94b1-4e20-a83b-c026f725f71f",
+            "name": "1º grau",
+            "color": "gray",
+            "description": null
+          },
+          {
+            "id": "4a2e0dd9-1362-42d0-aa14-d987c93f3cd2",
+            "name": "2º grau",
+            "color": "blue",
+            "description": null
+          },
+          {
+            "id": "d4aacfb9-6006-46ff-9dfb-f41df09ba380",
+            "name": "TST",
+            "color": "orange",
+            "description": null
+          },
+          {
+            "id": "488d1b17-9419-4a81-be4d-e7ff47831e0c",
+            "name": "STJ",
+            "color": "red",
+            "description": null
+          },
+          {
+            "id": "4fb5c883-7609-4967-93ac-f7aa57fdee83",
+            "name": "STF",
+            "color": "purple",
+            "description": null
+          }
+        ]
+      }
+    },
+    "Data de distribuição": {
+      "id": "pPi~",
+      "name": "Data de distribuição",
+      "description": null,
+      "type": "date",
+      "date": {}
+    },
+    "Tribunal": {
+      "id": "p%5DUE",
+      "name": "Tribunal",
+      "description": null,
+      "type": "select",
+      "select": {
+        "options": [
+          {
+            "id": "61bec8e3-dda5-49da-9e17-44b3d4209556",
+            "name": "TRT/10",
+            "color": "blue",
+            "description": null
+          },
+          {
+            "id": "4c006f12-d15c-4001-a33d-8bfc98f0eca3",
+            "name": "TJDFT",
+            "color": "green",
+            "description": null
+          },
+          {
+            "id": "ef35609a-7855-405a-b44b-62ab130de593",
+            "name": "TJRJ",
+            "color": "gray",
+            "description": null
+          },
+          {
+            "id": "4b36baec-e017-4939-a430-4e3730dddd9a",
+            "name": "TJRS",
+            "color": "gray",
+            "description": null
+          },
+          {
+            "id": "da8a679e-bf3f-4165-9244-684945836c57",
+            "name": "TJBA",
+            "color": "gray",
+            "description": null
+          },
+          {
+            "id": "f02ab6f3-a501-4c15-9011-3ec311ae84a0",
+            "name": "TJMG",
+            "color": "gray",
+            "description": null
+          },
+          {
+            "id": "bbe65325-194a-4ee0-9ade-9da3527ecb11",
+            "name": "TJSP",
+            "color": "gray",
+            "description": null
+          },
+          {
+            "id": "f151e1cb-bfc0-4941-8f4c-2b8d259e9050",
+            "name": "TJSC",
+            "color": "gray",
+            "description": null
+          },
+          {
+            "id": "35661913-ad9b-4096-b21f-445eaebda6e8",
+            "name": "TJPR",
+            "color": "gray",
+            "description": null
+          },
+          {
+            "id": "12204d00-e314-4a58-9bab-a67745416915",
+            "name": "TJMS",
+            "color": "gray",
+            "description": null
+          },
+          {
+            "id": "d0b97529-1de4-4a49-89fb-31fd2eafa2f8",
+            "name": "TJES",
+            "color": "gray",
+            "description": null
+          },
+          {
+            "id": "0fa4a01e-4050-4465-bedb-a7fb72f1f18a",
+            "name": "TJGO",
+            "color": "gray",
+            "description": null
+          },
+          {
+            "id": "eeba088a-05be-4c7a-820c-b5def893b203",
+            "name": "TST",
+            "color": "orange",
+            "description": null
+          },
+          {
+            "id": "76c64530-ec6d-4140-9571-a84cd097bbb3",
+            "name": "STJ",
+            "color": "red",
+            "description": null
+          },
+          {
+            "id": "e8dee1ad-5a94-45bb-b138-830d970426b3",
+            "name": "STF",
+            "color": "purple",
+            "description": null
+          },
+          {
+            "id": "3be134cb-cb13-4d25-9f29-f4c931716b7a",
+            "name": "Outro",
+            "color": "gray",
+            "description": null
+          },
+          {
+            "id": "4deed224-94b9-4393-9838-d16999f0e788",
+            "name": "TRT/2",
+            "color": "default",
+            "description": null
+          }
+        ]
+      }
+    },
+    "Cidade": {
+      "id": "qrQp",
+      "name": "Cidade",
+      "description": null,
+      "type": "rich_text",
+      "rich_text": {}
+    },
+    "Posição do cliente": {
+      "id": "qt%7Dp",
+      "name": "Posição do cliente",
+      "description": null,
+      "type": "select",
+      "select": {
+        "options": [
+          {
+            "id": "2ddd25a7-ccfe-456f-a088-25073f3e4cf7",
+            "name": "Autor",
+            "color": "green",
+            "description": null
+          },
+          {
+            "id": "baf6ca0f-b949-43c6-b1e2-3c419c83885a",
+            "name": "Réu",
+            "color": "red",
+            "description": null
+          },
+          {
+            "id": "2e295917-213b-40ad-960a-164e6f5b0a12",
+            "name": "Recorrente",
+            "color": "blue",
+            "description": null
+          },
+          {
+            "id": "23c9fc9a-73c3-4e08-976d-315b48b68f96",
+            "name": "Recorrido",
+            "color": "orange",
+            "description": null
+          }
+        ]
+      }
+    },
+    "Relator no 2º grau": {
+      "id": "tngw",
+      "name": "Relator no 2º grau",
+      "description": "Desembargador(a) relator(a) no 2º grau",
+      "type": "rich_text",
+      "rich_text": {}
+    },
+    "Criado em": {
+      "id": "xwVG",
+      "name": "Criado em",
+      "description": null,
+      "type": "created_time",
+      "created_time": {}
+    },
+    "Documentos": {
+      "id": "y%3BjC",
+      "name": "Documentos",
+      "description": null,
+      "type": "relation",
+      "relation": {
+        "database_id": "eefa3240-1d4b-44ad-8e55-ad5625a737f8",
+        "data_source_id": "0142efd6-5e77-49df-93bd-c6e28dc55539",
+        "type": "dual_property",
+        "dual_property": {
+          "synced_property_name": "Processo vinculado",
+          "synced_property_id": "%5DR%5E%5E"
+        }
+      }
+    },
+    "Data do trânsito em julgado (cognitiva)": {
+      "id": "yhyC",
+      "name": "Data do trânsito em julgado (cognitiva)",
+      "description": "Marca fim da fase de conhecimento",
+      "type": "date",
+      "date": {}
+    },
+    "Tipo de processo": {
+      "id": "ykJD",
+      "name": "Tipo de processo",
+      "description": null,
+      "type": "select",
+      "select": {
+        "options": [
+          {
+            "id": "6acd77ad-b0e4-4dba-8100-ed3e30711d82",
+            "name": "Principal",
+            "color": "blue",
+            "description": null
+          },
+          {
+            "id": "3ca15b24-5c74-469a-89c5-1f74e373d0a8",
+            "name": "Incidente",
+            "color": "orange",
+            "description": null
+          },
+          {
+            "id": "80cd0d72-b14f-4db7-9775-31ae35f037ba",
+            "name": "Recurso autônomo",
+            "color": "yellow",
+            "description": null
+          },
+          {
+            "id": "a8b913f6-278c-4e38-9522-53ccba550bbe",
+            "name": "Reclamação constitucional",
+            "color": "green",
+            "description": null
+          }
+        ]
+      }
+    },
+    "Número do processo": {
+      "id": "title",
+      "name": "Número do processo",
+      "description": "Número CNJ no formato NNNNNNN-DD.AAAA.J.TR.OOOO, ou numeração antiga quando pré-CNJ",
+      "type": "title",
+      "title": {}
+    }
+  },
+  "parent": {
+    "type": "database_id",
+    "database_id": "78f11cd7-1d0d-4a1e-9df5-8be085e5bb33"
+  },
+  "database_parent": {
+    "type": "page_id",
+    "page_id": "34530d90-c916-8121-bc9e-fc5aa10ab7c9"
+  },
+  "url": "https://www.notion.so/78f11cd71d0d4a1e9df58be085e5bb33",
+  "public_url": null,
+  "in_trash": false,
+  "archived": false,
+  "request_id": "cb06c47c-5a4d-4b45-82c1-9b40b888508f"
+}

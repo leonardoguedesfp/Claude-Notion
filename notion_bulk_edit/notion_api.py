@@ -234,6 +234,25 @@ class NotionClient:
         """
         return self._request("GET", f"/pages/{page_id}")
 
+    def get_data_source(self, data_source_id: str) -> dict:
+        """Fase 0 — schema dinâmico: busca o schema de um data source.
+
+        Endpoint: GET /v1/data_sources/{id}
+
+        Mantém o mesmo throttling, retry de 429 e exceções tipadas
+        (NotionAuthError, NotionAPIError) que os outros métodos usam.
+
+        Args:
+            data_source_id: UUID do data source (mesmo ID usado em
+                /data_sources/{id}/query).
+
+        Returns:
+            Dict com chaves "object", "id", "title", "properties", etc.
+            "properties" mapeia notion_name → dict descrevendo o tipo,
+            opções (para selects), e metadados.
+        """
+        return self._request("GET", f"/data_sources/{data_source_id}")
+
     def update_page(self, page_id: str, properties: dict) -> dict:
         """Atualiza propriedades de uma página existente.
 

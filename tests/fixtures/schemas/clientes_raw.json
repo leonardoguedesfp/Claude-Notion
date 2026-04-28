@@ -1,0 +1,614 @@
+{
+  "object": "data_source",
+  "id": "939e5dcf-51bd-4ffa-a28e-0313899fd229",
+  "cover": null,
+  "icon": null,
+  "created_time": "2026-04-17T12:30:00.000Z",
+  "created_by": {
+    "object": "user",
+    "id": "22fd872b-594c-81bf-847e-000262ec6682"
+  },
+  "last_edited_by": {
+    "object": "user",
+    "id": "22fd872b-594c-81bf-847e-000262ec6682"
+  },
+  "last_edited_time": "2026-04-26T20:47:00.000Z",
+  "title": [
+    {
+      "type": "text",
+      "text": {
+        "content": "👥 Clientes",
+        "link": null
+      },
+      "annotations": {
+        "bold": false,
+        "italic": false,
+        "strikethrough": false,
+        "underline": false,
+        "code": false,
+        "color": "default"
+      },
+      "plain_text": "👥 Clientes",
+      "href": null
+    }
+  ],
+  "description": [
+    {
+      "type": "text",
+      "text": {
+        "content": "Cadastro único de partes (pessoas físicas e jurídicas). Cada cliente aparece uma única vez aqui, independentemente de quantos processos tenha.",
+        "link": null
+      },
+      "annotations": {
+        "bold": false,
+        "italic": false,
+        "strikethrough": false,
+        "underline": false,
+        "code": false,
+        "color": "default"
+      },
+      "plain_text": "Cadastro único de partes (pessoas físicas e jurídicas). Cada cliente aparece uma única vez aqui, independentemente de quantos processos tenha.",
+      "href": null
+    }
+  ],
+  "is_inline": false,
+  "properties": {
+    "CPF/CNPJ": {
+      "id": "%3Awb%3E",
+      "name": "CPF/CNPJ",
+      "description": "Com formatação, ex: 437.376.684-34",
+      "type": "rich_text",
+      "rich_text": {}
+    },
+    "RG": {
+      "id": "%3Cw%3Fv",
+      "name": "RG",
+      "description": null,
+      "type": "rich_text",
+      "rich_text": {}
+    },
+    "Sucedido por": {
+      "id": "%3CwxO",
+      "name": "Sucedido por",
+      "description": null,
+      "type": "relation",
+      "relation": {
+        "database_id": "b015580a-d079-43a3-a57c-9e021c2a4615",
+        "data_source_id": "939e5dcf-51bd-4ffa-a28e-0313899fd229",
+        "type": "dual_property",
+        "dual_property": {
+          "synced_property_name": "Sucessor de",
+          "synced_property_id": "_GF%3E"
+        }
+      }
+    },
+    "Logradouro": {
+      "id": "%3FOOb",
+      "name": "Logradouro",
+      "description": "Rua/Avenida/Quadra, sem número",
+      "type": "rich_text",
+      "rich_text": {}
+    },
+    "Atualizado em": {
+      "id": "%40%3E%7CB",
+      "name": "Atualizado em",
+      "description": null,
+      "type": "last_edited_time",
+      "last_edited_time": {}
+    },
+    "Observações": {
+      "id": "%40%7BtL",
+      "name": "Observações",
+      "description": null,
+      "type": "rich_text",
+      "rich_text": {}
+    },
+    "Criado em": {
+      "id": "Be%7Dt",
+      "name": "Criado em",
+      "description": null,
+      "type": "created_time",
+      "created_time": {}
+    },
+    "Tipo": {
+      "id": "C~%40m",
+      "name": "Tipo",
+      "description": null,
+      "type": "select",
+      "select": {
+        "options": [
+          {
+            "id": "74188c73-03d0-40cc-bd71-384ed76461bd",
+            "name": "PF",
+            "color": "blue",
+            "description": null
+          },
+          {
+            "id": "76a5911e-d3e0-400a-b0b2-7c4858239061",
+            "name": "PJ",
+            "color": "orange",
+            "description": null
+          }
+        ]
+      }
+    },
+    "Número": {
+      "id": "DRVw",
+      "name": "Número",
+      "description": null,
+      "type": "rich_text",
+      "rich_text": {}
+    },
+    "Profissão": {
+      "id": "FaFQ",
+      "name": "Profissão",
+      "description": "Ex: bancário aposentado, advogado, engenheiro",
+      "type": "rich_text",
+      "rich_text": {}
+    },
+    "Órgão expedidor": {
+      "id": "GV%3A%3B",
+      "name": "Órgão expedidor",
+      "description": "Ex: SSP/DF, IFP/RJ",
+      "type": "rich_text",
+      "rich_text": {}
+    },
+    "Estado civil": {
+      "id": "L%3AYJ",
+      "name": "Estado civil",
+      "description": null,
+      "type": "select",
+      "select": {
+        "options": [
+          {
+            "id": "93c963ad-21a2-4ec9-aece-ea8324f516af",
+            "name": "solteiro(a)",
+            "color": "gray",
+            "description": null
+          },
+          {
+            "id": "42004c4d-2e30-476f-8743-a74c51e8e035",
+            "name": "casado(a)",
+            "color": "blue",
+            "description": null
+          },
+          {
+            "id": "8cf8249f-0e80-448b-8bc2-6328439af817",
+            "name": "em união estável",
+            "color": "blue",
+            "description": null
+          },
+          {
+            "id": "9e0bcab0-1d06-4f14-b8a2-b723121a0dfa",
+            "name": "separado(a) judicialmente",
+            "color": "yellow",
+            "description": null
+          },
+          {
+            "id": "64962c2f-1026-43ed-b50d-06eb1a89c23e",
+            "name": "divorciado(a)",
+            "color": "orange",
+            "description": null
+          },
+          {
+            "id": "852de6fc-47b1-4338-85b4-c0dcfa3097a7",
+            "name": "viúvo(a)",
+            "color": "red",
+            "description": null
+          }
+        ]
+      }
+    },
+    "Complemento": {
+      "id": "MHRT",
+      "name": "Complemento",
+      "description": "Apto, bloco, sala etc.",
+      "type": "rich_text",
+      "rich_text": {}
+    },
+    "Documentos": {
+      "id": "Rd%7C%5E",
+      "name": "Documentos",
+      "description": null,
+      "type": "relation",
+      "relation": {
+        "database_id": "eefa3240-1d4b-44ad-8e55-ad5625a737f8",
+        "data_source_id": "0142efd6-5e77-49df-93bd-c6e28dc55539",
+        "type": "dual_property",
+        "dual_property": {
+          "synced_property_name": "Clientes",
+          "synced_property_id": "%7Coq%3F"
+        }
+      }
+    },
+    "Outros telefones": {
+      "id": "Rq%5Dc",
+      "name": "Outros telefones",
+      "description": null,
+      "type": "rich_text",
+      "rich_text": {}
+    },
+    "Outros e-mails": {
+      "id": "R~y_",
+      "name": "Outros e-mails",
+      "description": null,
+      "type": "rich_text",
+      "rich_text": {}
+    },
+    "E-mail": {
+      "id": "WHPC",
+      "name": "E-mail",
+      "description": null,
+      "type": "email",
+      "email": {}
+    },
+    "Telefone": {
+      "id": "Y%5C%3BY",
+      "name": "Telefone",
+      "description": null,
+      "type": "phone_number",
+      "phone_number": {}
+    },
+    "Data de aposentadoria": {
+      "id": "ZTjP",
+      "name": "Data de aposentadoria",
+      "description": null,
+      "type": "date",
+      "date": {}
+    },
+    "Sucessor de": {
+      "id": "_GF%3E",
+      "name": "Sucessor de",
+      "description": null,
+      "type": "relation",
+      "relation": {
+        "database_id": "b015580a-d079-43a3-a57c-9e021c2a4615",
+        "data_source_id": "939e5dcf-51bd-4ffa-a28e-0313899fd229",
+        "type": "dual_property",
+        "dual_property": {
+          "synced_property_name": "Sucedido por",
+          "synced_property_id": "%3CwxO"
+        }
+      }
+    },
+    "Sexo": {
+      "id": "%60Cr%7B",
+      "name": "Sexo",
+      "description": null,
+      "type": "select",
+      "select": {
+        "options": [
+          {
+            "id": "63656a00-811e-4350-bfab-1d933517b34e",
+            "name": "Feminino",
+            "color": "pink",
+            "description": null
+          },
+          {
+            "id": "5678afd2-3c21-40bc-b3b0-06503deaf78d",
+            "name": "Masculino",
+            "color": "blue",
+            "description": null
+          }
+        ]
+      }
+    },
+    "CEP": {
+      "id": "bXsK",
+      "name": "CEP",
+      "description": null,
+      "type": "rich_text",
+      "rich_text": {}
+    },
+    "Situação funcional": {
+      "id": "baRW",
+      "name": "Situação funcional",
+      "description": null,
+      "type": "select",
+      "select": {
+        "options": [
+          {
+            "id": "a84a8b0a-bef9-4b15-927a-355e7f24f5b4",
+            "name": "Aposentado",
+            "color": "green",
+            "description": null
+          },
+          {
+            "id": "17795c93-ed9c-48ef-836d-fcf0f58c4c50",
+            "name": "Ativo (em atividade)",
+            "color": "blue",
+            "description": null
+          },
+          {
+            "id": "3ebf5813-2f3f-4f5a-a0da-81c8b95e0380",
+            "name": "Pensionista",
+            "color": "orange",
+            "description": null
+          },
+          {
+            "id": "f222fde3-9f54-4bf3-b053-17b1c6adf8ca",
+            "name": "Ex-funcionário",
+            "color": "gray",
+            "description": null
+          },
+          {
+            "id": "04fe37a7-209d-4672-8ae2-af3e17c26a87",
+            "name": "Não se aplica",
+            "color": "gray",
+            "description": null
+          }
+        ]
+      }
+    },
+    "Processos": {
+      "id": "cMK~",
+      "name": "Processos",
+      "description": null,
+      "type": "relation",
+      "relation": {
+        "database_id": "78f11cd7-1d0d-4a1e-9df5-8be085e5bb33",
+        "data_source_id": "5e93b734-4043-4c89-a513-5e00a14081bb",
+        "type": "dual_property",
+        "dual_property": {
+          "synced_property_name": "Clientes",
+          "synced_property_id": "%40B%3FI"
+        }
+      }
+    },
+    "Bairro": {
+      "id": "hOtL",
+      "name": "Bairro",
+      "description": null,
+      "type": "rich_text",
+      "rich_text": {}
+    },
+    "Cidade": {
+      "id": "h%7B%60%3F",
+      "name": "Cidade",
+      "description": null,
+      "type": "rich_text",
+      "rich_text": {}
+    },
+    "Status do cadastro": {
+      "id": "kzXR",
+      "name": "Status do cadastro",
+      "description": null,
+      "type": "select",
+      "select": {
+        "options": [
+          {
+            "id": "d97c9293-6485-40b9-a60a-983d0f4b1900",
+            "name": "Ativo",
+            "color": "green",
+            "description": null
+          },
+          {
+            "id": "a7a9b98a-f05e-4b4e-933b-3b617132745e",
+            "name": "Inativo",
+            "color": "gray",
+            "description": null
+          },
+          {
+            "id": "cd30f606-a27f-4ad1-9f95-bbc856fc7623",
+            "name": "Prospect",
+            "color": "yellow",
+            "description": null
+          }
+        ]
+      }
+    },
+    "Falecido": {
+      "id": "n%3Cyd",
+      "name": "Falecido",
+      "description": null,
+      "type": "checkbox",
+      "checkbox": {}
+    },
+    "Data de nascimento": {
+      "id": "pbyh",
+      "name": "Data de nascimento",
+      "description": null,
+      "type": "date",
+      "date": {}
+    },
+    "UF": {
+      "id": "vHYs",
+      "name": "UF",
+      "description": null,
+      "type": "select",
+      "select": {
+        "options": [
+          {
+            "id": "e876e454-c35e-4ee9-9da8-bb12dc0c0178",
+            "name": "AC",
+            "color": "gray",
+            "description": null
+          },
+          {
+            "id": "e0a4b0c4-5b42-44c4-87c9-5ebfd3e61fa3",
+            "name": "AL",
+            "color": "gray",
+            "description": null
+          },
+          {
+            "id": "4c933647-06ec-4759-bfc6-d96207d6e741",
+            "name": "AP",
+            "color": "gray",
+            "description": null
+          },
+          {
+            "id": "32814213-7b1c-4aa8-9ce3-d26f2a13412e",
+            "name": "AM",
+            "color": "gray",
+            "description": null
+          },
+          {
+            "id": "cc1e4f95-c692-41b1-b81c-8f2694bc0006",
+            "name": "BA",
+            "color": "gray",
+            "description": null
+          },
+          {
+            "id": "096ce1f3-8f3b-48fe-865e-845e48561f9b",
+            "name": "CE",
+            "color": "gray",
+            "description": null
+          },
+          {
+            "id": "8f351c4a-a326-46ff-b5b7-27b53e3e6a01",
+            "name": "DF",
+            "color": "blue",
+            "description": null
+          },
+          {
+            "id": "f61e9b5b-f8d4-4876-a1a0-72206df7d67f",
+            "name": "ES",
+            "color": "gray",
+            "description": null
+          },
+          {
+            "id": "338fe850-739c-47cf-a23d-bf977a588c88",
+            "name": "GO",
+            "color": "gray",
+            "description": null
+          },
+          {
+            "id": "68902ff2-af7b-458e-9393-99b78dbcca7d",
+            "name": "MA",
+            "color": "gray",
+            "description": null
+          },
+          {
+            "id": "7593405d-1ba3-4692-a663-970dd74111ca",
+            "name": "MT",
+            "color": "gray",
+            "description": null
+          },
+          {
+            "id": "1689eca6-5f18-418d-a3c4-1407f9316261",
+            "name": "MS",
+            "color": "gray",
+            "description": null
+          },
+          {
+            "id": "269b0eb0-2c0f-44bc-8bfa-6cdd71a5ce03",
+            "name": "MG",
+            "color": "gray",
+            "description": null
+          },
+          {
+            "id": "8a78b17b-fb62-439f-8864-4e0f01c92933",
+            "name": "PA",
+            "color": "gray",
+            "description": null
+          },
+          {
+            "id": "9bf42332-d67c-4cd9-ba0f-567e5b35ca7c",
+            "name": "PB",
+            "color": "gray",
+            "description": null
+          },
+          {
+            "id": "5900bdf1-a772-4a88-9ff0-1d9e735eca50",
+            "name": "PR",
+            "color": "gray",
+            "description": null
+          },
+          {
+            "id": "93265de2-75e1-456d-9c8b-90edf51e7e8f",
+            "name": "PE",
+            "color": "gray",
+            "description": null
+          },
+          {
+            "id": "53ecce63-f93f-4d62-b43f-4ca66b02aa1c",
+            "name": "PI",
+            "color": "gray",
+            "description": null
+          },
+          {
+            "id": "c6da6ceb-586e-4fcc-9161-ff70ffe7d9ba",
+            "name": "RJ",
+            "color": "gray",
+            "description": null
+          },
+          {
+            "id": "1f05b2bb-8cd7-4450-85f3-eb890bd95f24",
+            "name": "RN",
+            "color": "gray",
+            "description": null
+          },
+          {
+            "id": "51361814-8850-4571-a6fd-a31148fe0114",
+            "name": "RS",
+            "color": "gray",
+            "description": null
+          },
+          {
+            "id": "39590cc8-3189-429b-8945-64c66489156d",
+            "name": "RO",
+            "color": "gray",
+            "description": null
+          },
+          {
+            "id": "b99dc865-749d-4da8-9d2b-0b4bc54e6236",
+            "name": "RR",
+            "color": "gray",
+            "description": null
+          },
+          {
+            "id": "f8471318-1b4c-4217-8a2a-caa7230abfec",
+            "name": "SC",
+            "color": "gray",
+            "description": null
+          },
+          {
+            "id": "477fe7ec-e6bf-48f1-8540-9d61c425dd29",
+            "name": "SP",
+            "color": "gray",
+            "description": null
+          },
+          {
+            "id": "85c9f5d0-5c93-44dc-8286-05cafdf836f5",
+            "name": "SE",
+            "color": "gray",
+            "description": null
+          },
+          {
+            "id": "241e90f7-845e-44f3-aec3-46c0ffd057ce",
+            "name": "TO",
+            "color": "gray",
+            "description": null
+          }
+        ]
+      }
+    },
+    "Data de ingresso no BB": {
+      "id": "zIDB",
+      "name": "Data de ingresso no BB",
+      "description": "Data de admissão como funcionário do Banco do Brasil",
+      "type": "date",
+      "date": {}
+    },
+    "Nome": {
+      "id": "title",
+      "name": "Nome",
+      "description": null,
+      "type": "title",
+      "title": {}
+    }
+  },
+  "parent": {
+    "type": "database_id",
+    "database_id": "b015580a-d079-43a3-a57c-9e021c2a4615"
+  },
+  "database_parent": {
+    "type": "page_id",
+    "page_id": "34530d90-c916-8121-bc9e-fc5aa10ab7c9"
+  },
+  "url": "https://www.notion.so/b015580ad07943a3a57c9e021c2a4615",
+  "public_url": null,
+  "in_trash": false,
+  "archived": false,
+  "request_id": "1801731b-0395-41ad-a0ba-b4ff29e17d73"
+}

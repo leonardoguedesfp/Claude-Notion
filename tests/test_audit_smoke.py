@@ -9,6 +9,7 @@ Naming: test_AUD_<area>_<short_label>.
 """
 from __future__ import annotations
 
+import inspect
 import json
 import os
 import re
@@ -1513,3 +1514,506 @@ def test_AUD_10_no_outbound_urls_other_than_notion() -> None:
                 continue
             bad.append(f"{f.name}:{url}")
     assert bad == [], f"unexpected outbound URLs: {bad[:3]}"
+
+
+# ---------------------------------------------------------------------------
+# Fase 0 — schema dinâmico (infraestrutura backend)
+#
+# Estes testes cobrem a infra criada na Fase 0 do plano de migração para
+# schema dinâmico (DESIGN_SCHEMA_DINAMICO.md). Não há mudança de comportamento
+# do app — o legado continua intocado. A Fase 0 só introduz:
+#  - NotionClient.get_data_source(id)
+#  - Tabelas meta_schemas + meta_user_columns em audit.db
+#  - Parser e SchemaRegistry novos
+# ---------------------------------------------------------------------------
+
+
+_FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures" / "schemas"
+
+
+def _load_fixture(label: str) -> dict:
+    """Lê uma fixture JSON capturada da API real (Fase 0)."""
+    path = _FIXTURES_DIR / f"{label.lower()}_raw.json"
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+# --- Componente 1: NotionClient.get_data_source ---
+
+
+def test_FASE0_notion_client_has_get_data_source_method() -> None:
+    """Componente 1: o método existe e tem assinatura (data_source_id: str)."""
+    from typing import get_type_hints
+
+    from notion_bulk_edit.notion_api import NotionClient
+    assert hasattr(NotionClient, "get_data_source")
+    sig = inspect.signature(NotionClient.get_data_source)
+    params = list(sig.parameters.values())
+    # self + data_source_id
+    assert len(params) == 2
+    assert params[1].name == "data_source_id"
+    hints = get_type_hints(NotionClient.get_data_source)
+    assert hints.get("data_source_id") is str
+
+
+def test_FASE0_notion_client_get_data_source_uses_correct_endpoint() -> None:
+    """Componente 1: chama _request com GET /data_sources/{id}."""
+    from notion_bulk_edit.notion_api import NotionClient
+    client = NotionClient.__new__(NotionClient)
+    client._request = MagicMock(return_value={"object": "data_source"})  # type: ignore[attr-defined]
+    result = client.get_data_source("abc-123")
+    client._request.assert_called_once_with("GET", "/data_sources/abc-123")
+    assert result == {"object": "data_source"}
+
+
+# --- Componente 2: tabelas meta_schemas + meta_user_columns + helpers ---
+
+
+def _audit_only_conn() -> sqlite3.Connection:
+    """Cria connection com apenas init_audit_db aplicado (sem tabelas de cache)."""
+    from notion_rpadv.cache import db as cache_db
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    cache_db.init_audit_db(conn)
+    return conn
+
+
+def test_FASE0_init_audit_db_creates_meta_schemas_table() -> None:
+    """Componente 2: init_audit_db cria meta_schemas idempotentemente."""
+    conn = _audit_only_conn()
+    row = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='meta_schemas'"
+    ).fetchone()
+    assert row is not None, "meta_schemas table missing"
+    # Idempotência
+    from notion_rpadv.cache import db as cache_db
+    cache_db.init_audit_db(conn)  # não deve crashar
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(meta_schemas)").fetchall()}
+    assert {
+        "data_source_id", "base_label", "title_property",
+        "schema_json", "schema_hash", "fetched_at",
+        "api_version", "cache_version",
+    }.issubset(cols)
+
+
+def test_FASE0_init_audit_db_creates_meta_user_columns_table() -> None:
+    """Componente 2: meta_user_columns existe (Fase 4 usará)."""
+    conn = _audit_only_conn()
+    row = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='meta_user_columns'"
+    ).fetchone()
+    assert row is not None
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(meta_user_columns)").fetchall()}
+    assert {"user_id", "data_source_id", "visible_keys", "updated_at"}.issubset(cols)
+
+
+def test_FASE0_upsert_schema_inserts_new_row() -> None:
+    """Componente 2: upsert_schema insere e get_cached_schema lê."""
+    from notion_rpadv.cache import db as cache_db
+    conn = _audit_only_conn()
+    cache_db.upsert_schema(
+        conn, "abc-123", "TestBase", "Title",
+        '{"foo":1}', "hash1", 1700000000.0,
+    )
+    cached = cache_db.get_cached_schema(conn, "abc-123")
+    assert cached is not None
+    assert cached["base_label"] == "TestBase"
+    assert cached["schema_json"] == '{"foo":1}'
+    assert cached["schema_hash"] == "hash1"
+    assert cached["api_version"] == "2025-09-03"  # default
+    assert cached["cache_version"] == 1
+
+
+def test_FASE0_upsert_schema_updates_existing_row() -> None:
+    """Componente 2: segundo upsert com mesmo data_source_id atualiza, não duplica."""
+    from notion_rpadv.cache import db as cache_db
+    conn = _audit_only_conn()
+    cache_db.upsert_schema(
+        conn, "abc-123", "TestBase", "T", '{"v":1}', "h1", 1.0,
+    )
+    cache_db.upsert_schema(
+        conn, "abc-123", "TestBase2", "T2", '{"v":2}', "h2", 2.0,
+    )
+    rows = list(conn.execute("SELECT * FROM meta_schemas"))
+    assert len(rows) == 1
+    assert rows[0]["base_label"] == "TestBase2"
+    assert rows[0]["schema_json"] == '{"v":2}'
+    assert rows[0]["schema_hash"] == "h2"
+
+
+def test_FASE0_get_cached_schema_returns_none_for_missing_id() -> None:
+    """Componente 2: get_cached_schema com ID inexistente retorna None."""
+    from notion_rpadv.cache import db as cache_db
+    conn = _audit_only_conn()
+    assert cache_db.get_cached_schema(conn, "nao-existe") is None
+
+
+def test_FASE0_get_all_cached_schemas_returns_list() -> None:
+    """Componente 2: helper de listagem para boot."""
+    from notion_rpadv.cache import db as cache_db
+    conn = _audit_only_conn()
+    assert cache_db.get_all_cached_schemas(conn) == []
+    cache_db.upsert_schema(conn, "id-1", "B1", "T", '{}', "h", 1.0)
+    cache_db.upsert_schema(conn, "id-2", "B2", "T", '{}', "h", 1.0)
+    result = cache_db.get_all_cached_schemas(conn)
+    assert len(result) == 2
+    assert {r["data_source_id"] for r in result} == {"id-1", "id-2"}
+
+
+# --- Componente 3: parser ---
+
+
+@pytest.fixture(scope="module")
+def fixtures_available() -> bool:
+    return _FIXTURES_DIR.exists() and any(_FIXTURES_DIR.glob("*_raw.json"))
+
+
+def _skip_if_no_fixtures() -> None:
+    if not _FIXTURES_DIR.exists() or not list(_FIXTURES_DIR.glob("*_raw.json")):
+        pytest.skip("fixtures de schema não capturadas — rode scripts/validar_fase_0.py")
+
+
+def test_FASE0_parse_catalogo_real_schema() -> None:
+    """Componente 3: parser converte resposta real do Catálogo corretamente."""
+    _skip_if_no_fixtures()
+    from notion_bulk_edit.schema_parser import parse_to_schema_json
+    raw = _load_fixture("Catalogo")
+    parsed = parse_to_schema_json(raw, "Catalogo")
+    assert parsed["base_label"] == "Catalogo"
+    assert parsed["data_source_id"] == raw["id"]
+    # Title é "Nome", key slugificada é "nome"
+    assert parsed["title_property"] == "Nome"
+    assert parsed["title_key"] == "nome"
+    # Categoria é select com 4 opções
+    cat = parsed["properties"].get("categoria")
+    assert cat is not None
+    assert cat["tipo"] == "select"
+    assert len(cat["opcoes"]) == 4
+    cat_names = {o["name"] for o in cat["opcoes"]}
+    assert cat_names == {
+        "Peças processuais", "Outras tarefas jurídicas",
+        "Administrativo", "Diversos",
+    }
+
+
+def test_FASE0_parse_processos_real_schema() -> None:
+    """Componente 3: Processos tem ≥30 propriedades, tribunal com 17 selects, em-dash em opções."""
+    _skip_if_no_fixtures()
+    from notion_bulk_edit.schema_parser import parse_to_schema_json
+    raw = _load_fixture("Processos")
+    parsed = parse_to_schema_json(raw, "Processos")
+    assert len(parsed["properties"]) >= 30
+    tribunal = parsed["properties"].get("tribunal")
+    assert tribunal is not None
+    assert tribunal["tipo"] == "select"
+    tribunal_names = {o["name"] for o in tribunal["opcoes"]}
+    assert "TRT/2" in tribunal_names
+    assert len(tribunal["opcoes"]) >= 15
+    # Tipo de ação — multi_select com em-dash
+    tipo_acao = parsed["properties"].get("tipo_de_acao")
+    assert tipo_acao is not None
+    assert tipo_acao["tipo"] == "multi_select"
+    tipo_acao_names = {o["name"] for o in tipo_acao["opcoes"]}
+    # em-dash literal U+2014
+    assert "Indenização — I" in tipo_acao_names
+
+
+def test_FASE0_parse_clientes_real_schema() -> None:
+    """Componente 3: Clientes tem UF com 27 opções, falecido como checkbox editável."""
+    _skip_if_no_fixtures()
+    from notion_bulk_edit.schema_parser import parse_to_schema_json
+    raw = _load_fixture("Clientes")
+    parsed = parse_to_schema_json(raw, "Clientes")
+    uf = parsed["properties"].get("uf")
+    assert uf is not None, f"UF missing; keys: {list(parsed['properties'].keys())[:10]}"
+    assert uf["tipo"] == "select"
+    assert len(uf["opcoes"]) == 27
+    falecido = parsed["properties"].get("falecido")
+    assert falecido is not None
+    assert falecido["tipo"] == "checkbox"
+    assert falecido["editavel"] is True
+
+
+def test_FASE0_parse_tarefas_real_schema() -> None:
+    """Componente 3: Tarefas tem responsavel como people, cliente como rollup readonly."""
+    _skip_if_no_fixtures()
+    from notion_bulk_edit.schema_parser import parse_to_schema_json
+    raw = _load_fixture("Tarefas")
+    parsed = parse_to_schema_json(raw, "Tarefas")
+    responsavel = parsed["properties"].get("responsavel")
+    assert responsavel is not None
+    assert responsavel["tipo"] == "people"
+    cliente = parsed["properties"].get("cliente")
+    assert cliente is not None
+    assert cliente["tipo"] == "rollup"
+    assert cliente["editavel"] is False
+
+
+def test_FASE0_parse_em_dash_preserved_in_options() -> None:
+    """Componente 3: U+2014 (em-dash) literal preservado em nomes de opções."""
+    _skip_if_no_fixtures()
+    from notion_bulk_edit.schema_parser import parse_to_schema_json
+    raw = _load_fixture("Processos")
+    parsed = parse_to_schema_json(raw, "Processos")
+    em_dash_count = 0
+    for prop in parsed["properties"].values():
+        for opt in prop.get("opcoes", []):
+            if "—" in opt["name"]:
+                em_dash_count += 1
+    assert em_dash_count > 0, "esperava ao menos uma opção com em-dash"
+
+
+def test_FASE0_parse_default_visible_heuristic() -> None:
+    """Componente 3: title=True, multi_select=False, select=True como heurística."""
+    from notion_bulk_edit.schema_parser import parse_to_schema_json
+    raw = {
+        "object": "data_source",
+        "id": "test-id",
+        "properties": {
+            "Título": {"id": "title", "type": "title", "title": {}},
+            "Categoria": {
+                "id": "x", "type": "select",
+                "select": {"options": [{"name": "A", "color": "blue"}]},
+            },
+            "Tags": {
+                "id": "y", "type": "multi_select",
+                "multi_select": {"options": []},
+            },
+            "Texto": {"id": "z", "type": "rich_text", "rich_text": {}},
+        },
+    }
+    parsed = parse_to_schema_json(raw, "Test")
+    assert parsed["properties"]["titulo"]["default_visible"] is True
+    assert parsed["properties"]["categoria"]["default_visible"] is True
+    assert parsed["properties"]["tags"]["default_visible"] is False
+    assert parsed["properties"]["texto"]["default_visible"] is False
+
+
+def test_FASE0_parse_unknown_type_does_not_crash() -> None:
+    """Componente 3: tipo desconhecido vira readonly + invisível, não crasha."""
+    from notion_bulk_edit.schema_parser import parse_to_schema_json
+    raw = {
+        "object": "data_source",
+        "id": "test-id",
+        "properties": {
+            "Estranho": {"id": "x", "type": "novo_tipo_xyz", "novo_tipo_xyz": {}},
+            "Título": {"id": "title", "type": "title", "title": {}},
+        },
+    }
+    parsed = parse_to_schema_json(raw, "Test")
+    estranho = parsed["properties"]["estranho"]
+    assert estranho["tipo"] == "novo_tipo_xyz"
+    assert estranho["editavel"] is False
+    assert estranho["default_visible"] is False
+    assert estranho["opcoes"] == []
+
+
+def test_FASE0_compute_schema_hash_is_stable() -> None:
+    """Componente 3: hash determinístico, independe da ordem das chaves."""
+    from notion_bulk_edit.schema_parser import compute_schema_hash
+    a = {"foo": 1, "bar": [1, 2, 3]}
+    b = {"bar": [1, 2, 3], "foo": 1}  # ordem diferente
+    assert compute_schema_hash(a) == compute_schema_hash(b)
+    c = {"foo": 2, "bar": [1, 2, 3]}
+    assert compute_schema_hash(a) != compute_schema_hash(c)
+
+
+def test_FASE0_slugify_key_handles_accents_and_em_dash() -> None:
+    """Componente 3: slugify gera keys ASCII canônicas."""
+    from notion_bulk_edit.schema_parser import slugify_key
+    assert slugify_key("Número do processo") == "numero_do_processo"
+    assert slugify_key("Tipo de ação") == "tipo_de_acao"
+    assert slugify_key("Data de distribuição") == "data_de_distribuicao"
+    assert slugify_key("CPF/CNPJ") == "cpf_cnpj"
+    assert slugify_key("Sobrestado - IRR 20") == "sobrestado_irr_20"
+    # Em-dash em chaves de propriedade — vira underscore
+    assert slugify_key("Indenização — I") == "indenizacao_i"
+
+
+# --- Componente 4: SchemaRegistry ---
+
+
+def test_FASE0_schema_registry_load_from_empty_cache() -> None:
+    """Componente 4: registry sem schemas em cache retorna bases vazias."""
+    from notion_bulk_edit.schema_registry import SchemaRegistry
+    conn = _audit_only_conn()
+    reg = SchemaRegistry(conn)
+    reg.load_all_from_cache()
+    assert reg.bases() == []
+
+
+def test_FASE0_schema_registry_load_from_populated_cache() -> None:
+    """Componente 4: registry carrega schemas de meta_schemas."""
+    _skip_if_no_fixtures()
+    from notion_bulk_edit.schema_parser import (
+        compute_schema_hash, parse_to_schema_json,
+    )
+    from notion_bulk_edit.schema_registry import SchemaRegistry
+    from notion_rpadv.cache import db as cache_db
+    conn = _audit_only_conn()
+    raw = _load_fixture("Catalogo")
+    parsed = parse_to_schema_json(raw, "Catalogo")
+    schema_json = json.dumps(parsed, sort_keys=True, ensure_ascii=False)
+    schema_hash = compute_schema_hash(parsed)
+    cache_db.upsert_schema(
+        conn, parsed["data_source_id"], "Catalogo",
+        parsed["title_property"], schema_json, schema_hash, 1700000000.0,
+    )
+    reg = SchemaRegistry(conn)
+    reg.load_all_from_cache()
+    assert reg.bases() == ["Catalogo"]
+    spec = reg.get_prop("Catalogo", "categoria")
+    assert spec is not None
+    assert spec.tipo == "select"
+    assert spec.notion_name == "Categoria"
+
+
+def test_FASE0_schema_registry_refresh_from_api_initial() -> None:
+    """Componente 4: refresh em cache vazio retorna ChangeReport(initial)."""
+    _skip_if_no_fixtures()
+    from notion_bulk_edit.schema_registry import SchemaRegistry
+    conn = _audit_only_conn()
+    reg = SchemaRegistry(conn)
+    reg.load_all_from_cache()
+    raw = _load_fixture("Catalogo")
+    mock_client = MagicMock()
+    mock_client.get_data_source.return_value = raw
+    report = reg.refresh_from_api("Catalogo", raw["id"], mock_client)
+    mock_client.get_data_source.assert_called_once_with(raw["id"])
+    assert report.kind == "initial"
+    assert report.base == "Catalogo"
+    # meta_schemas populado
+    assert len(conn.execute("SELECT * FROM meta_schemas").fetchall()) == 1
+
+
+def test_FASE0_schema_registry_refresh_from_api_unchanged() -> None:
+    """Componente 4: dois refreshes seguidos sem mudança → segundo é unchanged."""
+    _skip_if_no_fixtures()
+    from notion_bulk_edit.schema_registry import SchemaRegistry
+    conn = _audit_only_conn()
+    reg = SchemaRegistry(conn)
+    reg.load_all_from_cache()
+    raw = _load_fixture("Catalogo")
+    mock_client = MagicMock()
+    mock_client.get_data_source.return_value = raw
+    r1 = reg.refresh_from_api("Catalogo", raw["id"], mock_client)
+    r2 = reg.refresh_from_api("Catalogo", raw["id"], mock_client)
+    assert r1.kind == "initial"
+    assert r2.kind == "unchanged"
+
+
+def test_FASE0_schema_registry_refresh_from_api_changed() -> None:
+    """Componente 4: alteração em opções de select → ChangeReport(changed)."""
+    _skip_if_no_fixtures()
+    import copy
+    from notion_bulk_edit.schema_registry import SchemaRegistry
+    conn = _audit_only_conn()
+    reg = SchemaRegistry(conn)
+    reg.load_all_from_cache()
+    raw_a = _load_fixture("Catalogo")
+    raw_b = copy.deepcopy(raw_a)
+    # Adiciona opção nova em Categoria
+    raw_b["properties"]["Categoria"]["select"]["options"].append(
+        {"id": "novo", "name": "Novo Tipo", "color": "green"}
+    )
+    mock_client = MagicMock()
+    mock_client.get_data_source.side_effect = [raw_a, raw_b]
+    r1 = reg.refresh_from_api("Catalogo", raw_a["id"], mock_client)
+    r2 = reg.refresh_from_api("Catalogo", raw_a["id"], mock_client)
+    assert r1.kind == "initial"
+    assert r2.kind == "changed"
+    assert "categoria" in r2.changed
+
+
+def test_FASE0_schema_registry_get_prop_returns_none_for_missing() -> None:
+    """Componente 4: lookup com base ou key inexistente retorna None."""
+    from notion_bulk_edit.schema_registry import SchemaRegistry
+    conn = _audit_only_conn()
+    reg = SchemaRegistry(conn)
+    reg.load_all_from_cache()
+    assert reg.get_prop("BaseInexistente", "x") is None
+    assert reg.get_prop("Outra", "y") is None
+
+
+def test_FASE0_schema_registry_colunas_visiveis_returns_default_visible_only() -> None:
+    """Componente 4: colunas_visiveis sem user_id retorna default_visible=True ordenado."""
+    _skip_if_no_fixtures()
+    from notion_bulk_edit.schema_registry import SchemaRegistry
+    conn = _audit_only_conn()
+    reg = SchemaRegistry(conn)
+    raw = _load_fixture("Catalogo")
+    mock_client = MagicMock()
+    mock_client.get_data_source.return_value = raw
+    reg.refresh_from_api("Catalogo", raw["id"], mock_client)
+    cols = reg.colunas_visiveis("Catalogo")
+    # Title sempre primeiro
+    assert cols[0] == "nome"
+    # Multi-select e rollup nunca devem aparecer no default
+    schema = reg.schema_for_base("Catalogo")
+    for k in cols:
+        assert schema[k].tipo not in ("multi_select", "rollup", "rich_text")
+
+
+def test_FASE0_schema_registry_vocabulario_returns_strings_only() -> None:
+    """Componente 4: vocabulario retorna tuple[str], sem cor."""
+    _skip_if_no_fixtures()
+    from notion_bulk_edit.schema_registry import SchemaRegistry
+    conn = _audit_only_conn()
+    reg = SchemaRegistry(conn)
+    raw = _load_fixture("Catalogo")
+    mock_client = MagicMock()
+    mock_client.get_data_source.return_value = raw
+    reg.refresh_from_api("Catalogo", raw["id"], mock_client)
+    vocab = reg.vocabulario("Catalogo", "categoria")
+    assert isinstance(vocab, tuple)
+    assert all(isinstance(v, str) for v in vocab)
+    assert "Peças processuais" in vocab
+
+
+def test_FASE0_schema_registry_vocabulario_full_returns_optionspec() -> None:
+    """Componente 4: vocabulario_full retorna tuple[OptionSpec] com cor."""
+    _skip_if_no_fixtures()
+    from notion_bulk_edit.schema_registry import OptionSpec, SchemaRegistry
+    conn = _audit_only_conn()
+    reg = SchemaRegistry(conn)
+    raw = _load_fixture("Catalogo")
+    mock_client = MagicMock()
+    mock_client.get_data_source.return_value = raw
+    reg.refresh_from_api("Catalogo", raw["id"], mock_client)
+    vocab = reg.vocabulario_full("Catalogo", "categoria")
+    assert isinstance(vocab, tuple)
+    assert all(isinstance(v, OptionSpec) for v in vocab)
+    assert all(hasattr(v, "name") and hasattr(v, "color") for v in vocab)
+
+
+def test_FASE0_schema_registry_singleton_lifecycle() -> None:
+    """Componente 4: get_schema_registry sem init → RuntimeError."""
+    import notion_bulk_edit.schema_registry as sr
+    # Reset singleton
+    sr._registry = None
+    with pytest.raises(RuntimeError):
+        sr.get_schema_registry()
+    conn = _audit_only_conn()
+    sr.init_schema_registry(conn)
+    assert sr.get_schema_registry() is not None
+    # Cleanup para não interferir em outros testes
+    sr._registry = None
+
+
+def test_FASE0_boot_refresh_all_calls_refresh_for_each_base() -> None:
+    """Componente 4: boot_refresh_all percorre data_sources e retorna lista de reports."""
+    _skip_if_no_fixtures()
+    from notion_bulk_edit.schema_registry import SchemaRegistry, boot_refresh_all
+    conn = _audit_only_conn()
+    reg = SchemaRegistry(conn)
+    raw_cat = _load_fixture("Catalogo")
+    raw_tar = _load_fixture("Tarefas")
+    mock_client = MagicMock()
+    mock_client.get_data_source.side_effect = [raw_cat, raw_tar]
+    reports = boot_refresh_all(
+        mock_client, reg,
+        {"Catalogo": raw_cat["id"], "Tarefas": raw_tar["id"]},
+    )
+    assert len(reports) == 2
+    assert {r.base for r in reports} == {"Catalogo", "Tarefas"}
+    assert all(r.kind == "initial" for r in reports)
+    assert mock_client.get_data_source.call_count == 2

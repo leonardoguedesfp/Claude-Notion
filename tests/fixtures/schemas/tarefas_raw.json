@@ -1,0 +1,231 @@
+{
+  "object": "data_source",
+  "id": "3a8bb311-5c1b-42ac-a3b2-859b75911e91",
+  "cover": null,
+  "icon": null,
+  "created_time": "2026-04-17T12:49:00.000Z",
+  "created_by": {
+    "object": "user",
+    "id": "22fd872b-594c-81bf-847e-000262ec6682"
+  },
+  "last_edited_by": {
+    "object": "user",
+    "id": "22fd872b-594c-81bf-847e-000262ec6682"
+  },
+  "last_edited_time": "2026-04-18T22:31:00.000Z",
+  "title": [
+    {
+      "type": "text",
+      "text": {
+        "content": "🎯 Tarefas",
+        "link": null
+      },
+      "annotations": {
+        "bold": false,
+        "italic": false,
+        "strikethrough": false,
+        "underline": false,
+        "code": false,
+        "color": "default"
+      },
+      "plain_text": "🎯 Tarefas",
+      "href": null
+    }
+  ],
+  "description": [
+    {
+      "type": "text",
+      "text": {
+        "content": "Peças processuais a elaborar, revisar e protocolar. Substitui os cards do Trello.",
+        "link": null
+      },
+      "annotations": {
+        "bold": false,
+        "italic": false,
+        "strikethrough": false,
+        "underline": false,
+        "code": false,
+        "color": "default"
+      },
+      "plain_text": "Peças processuais a elaborar, revisar e protocolar. Substitui os cards do Trello.",
+      "href": null
+    }
+  ],
+  "is_inline": false,
+  "properties": {
+    "Tribunal": {
+      "id": "BwAP",
+      "name": "Tribunal",
+      "description": null,
+      "type": "rollup",
+      "rollup": {
+        "rollup_property_name": "Tribunal",
+        "relation_property_name": "Processo",
+        "rollup_property_id": "p]UE",
+        "relation_property_id": "KqtX",
+        "function": "show_original"
+      }
+    },
+    "Descrição": {
+      "id": "D%7Cc%7C",
+      "name": "Descrição",
+      "description": null,
+      "type": "rich_text",
+      "rich_text": {}
+    },
+    "Data de publicação": {
+      "id": "KF~i",
+      "name": "Data de publicação",
+      "description": null,
+      "type": "date",
+      "date": {}
+    },
+    "Atualizado em": {
+      "id": "Kik%7D",
+      "name": "Atualizado em",
+      "description": null,
+      "type": "last_edited_time",
+      "last_edited_time": {}
+    },
+    "Processo": {
+      "id": "KqtX",
+      "name": "Processo",
+      "description": null,
+      "type": "relation",
+      "relation": {
+        "database_id": "78f11cd7-1d0d-4a1e-9df5-8be085e5bb33",
+        "data_source_id": "5e93b734-4043-4c89-a513-5e00a14081bb",
+        "type": "dual_property",
+        "dual_property": {
+          "synced_property_name": "Tarefas",
+          "synced_property_id": "MsRA"
+        }
+      }
+    },
+    "Prazo fatal": {
+      "id": "Tl%7Br",
+      "name": "Prazo fatal",
+      "description": "Prazo legal conforme CPC/CLT",
+      "type": "date",
+      "date": {}
+    },
+    "Responsável": {
+      "id": "VZsD",
+      "name": "Responsável",
+      "description": "Advogado que elabora a peça",
+      "type": "people",
+      "people": {}
+    },
+    "Cliente": {
+      "id": "_%7Dpa",
+      "name": "Cliente",
+      "description": null,
+      "type": "rollup",
+      "rollup": {
+        "rollup_property_name": "Clientes",
+        "relation_property_name": "Processo",
+        "rollup_property_id": "@B?I",
+        "relation_property_id": "KqtX",
+        "function": "show_original"
+      }
+    },
+    "Revisor 2": {
+      "id": "c%5Eg%3F",
+      "name": "Revisor 2",
+      "description": null,
+      "type": "people",
+      "people": {}
+    },
+    "Tipo de tarefa": {
+      "id": "f%3Bd%5B",
+      "name": "Tipo de tarefa",
+      "description": null,
+      "type": "relation",
+      "relation": {
+        "database_id": "992e641b-c0f8-437d-9217-99e7804beb82",
+        "data_source_id": "79afc833-77e2-4574-98ba-ebed7bd7e66c",
+        "type": "dual_property",
+        "dual_property": {
+          "synced_property_name": "Tarefas",
+          "synced_property_id": "xc%5Ch"
+        }
+      }
+    },
+    "Data de protocolo": {
+      "id": "lgxO",
+      "name": "Data de protocolo",
+      "description": "Preenchida quando a peça é efetivamente transmitida",
+      "type": "date",
+      "date": {}
+    },
+    "Criado em": {
+      "id": "rih%7C",
+      "name": "Criado em",
+      "description": null,
+      "type": "created_time",
+      "created_time": {}
+    },
+    "Peça revisor 2": {
+      "id": "tZid",
+      "name": "Peça revisor 2",
+      "description": null,
+      "type": "url",
+      "url": {}
+    },
+    "Peça revisor 3": {
+      "id": "yR%7C~",
+      "name": "Peça revisor 3",
+      "description": null,
+      "type": "url",
+      "url": {}
+    },
+    "Revisor 3": {
+      "id": "z%5DO_",
+      "name": "Revisor 3",
+      "description": null,
+      "type": "people",
+      "people": {}
+    },
+    "Peça responsável": {
+      "id": "zu%7D%5E",
+      "name": "Peça responsável",
+      "description": null,
+      "type": "url",
+      "url": {}
+    },
+    "Revisor 1": {
+      "id": "%7BejQ",
+      "name": "Revisor 1",
+      "description": null,
+      "type": "people",
+      "people": {}
+    },
+    "Peça revisor 1": {
+      "id": "~iTg",
+      "name": "Peça revisor 1",
+      "description": null,
+      "type": "url",
+      "url": {}
+    },
+    "Tarefa": {
+      "id": "title",
+      "name": "Tarefa",
+      "description": "Ex: Contestação — 0101234-56.2023.5.10.0001",
+      "type": "title",
+      "title": {}
+    }
+  },
+  "parent": {
+    "type": "database_id",
+    "database_id": "b40831f4-657a-4c75-80bc-db276b082729"
+  },
+  "database_parent": {
+    "type": "page_id",
+    "page_id": "34530d90-c916-8121-bc9e-fc5aa10ab7c9"
+  },
+  "url": "https://www.notion.so/b40831f4657a4c7580bcdb276b082729",
+  "public_url": null,
+  "in_trash": false,
+  "archived": false,
+  "request_id": "d17f65a5-27b9-42cb-a958-6974b9e18b9e"
+}
