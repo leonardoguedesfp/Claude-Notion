@@ -146,10 +146,24 @@ def is_nao_editavel(base: str, key: str) -> bool:
     return False
 
 
-def colunas_visiveis(base: str) -> list[str]:
-    """Retorna as chaves das colunas visíveis por default (largura_col != '0')."""
-    schema = SCHEMAS.get(base, {})
-    return [k for k, s in schema.items() if s.largura_col != "0"]
+def colunas_visiveis(base: str, user_id: str | None = None) -> list[str]:
+    """Retorna as chaves das colunas visíveis para uma base.
+
+    Sem ``user_id`` → defaults do schema dinâmico (registry).
+    Com ``user_id`` → preferências persistidas em ``meta_user_columns``.
+
+    Fase 4: rebatido para o registry. Comportamento legado de filtrar por
+    ``largura_col != '0'`` foi descartado — esse filtro nunca disparava no
+    schema dinâmico (``PropSpec.largura_col`` é sempre o default ``"10%"``)
+    e era a fonte da regressão visual da Fase 3 (todas as colunas visíveis
+    incluindo system properties como ``criado_em``/``atualizado_em``).
+    """
+    from notion_bulk_edit.schema_registry import get_schema_registry
+    try:
+        return get_schema_registry().colunas_visiveis(base, user_id=user_id)
+    except RuntimeError:
+        # Singleton não inicializado — testes unitários sem MainWindow.
+        return []
 
 
 def vocabulario(base: str, key: str) -> tuple[str, ...]:
