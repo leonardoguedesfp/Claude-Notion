@@ -18,14 +18,24 @@ class SyncWorker(QObject):
     """Sync worker that runs in a QThread.
 
     Emits:
-        progress(base: str, count: int) — pages fetched so far
+        total(base: str, n: int) — page count returned by the API, emitted
+                                   once before any progress event so the UI
+                                   can size its progress bar
+        progress(base: str, count: int) — pages decoded so far
         finished(base: str, added: int, updated: int, removed: int)
         error(base: str, message: str)
     """
 
+    # §2.3: total emitted right after `query_all` so the progress bar has a
+    # determinate maximum. Without it the bar would have to stay indeterminate.
+    total: Signal = Signal(str, int)
     progress: Signal = Signal(str, int)
     finished: Signal = Signal(str, int, int, int)
     error: Signal = Signal(str, str)
+    # BUG-OP-11: separate signal for auth failure so the SyncManager can
+    # forward it to the application-wide re-auth flow. The `error` signal
+    # still fires too (it is the caller's "the sync didn't finish" channel).
+    auth_invalidated: Signal = Signal()
 
     def __init__(
         self,
@@ -44,7 +54,13 @@ class SyncWorker(QObject):
         base = self._base
         try:
             self._sync(base)
-        except (NotionAuthError, NotionAPIError) as exc:
+        except NotionAuthError as exc:
+            # BUG-OP-11: surface the auth invalidation so the global re-auth
+            # dialog can open. Still emit `error` so existing per-base error
+            # handlers continue to behave (status bar, toast).
+            self.auth_invalidated.emit()
+            self.error.emit(base, str(exc))
+        except NotionAPIError as exc:
             self.error.emit(base, str(exc))
         except Exception as exc:  # noqa: BLE001
             self.error.emit(base, f"Unexpected error: {exc}")
@@ -53,6 +69,9 @@ class SyncWorker(QObject):
         client = NotionClient(self._token)
         db_id = DATA_SOURCES[base]
         raw_pages: list[dict[str, Any]] = client.query_all(db_id)
+        # §2.3: announce the total now so the dashboard's progress bar has
+        # a determinate maximum from the very first paint.
+        self.total.emit(base, len(raw_pages))
 
         schema = SCHEMAS.get(base, {})
 
@@ -124,6 +143,14 @@ class SyncManager(QObject):
     all_done: Signal = Signal()
     base_done: Signal = Signal(str, int, int, int)
     sync_error: Signal = Signal(str, str)
+    # §2.3: per-base lifecycle signals so the Dashboard sync panel and the
+    # global progress strip can paint live state without polling.
+    base_started: Signal = Signal(str)            # base
+    base_total: Signal = Signal(str, int)         # base, total pages
+    base_progress: Signal = Signal(str, int)      # base, pages processed
+    # BUG-OP-11: re-broadcast worker auth failures so MainWindow can open
+    # the re-auth dialog whether the failure came from a sync or a save.
+    auth_invalidated: Signal = Signal()
 
     def __init__(self, token: str, conn: sqlite3.Connection) -> None:
         super().__init__()
@@ -174,6 +201,12 @@ class SyncManager(QObject):
         thread.started.connect(worker.run)
         worker.finished.connect(lambda b, a, u, r: self._on_worker_finished(b, a, u, r))
         worker.error.connect(lambda b, msg: self._on_worker_error(b, msg))
+        # §2.3: forward total/progress so dashboard widgets can paint live
+        # progress without hooking into the worker directly.
+        worker.total.connect(self.base_total)
+        worker.progress.connect(self.base_progress)
+        # BUG-OP-11: forward auth failures up to MainWindow.
+        worker.auth_invalidated.connect(self.auth_invalidated)
         worker.finished.connect(thread.quit)
         worker.error.connect(thread.quit)
         # When thread finishes, start the next queued one
@@ -183,6 +216,10 @@ class SyncManager(QObject):
         self._threads[base] = thread
         self._workers[base] = worker
 
+        # §2.3: announce that this base is now actively syncing — the
+        # dashboard chip flips to "Sincronizando…" before the first network
+        # call returns.
+        self.base_started.emit(base)
         thread.start()
 
     def _on_worker_finished(

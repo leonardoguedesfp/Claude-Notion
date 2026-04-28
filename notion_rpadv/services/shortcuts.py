@@ -46,8 +46,22 @@ class ShortcutRegistry(QObject):
             )
         self._window: QWidget = window
         self._handlers: dict[str, Callable[[], Any]] = handlers
-        # Maps action name → current key-sequence string.
+        # BUG-OP-07: start from defaults and overlay the user's saved JSON
+        # so customised key sequences survive a restart. New defaults
+        # introduced in future versions still appear because they were
+        # placed in the dict before the override merge.
         self._bindings: dict[str, str] = dict(DEFAULT_SHORTCUTS)
+        try:
+            user_overrides = load_user_shortcuts()
+        except Exception:  # noqa: BLE001
+            # load_user_shortcuts itself swallows json errors and returns
+            # defaults; this except is a belt-and-braces guard against any
+            # future change that lets exceptions escape.
+            user_overrides = dict(DEFAULT_SHORTCUTS)
+        # `load_user_shortcuts()` already returns the merged dict, but we
+        # apply it on top so a hand-mocked ``load_user_shortcuts`` that
+        # returns only overrides also works.
+        self._bindings.update(user_overrides)
         # Maps action name → live QShortcut instance.
         self._shortcuts: dict[str, QShortcut] = {}
 
@@ -63,22 +77,44 @@ class ShortcutRegistry(QObject):
     def update_shortcut(self, action: str, new_sequence: str) -> None:
         """Change the key binding for *action* at runtime.
 
+        BUG-OP-07: prefer ``setKey()`` on the existing ``QShortcut`` so the
+        signal connections survive — destroying and recreating would lose
+        any external ``activated`` connections set via ``add_handler``.
+        Falls back to recreate-from-scratch when no live shortcut exists
+        yet (e.g. the first call for an action only registered later).
+
         If the action has no handler registered it is still stored so that
         ``get_bindings()`` returns an accurate map.
         """
         self._bindings[action] = new_sequence
-        # Destroy the old QShortcut if present.
-        old = self._shortcuts.pop(action, None)
-        if old is not None:
-            old.setEnabled(False)
-            old.deleteLater()
-        # Only create a new one if there is a handler.
+        existing = self._shortcuts.get(action)
+        if existing is not None:
+            key_seq = QKeySequence(new_sequence)
+            if key_seq.isEmpty():
+                # Refuse to install an empty/invalid sequence; disable
+                # instead of leaving the QShortcut in a broken state.
+                existing.setEnabled(False)
+                return
+            existing.setKey(key_seq)
+            existing.setEnabled(True)
+            return
+        # No live shortcut yet — create one if there is a handler.
         if action in self._handlers:
             self._create_shortcut(action, new_sequence)
 
     def get_bindings(self) -> dict[str, str]:
         """Return a copy of the current action → key-sequence mapping."""
         return dict(self._bindings)
+
+    def get_binding(self, action: str) -> str:
+        """Return the current key sequence string for *action*, or empty."""
+        return self._bindings.get(action, "")
+
+    def update_binding(self, action: str, new_sequence: str) -> None:
+        """BUG-OP-07: alias for ``update_shortcut`` matching the spec name
+        used by callers in MainWindow that don't care about the QShortcut
+        plumbing detail."""
+        self.update_shortcut(action, new_sequence)
 
     def set_enabled(self, action: str, enabled: bool) -> None:
         """Enable or disable a registered shortcut without removing it."""

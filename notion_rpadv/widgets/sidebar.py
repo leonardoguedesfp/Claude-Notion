@@ -395,8 +395,11 @@ class Sidebar(QWidget):
     # ------------------------------------------------------------------
 
     def paintEvent(self, event: object) -> None:  # type: ignore[override]
+        # N5: honour the active palette's sidebar shade (DELTA §0.2).
+        from notion_rpadv.theme.tokens import DARK, LIGHT
+        bg = DARK.app_sidebar if self._dark else LIGHT.app_sidebar
         painter = QPainter(self)
-        painter.fillRect(self.rect(), QColor(_NAV_BG))
+        painter.fillRect(self.rect(), QColor(bg))
         painter.end()
         super().paintEvent(event)  # type: ignore[arg-type]
 
@@ -424,6 +427,20 @@ class Sidebar(QWidget):
         tarefas = self._items.get("tarefas")
         if tarefas is not None:
             tarefas.set_badge(n)
+
+    def apply_theme(self, dark: bool) -> None:
+        """N5: switch sidebar background between LIGHT/DARK navy shades.
+
+        The nav itself is always dark by design (brand element), but DELTA
+        §0.2 specifies a slightly deeper navy in dark mode (#0A1F2D) vs
+        light mode (#0C324D). We keep the global ``_NAV_BG`` constant for
+        legacy paintEvent compatibility but override via stylesheet.
+        """
+        from notion_rpadv.theme.tokens import DARK, LIGHT
+        self._dark = dark
+        bg = DARK.app_sidebar if dark else LIGHT.app_sidebar
+        self.setStyleSheet(f"QWidget#Sidebar {{ background-color: {bg}; }}")
+        self.update()
 
     # ------------------------------------------------------------------
     # Slots

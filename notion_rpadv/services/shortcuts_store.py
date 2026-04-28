@@ -39,6 +39,17 @@ def load_user_shortcuts() -> dict[str, str]:
 
 
 def save_user_shortcuts(bindings: dict[str, str]) -> None:
-    """Persist user-customised shortcuts to disk."""
+    """Persist user-customised shortcuts to disk.
+
+    BUG-OP-07: write to a temp file and rename so a crash mid-write doesn't
+    leave the JSON half-written and unparseable on the next boot.
+    """
+    import os
     path = _shortcuts_file()
-    path.write_text(json.dumps(bindings, ensure_ascii=False, indent=2), encoding="utf-8")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(
+        json.dumps(bindings, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    os.replace(tmp, path)

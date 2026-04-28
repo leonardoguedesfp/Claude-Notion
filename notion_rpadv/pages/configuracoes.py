@@ -4,18 +4,20 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Callable
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QFont
+from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtGui import QFont, QKeySequence
 from PySide6.QtWidgets import (
     QButtonGroup,
     QFrame,
     QGridLayout,
     QHBoxLayout,
+    QKeySequenceEdit,
     QLabel,
     QLineEdit,
     QPushButton,
     QRadioButton,
     QScrollArea,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -64,6 +66,126 @@ _SHORTCUT_LABELS: dict[str, str] = {
     "nav_tarefas":  "Ir para Tarefas",
     "nav_catalogo": "Ir para Catálogo",
 }
+
+
+# ---------------------------------------------------------------------------
+# §7.2 ShortcutCapture — inline display ↔ capture mode for one binding.
+# ---------------------------------------------------------------------------
+
+class _ShortcutCapture(QWidget):
+    """Display a key sequence as a kbd-style chip; clicking the row's
+    "Editar" button flips to capture mode (QKeySequenceEdit), Enter saves
+    and shows a 2-second '✓ Salvo' confirmation.
+    """
+
+    saved: Signal = Signal(str)  # new sequence string (Qt format)
+
+    def __init__(self, sequence: str, p: "Palette", parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._p = p
+        self._stack = QStackedWidget(self)
+        outer = QHBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        outer.addWidget(self._stack)
+
+        # Page 0: display chip
+        self._display_lbl = QLabel(sequence or "—")
+        self._display_lbl.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+        self._stack.addWidget(self._display_lbl)
+
+        # Page 1: capture editor
+        self._edit = QKeySequenceEdit(QKeySequence(sequence) if sequence else QKeySequence())
+        self._edit.editingFinished.connect(self._on_finished)
+        self._stack.addWidget(self._edit)
+
+        # Page 2: "✓ Salvo" confirmation
+        self._saved_lbl = QLabel("✓ Salvo")
+        self._stack.addWidget(self._saved_lbl)
+
+        self._restyle()
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def enter_capture(self) -> None:
+        """Flip from display → capture mode and grab keyboard focus."""
+        self._stack.setCurrentIndex(1)
+        self._edit.setFocus()
+        # Visual hint while capturing.
+        self._edit.setKeySequence(QKeySequence())
+
+    def set_sequence(self, sequence: str) -> None:
+        self._display_lbl.setText(sequence or "—")
+        self._stack.setCurrentIndex(0)
+
+    def keyPressEvent(self, event: object) -> None:  # type: ignore[override]
+        # Esc cancels capture.
+        if self._stack.currentIndex() == 1 and getattr(event, "key", lambda: 0)() == Qt.Key.Key_Escape:  # type: ignore[attr-defined]
+            self._stack.setCurrentIndex(0)
+            return
+        super().keyPressEvent(event)  # type: ignore[arg-type]
+
+    def apply_theme(self, dark: bool) -> None:
+        from notion_rpadv.theme.tokens import DARK as _DARK, LIGHT as _LIGHT
+        self._p = _DARK if dark else _LIGHT
+        self._restyle()
+
+    # ------------------------------------------------------------------
+    # Internal
+    # ------------------------------------------------------------------
+
+    def _on_finished(self) -> None:
+        seq = self._edit.keySequence().toString()
+        if not seq:
+            self._stack.setCurrentIndex(0)
+            return
+        self._display_lbl.setText(seq)
+        self._stack.setCurrentIndex(2)
+        self.saved.emit(seq)
+        # Hold "✓ Salvo" for 2 seconds, then return to the display chip.
+        QTimer.singleShot(2000, lambda: self._stack.setCurrentIndex(0))
+
+    def _restyle(self) -> None:
+        p = self._p
+        chip_css = (
+            f"QLabel {{"
+            f" color: {p.app_fg};"
+            f" font-family: 'JetBrains Mono', 'Consolas', monospace;"
+            f" font-size: 12px;"
+            f" background-color: {p.app_accent_soft};"
+            f" border-radius: 4px;"
+            f" padding: 2px 8px;"
+            f" border: none; }}"
+        )
+        self._display_lbl.setStyleSheet(chip_css)
+        # Capture editor visually aligns with the chip.
+        self._edit.setStyleSheet(
+            f"""
+            QKeySequenceEdit {{
+                background-color: {p.app_accent_soft};
+                color: {p.app_accent};
+                border: 1px solid {p.app_accent};
+                border-radius: 4px;
+                padding: 2px 6px;
+                font-family: 'JetBrains Mono', 'Consolas', monospace;
+                font-size: 12px;
+            }}
+            """
+        )
+        self._saved_lbl.setStyleSheet(
+            f"""
+            QLabel {{
+                color: {p.app_success};
+                background-color: {p.app_success_bg};
+                font-size: 12px;
+                font-weight: 700;
+                padding: 2px 8px;
+                border-radius: 4px;
+            }}
+            """
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -132,6 +254,7 @@ class ConfiguracoesPage(QWidget):
         bindings: dict[str, str] | None = None,
         sync_manager: Any = None,  # BUG-19: injected SyncManager
         conn: sqlite3.Connection | None = None,
+        current_user_id: str = "",  # §7.3
         dark: bool = False,
         parent: QWidget | None = None,
     ) -> None:
@@ -143,11 +266,37 @@ class ConfiguracoesPage(QWidget):
         self._sync_labels: dict[str, QLabel] = {}
         self._sync_manager = sync_manager
         self._conn = conn
+        # §7.3: id of the user logged into this session — that row gets the
+        # "Você" chip + accent-soft background.
+        self._current_user_id: str = current_user_id
 
         self._build_ui()
         # BUG-V7: show real sync timestamps from DB at init
         if conn is not None:
             self._refresh_sync_labels(conn)
+
+        # BUG-V2-05: keep the sync labels in lockstep with the Dashboard by
+        # listening to the SyncManager's base_done signal — that's the same
+        # source of truth the Dashboard uses (cache_db.get_last_sync), so the
+        # two views can no longer drift to "Nunca" vs a real timestamp.
+        if sync_manager is not None and conn is not None:
+            try:
+                sync_manager.base_done.connect(self._on_sync_base_done)
+            except (TypeError, AttributeError):
+                pass
+
+    def apply_theme(self, dark: bool) -> None:
+        """N5: switch palette. The page is mostly _SectionCard frames whose
+        backgrounds are fixed via the global QSS, so all we need to flip is
+        the page heading colour."""
+        if dark == self._dark:
+            return
+        self._dark = dark
+        self._p = DARK if dark else LIGHT
+        if hasattr(self, "_heading"):
+            self._heading.setStyleSheet(
+                f"color: {self._p.app_fg_strong}; background: transparent; border: none;"
+            )
 
     # ------------------------------------------------------------------
     # UI construction
@@ -173,14 +322,17 @@ class ConfiguracoesPage(QWidget):
         layout.setContentsMargins(SP_8, SP_6, SP_8, SP_8)
         layout.setSpacing(SP_6)
 
-        # Page heading
-        heading = QLabel("Configurações")
+        # Page heading — kept as attribute for apply_theme + uses semantic
+        # token instead of brand-only navy_base (matching the V2 fixes).
+        self._heading = QLabel("Configurações")
         heading_font = QFont(FONT_DISPLAY)
         heading_font.setPixelSize(22)
         heading_font.setWeight(QFont.Weight(FW_BOLD))
-        heading.setFont(heading_font)
-        heading.setStyleSheet(f"color: {p.navy_base}; background: transparent; border: none;")
-        layout.addWidget(heading)
+        self._heading.setFont(heading_font)
+        self._heading.setStyleSheet(
+            f"color: {p.app_fg_strong}; background: transparent; border: none;"
+        )
+        layout.addWidget(self._heading)
 
         # ---- Section 1: Integração ----
         sec1 = _SectionCard("Integração", p)
@@ -394,11 +546,47 @@ class ConfiguracoesPage(QWidget):
         grid.addWidget(self._header_label("Usuário", p), 0, 0)
         grid.addWidget(self._header_label("Iniciais", p), 0, 1)
         grid.addWidget(self._header_label("Papel", p), 0, 2)
+        # §7.3: extra column on the right for the "Você" chip.
+        grid.addWidget(self._header_label("", p), 0, 3)
 
         for row_idx, (uid, udata) in enumerate(USUARIOS_LOCAIS.items(), start=1):
-            grid.addWidget(self._body_label(udata.get("name", uid), p), row_idx, 0)
-            grid.addWidget(self._body_label(udata.get("initials", ""), p), row_idx, 1)
-            grid.addWidget(self._body_label(udata.get("role", ""), p), row_idx, 2)
+            is_me = uid == self._current_user_id
+            name_lbl = self._body_label(udata.get("name", uid), p)
+            init_lbl = self._body_label(udata.get("initials", ""), p)
+            role_lbl = self._body_label(udata.get("role", ""), p)
+            if is_me:
+                # §7.3: bold + accent-soft background for the active user.
+                bold_css = (
+                    f"color: {p.app_fg_strong}; font-weight: {FW_BOLD}; "
+                    f"background-color: {p.app_accent_soft}; "
+                    f"border: none; padding: 4px 8px; "
+                    f"border-radius: {RADIUS_MD}px;"
+                )
+                for lbl in (name_lbl, init_lbl, role_lbl):
+                    lbl.setStyleSheet(f"QLabel {{ {bold_css} font-size: {FS_MD}px; }}")
+            grid.addWidget(name_lbl, row_idx, 0)
+            grid.addWidget(init_lbl, row_idx, 1)
+            grid.addWidget(role_lbl, row_idx, 2)
+
+            if is_me:
+                # §7.3: "Você" chip on the right.
+                you_chip = QLabel("Você")
+                you_chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                you_chip.setFixedHeight(20)
+                you_chip.setStyleSheet(
+                    f"""
+                    QLabel {{
+                        color: {p.app_accent};
+                        background-color: {p.app_accent_soft};
+                        font-size: {FS_SM}px;
+                        font-weight: {FW_BOLD};
+                        border: 1px solid {p.app_accent_soft};
+                        border-radius: 10px;
+                        padding: 0 8px;
+                    }}
+                    """
+                )
+                grid.addWidget(you_chip, row_idx, 3)
 
         layout.addLayout(grid)
 
@@ -415,25 +603,15 @@ class ConfiguracoesPage(QWidget):
             label_text = _SHORTCUT_LABELS.get(action, action.replace("_", " ").title())
             grid.addWidget(self._body_label(label_text, p), row_idx, 0)
 
-            seq_lbl = QLabel(seq or "—")
-            seq_lbl.setStyleSheet(
-                f"""
-                QLabel {{
-                    color: {p.app_fg};
-                    font-family: "JetBrains Mono", "Consolas", monospace;
-                    font-size: {FS_SM2}px;
-                    background-color: {p.app_accent_soft};
-                    border-radius: {RADIUS_MD}px;
-                    padding: 2px 8px;
-                    border: none;
-                }}
-                """
-            )
-            grid.addWidget(seq_lbl, row_idx, 1)
+            # §7.2: inline capture widget — click "Editar" → press combo →
+            # ✓ Salvo confirmation chip — no QInputDialog popup.
+            capture = _ShortcutCapture(seq, p)
+            capture.saved.connect(self._make_shortcut_saved_handler(action))
+            grid.addWidget(capture, row_idx, 1)
 
             edit_btn = self._make_secondary_btn("Editar", p)
             edit_btn.setFixedHeight(26)
-            edit_btn.clicked.connect(self._make_edit_shortcut_handler(action, seq_lbl))
+            edit_btn.clicked.connect(capture.enter_capture)
             grid.addWidget(edit_btn, row_idx, 2)
 
         layout.addLayout(grid)
@@ -502,18 +680,14 @@ class ConfiguracoesPage(QWidget):
                 lbl.setText("Sincronizando…")
         return handler
 
-    def _make_edit_shortcut_handler(self, action: str, label: QLabel) -> Callable[[], None]:
-        def handler() -> None:
-            from PySide6.QtWidgets import QInputDialog
-            current = self._bindings.get(action, "")
-            new_seq, ok = QInputDialog.getText(
-                self, "Editar atalho", f"Novo atalho para '{action}':", text=current
-            )
-            if ok and new_seq:
-                self._bindings[action] = new_seq
-                label.setText(new_seq)
-                save_user_shortcuts(self._bindings)
-                self.shortcut_changed.emit(action, new_seq)
+    def _make_shortcut_saved_handler(self, action: str) -> Callable[[str], None]:
+        """§7.2: persist + emit when the inline ShortcutCapture fires saved()."""
+        def handler(new_seq: str) -> None:
+            if not new_seq:
+                return
+            self._bindings[action] = new_seq
+            save_user_shortcuts(self._bindings)
+            self.shortcut_changed.emit(action, new_seq)
         return handler
 
     def update_sync_label(self, base: str, ts: float) -> None:
@@ -534,6 +708,19 @@ class ConfiguracoesPage(QWidget):
                 self.update_sync_label(base, ts)
             except Exception:  # noqa: BLE001
                 pass
+
+    def _on_sync_base_done(self, base: str, *_args: object) -> None:
+        """BUG-V2-05: refresh this base's sync label when SyncManager finishes
+        a sync. Reads from cache_db (canonical source) so it agrees with the
+        Dashboard's last-sync display."""
+        from notion_rpadv.cache import db as cache_db
+        if self._conn is None:
+            return
+        try:
+            ts = cache_db.get_last_sync(self._conn, base)
+        except Exception:  # noqa: BLE001
+            ts = 0.0
+        self.update_sync_label(base, ts)
 
     # ------------------------------------------------------------------
     # Widget factory helpers

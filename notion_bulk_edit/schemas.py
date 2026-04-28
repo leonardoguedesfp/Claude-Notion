@@ -34,6 +34,11 @@ class PropSpec:
     cor_por_valor: dict[str, str] = field(default_factory=dict)
     # BUG-V3: which base to look up when tipo == 'relation'
     target_base: str = ""
+    # §3.1: explicit minimum column width in pixels. The QHeaderView resize
+    # logic uses this as a floor so labels like "Cliente principal" never
+    # truncate to "Cliente Princip.". Falls back to a font-aware estimate
+    # when None.
+    min_width_px: Optional[int] = None
 
 
 # ---------------------------------------------------------------------------
@@ -96,6 +101,7 @@ SCHEMAS: dict[str, dict[str, PropSpec]] = {
             obrigatorio=True,
             largura_col="20%",
             mono=True,
+            min_width_px=200,  # §3.1
         ),
         "tribunal": PropSpec(
             notion_name="Tribunal",
@@ -106,6 +112,7 @@ SCHEMAS: dict[str, dict[str, PropSpec]] = {
             opcoes=TRIBUNAIS,
             largura_col="8%",
             cor_por_valor=_COR_TRIBUNAL,
+            min_width_px=90,  # §3.1
         ),
         "instancia": PropSpec(
             notion_name="Instância",
@@ -115,6 +122,7 @@ SCHEMAS: dict[str, dict[str, PropSpec]] = {
             opcoes=INSTANCIAS,
             largura_col="8%",
             cor_por_valor=_COR_INSTANCIA,
+            min_width_px=96,
         ),
         "fase": PropSpec(
             notion_name="Fase",
@@ -124,6 +132,7 @@ SCHEMAS: dict[str, dict[str, PropSpec]] = {
             opcoes=FASES,
             largura_col="12%",
             cor_por_valor=_COR_FASE,
+            min_width_px=130,  # §3.1
         ),
         "status": PropSpec(
             notion_name="Status",
@@ -133,6 +142,7 @@ SCHEMAS: dict[str, dict[str, PropSpec]] = {
             opcoes=STATUS_PROC,
             largura_col="9%",
             cor_por_valor=_COR_STATUS_PROC,
+            min_width_px=90,  # §3.1
         ),
         "cliente": PropSpec(
             notion_name="Clientes",
@@ -141,6 +151,7 @@ SCHEMAS: dict[str, dict[str, PropSpec]] = {
             editavel=False,  # BUG-N11: relation editor not yet implemented
             largura_col="17%",
             target_base="Clientes",  # BUG-V3
+            min_width_px=200,  # §3.1
         ),
         "parte_contraria": PropSpec(
             notion_name="Partes adversas",
@@ -148,6 +159,7 @@ SCHEMAS: dict[str, dict[str, PropSpec]] = {
             label="Parte contrária",
             editavel=True,
             largura_col="15%",
+            min_width_px=180,
         ),
         "distribuicao": PropSpec(
             notion_name="Data de distribuição",
@@ -156,6 +168,7 @@ SCHEMAS: dict[str, dict[str, PropSpec]] = {
             editavel=True,
             largura_col="10%",
             formato="BR_DATE",
+            min_width_px=130,
         ),
         "valor_causa": PropSpec(
             notion_name="Valor da Causa",
@@ -164,6 +177,7 @@ SCHEMAS: dict[str, dict[str, PropSpec]] = {
             editavel=True,
             largura_col="11%",
             formato="BRL",
+            min_width_px=140,
         ),
         "responsavel": PropSpec(
             notion_name="Responsável",
@@ -171,6 +185,18 @@ SCHEMAS: dict[str, dict[str, PropSpec]] = {
             label="Resp.",
             editavel=True,
             largura_col="5%",
+            min_width_px=100,  # §3.1
+        ),
+        # §3.8: reflexive relation — when set, the row is a recurso/sub-process
+        # of the referenced CNJ. Hidden from default view (largura_col="0")
+        # because the CnjDelegate already surfaces the parent CNJ inline.
+        "processo_pai": PropSpec(
+            notion_name="Processo pai",
+            tipo="relation",
+            label="Processo pai",
+            editavel=False,
+            largura_col="0",
+            target_base="Processos",
         ),
         "tema955": PropSpec(
             notion_name="Tema 955 — Sobrestado",
@@ -210,6 +236,7 @@ SCHEMAS: dict[str, dict[str, PropSpec]] = {
             editavel=True,
             obrigatorio=True,
             largura_col="24%",
+            min_width_px=240,
         ),
         "cpf": PropSpec(
             notion_name="CPF/CNPJ",
@@ -219,6 +246,7 @@ SCHEMAS: dict[str, dict[str, PropSpec]] = {
             obrigatorio=True,
             largura_col="12%",
             mono=True,
+            min_width_px=140,
         ),
         "email": PropSpec(
             notion_name="E-mail",
@@ -226,6 +254,7 @@ SCHEMAS: dict[str, dict[str, PropSpec]] = {
             label="E-mail",
             editavel=True,
             largura_col="20%",
+            min_width_px=200,
         ),
         "telefone": PropSpec(
             notion_name="Telefone",
@@ -234,6 +263,7 @@ SCHEMAS: dict[str, dict[str, PropSpec]] = {
             editavel=True,
             largura_col="12%",
             mono=True,
+            min_width_px=130,
         ),
         "falecido": PropSpec(
             notion_name="Falecido",
@@ -241,6 +271,7 @@ SCHEMAS: dict[str, dict[str, PropSpec]] = {
             label="Falecido",
             editavel=True,
             largura_col="5%",
+            min_width_px=90,
         ),
         "cidade": PropSpec(
             notion_name="Cidade/UF",
@@ -249,6 +280,7 @@ SCHEMAS: dict[str, dict[str, PropSpec]] = {
             editavel=True,
             opcoes=CIDADES_UF,
             largura_col="13%",
+            min_width_px=140,
         ),
         "cadastrado": PropSpec(
             notion_name="Cadastrado em",
@@ -257,6 +289,7 @@ SCHEMAS: dict[str, dict[str, PropSpec]] = {
             editavel=False,
             largura_col="10%",
             formato="BR_DATE",
+            min_width_px=110,
         ),
         "n_processos": PropSpec(
             notion_name="Nº de Processos",
@@ -264,6 +297,18 @@ SCHEMAS: dict[str, dict[str, PropSpec]] = {
             label="Nº processos",
             editavel=False,
             largura_col="9%",
+            min_width_px=100,  # §3.6: numeric, alinhado à direita
+        ),
+        # §3.7: reflexive relation — when filled, the cliente é sucessor do
+        # registro relacionado (espólio, herdeiro, sucessão empresarial, etc.).
+        "sucessor_de": PropSpec(
+            notion_name="Sucessor de",
+            tipo="relation",
+            label="Sucessor de",
+            editavel=False,
+            largura_col="14%",
+            target_base="Clientes",
+            min_width_px=160,
         ),
         "notas": PropSpec(
             notion_name="Notas",
@@ -282,6 +327,7 @@ SCHEMAS: dict[str, dict[str, PropSpec]] = {
             editavel=True,
             obrigatorio=True,
             largura_col="28%",
+            min_width_px=280,  # §3.1
         ),
         "prazo_fatal": PropSpec(
             notion_name="Prazo fatal",
@@ -291,6 +337,7 @@ SCHEMAS: dict[str, dict[str, PropSpec]] = {
             obrigatorio=True,
             largura_col="14%",
             formato="BR_DATE",
+            min_width_px=110,  # §3.1 ("Prazo" → 96; "Prazo fatal" needs more)
         ),
         "prioridade": PropSpec(
             notion_name="Prioridade",
@@ -300,6 +347,7 @@ SCHEMAS: dict[str, dict[str, PropSpec]] = {
             opcoes=PRIORIDADES,
             largura_col="10%",
             cor_por_valor=_COR_PRIORIDADE,
+            min_width_px=110,
         ),
         "status": PropSpec(
             notion_name="Status",
@@ -309,6 +357,7 @@ SCHEMAS: dict[str, dict[str, PropSpec]] = {
             opcoes=STATUS_TAREFA,
             largura_col="12%",
             cor_por_valor=_COR_STATUS_TAREFA,
+            min_width_px=120,
         ),
         "processo": PropSpec(
             notion_name="Processo",
@@ -318,6 +367,7 @@ SCHEMAS: dict[str, dict[str, PropSpec]] = {
             largura_col="17%",
             mono=True,
             target_base="Processos",  # BUG-V3
+            min_width_px=200,
         ),
         "cliente": PropSpec(
             notion_name="Cliente",
@@ -325,6 +375,7 @@ SCHEMAS: dict[str, dict[str, PropSpec]] = {
             label="Cliente",
             editavel=False,
             largura_col="14%",
+            min_width_px=160,
         ),
         "responsavel": PropSpec(
             notion_name="Responsável",
@@ -332,6 +383,7 @@ SCHEMAS: dict[str, dict[str, PropSpec]] = {
             label="Resp.",
             editavel=True,
             largura_col="5%",
+            min_width_px=100,  # §3.1
         ),
         "catalogo_tipo": PropSpec(
             notion_name="Tipo de tarefa",

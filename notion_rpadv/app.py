@@ -4,7 +4,8 @@ from __future__ import annotations
 import sqlite3
 from typing import Any
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QSettings, Qt, QTimer
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QMainWindow,
@@ -29,7 +30,8 @@ from notion_rpadv.pages.importar import ImportarPage
 from notion_rpadv.pages.processos import ProcessosPage
 from notion_rpadv.pages.tarefas import TarefasPage
 from notion_rpadv.services.notion_facade import NotionFacade
-from notion_rpadv.services.shortcuts import DEFAULT_SHORTCUTS, ShortcutRegistry
+from notion_rpadv.services.shortcuts import ShortcutRegistry
+from notion_rpadv.services.shortcuts_store import load_user_shortcuts
 from notion_rpadv.theme.qss_light import build_qss
 from notion_rpadv.theme.tokens import DARK, LIGHT
 from notion_rpadv.widgets.command_palette import CommandPalette
@@ -53,6 +55,36 @@ _PAGE_IMPORTAR   = "importar"
 _PAGE_LOGS       = "logs"
 _PAGE_CONFIG     = "config"
 
+# §0.3: theme preference (separate from the resolved boolean) and persistence
+_THEME_LIGHT: str = "light"
+_THEME_DARK: str = "dark"
+_THEME_AUTO: str = "auto"
+_VALID_THEMES: frozenset[str] = frozenset({_THEME_LIGHT, _THEME_DARK, _THEME_AUTO})
+
+_SETTINGS_ORG: str = "RPADV"
+_SETTINGS_APP: str = "NotionApp"
+_KEY_THEME_PREF: str = "theme_preference"
+
+
+def _system_prefers_dark() -> bool:
+    """§0.3: resolve the OS colour scheme through Qt's StyleHints.
+
+    Qt 6.5+ exposes ``Qt.ColorScheme.Dark`` via ``QGuiApplication.styleHints()``.
+    Falls back to ``False`` (light) when the platform doesn't report a scheme.
+    """
+    hints = QGuiApplication.styleHints()
+    if hints is None:
+        return False
+    scheme = getattr(hints, "colorScheme", None)
+    if scheme is None:
+        return False
+    try:
+        value = scheme()
+    except Exception:  # noqa: BLE001
+        return False
+    return value == Qt.ColorScheme.Dark
+
+
 # Command palette nav_ prefix → page id mapping
 _NAV_COMMANDS: dict[str, str] = {
     "nav_dashboard":  _PAGE_DASHBOARD,
@@ -74,24 +106,60 @@ class MainWindow(QMainWindow):
         user_id: str,
         token: str,
         dark: bool = False,
+        theme_pref: str = _THEME_LIGHT,
     ) -> None:
         super().__init__()
         self._user_id = user_id
         self._token = token
-        self._dark = dark
+        # §0.3: keep BOTH the user's choice ("light"/"dark"/"auto") and the
+        # resolved boolean. _dark is what every widget reads; _theme_pref is
+        # what we persist and what drives the system listener.
+        self._theme_pref: str = theme_pref if theme_pref in _VALID_THEMES else _THEME_LIGHT
+        self._dark: bool = self._resolve_dark()
+        # Best-effort backward-compat: if the caller forced dark=True, respect
+        # it as long as no auto/light preference was passed explicitly.
+        if dark and theme_pref == _THEME_LIGHT:
+            self._dark = True
+            self._theme_pref = _THEME_DARK
 
         # Resolve user dict
         self._user_dict: dict[str, str] = USUARIOS_LOCAIS.get(
             user_id, {"name": user_id, "initials": user_id[:2].upper(), "role": ""}
         )
 
-        # SQLite connection — single connection shared by all pages
+        # SQLite connections.
+        # BUG-OP-09: cache (records) and audit (pending_edits + edit_log)
+        # live in separate files now. The migration helper copies legacy
+        # rows from cache.db into audit.db on first boot post-fix and
+        # flips a flag in audit.meta so subsequent boots skip the work.
         db_path = get_cache_db_path()
-        self._conn: sqlite3.Connection = cache_db.get_conn(db_path)
+        # Defensive backup of the legacy cache before any migration runs.
+        cache_db.backup_legacy_cache_file(db_path)
+        self._conn: sqlite3.Connection = cache_db.get_cache_conn(db_path)
+        self._audit_conn: sqlite3.Connection = cache_db.get_audit_conn()
+        try:
+            cache_db.migrate_audit_from_cache_if_needed(
+                self._conn, self._audit_conn
+            )
+        except Exception:  # noqa: BLE001
+            # Migration failure isn't fatal: legacy rows stay in cache.db
+            # untouched (the .bak is preserved); the user can retry on
+            # the next boot. We don't surface a toast here because the
+            # status bar isn't built yet.
+            pass
 
         # Services
-        self._facade = NotionFacade(self._token, self._conn)
+        self._facade = NotionFacade(
+            self._token, self._conn, audit_conn=self._audit_conn,
+        )
         self._sync_manager = SyncManager(self._token, self._conn)
+
+        # BUG-OP-11: idempotency flag — multiple workers can fire
+        # auth_invalidated in quick succession (a partial save batch + a
+        # background sync that started before the token expired). Only the
+        # first emission shows the modal; subsequent ones are absorbed
+        # silently.
+        self._auth_dialog_open: bool = False
 
         # Pages registry {page_id: QWidget}
         self._pages: dict[str, QWidget] = {}
@@ -103,6 +171,16 @@ class MainWindow(QMainWindow):
         self._apply_theme()
         self._connect_signals()
         self._setup_shortcuts()
+
+        # §0.3: when the user picked "Auto", follow the OS theme. Listen on
+        # QStyleHints.colorSchemeChanged so swapping the system theme at
+        # runtime is reflected in the app without a restart.
+        hints = QGuiApplication.styleHints()
+        if hints is not None and hasattr(hints, "colorSchemeChanged"):
+            try:
+                hints.colorSchemeChanged.connect(self._on_system_color_scheme_changed)
+            except (TypeError, AttributeError):
+                pass
 
         # Auto-sync stale bases on startup (slight delay so UI is visible first)
         QTimer.singleShot(500, self._auto_sync_if_stale)
@@ -132,7 +210,8 @@ class MainWindow(QMainWindow):
         self._build_pages()
 
         # ---- Status bar ----
-        self._status_bar = AppStatusBar(self)
+        # N5: status bar honours the active palette via apply_theme().
+        self._status_bar = AppStatusBar(self, dark=self._dark)
         self.setStatusBar(self._status_bar)
 
         # ---- Overlays (parented to central so they float over content) ----
@@ -160,6 +239,9 @@ class MainWindow(QMainWindow):
         """Instantiate and register every page."""
         base_kwargs: dict[str, Any] = {
             "conn":         self._conn,
+            # BUG-OP-09: pages need audit_conn for any cell that hits
+            # pending_edits / edit_log (Save flow inside BaseTablePage).
+            "audit_conn":   self._audit_conn,
             "token":        self._token,
             "user":         self._user_id,
             "facade":       self._facade,
@@ -169,16 +251,31 @@ class MainWindow(QMainWindow):
         }
 
         # Dashboard
+        # §2.3: dashboard now owns a live sync panel that needs the
+        # SyncManager signals — pass it through.
         dashboard = DashboardPage(
-            conn=self._conn, user=self._user_dict, dark=self._dark
+            conn=self._conn,
+            user=self._user_dict,
+            dark=self._dark,
+            sync_manager=self._sync_manager,
         )
         self._add_page(_PAGE_DASHBOARD, dashboard)
 
         # Table pages
-        self._add_page(_PAGE_PROCESSOS, ProcessosPage(**base_kwargs))
-        self._add_page(_PAGE_CLIENTES,  ClientesPage(**base_kwargs))
-        self._add_page(_PAGE_TAREFAS,   TarefasPage(**base_kwargs))
-        self._add_page(_PAGE_CATALOGO,  CatalogoPage(**base_kwargs))
+        # §3.2: each table page emits relation_clicked when the user double-
+        # clicks a relation chip; we route them all through one navigator.
+        for page_id, ctor in (
+            (_PAGE_PROCESSOS, ProcessosPage),
+            (_PAGE_CLIENTES, ClientesPage),
+            (_PAGE_TAREFAS, TarefasPage),
+            (_PAGE_CATALOGO, CatalogoPage),
+        ):
+            page = ctor(**base_kwargs)
+            try:
+                page.relation_clicked.connect(self._on_relation_clicked)
+            except (TypeError, AttributeError):
+                pass
+            self._add_page(page_id, page)
 
         # Utility pages
         importar = ImportarPage(
@@ -188,20 +285,29 @@ class MainWindow(QMainWindow):
         self._add_page(_PAGE_IMPORTAR, importar)
 
         if LogsPage is not None:
+            # BUG-OP-09: LogsPage reads edit_log from audit.db.
             logs = LogsPage(
                 conn=self._conn, token=self._token, user=self._user_id,
-                facade=self._facade, dark=self._dark
+                facade=self._facade, dark=self._dark,
+                audit_conn=self._audit_conn,
             )
             logs.toast_requested.connect(self._push_toast)
             self._add_page(_PAGE_LOGS, logs)
 
         # BUG-19: pass sync_manager to ConfiguracoesPage
         # BUG-V7: pass conn so ConfiguracoesPage can show real sync timestamps
+        # §0.3: forward the actual preference (which may be "auto") so the
+        # picker reflects what the user chose, not just the resolved boolean.
+        # §7.3: pass current_user_id so the Users table highlights "Você".
+        # BUG-OP-07: seed the picker with the user's current bindings (defaults
+        # overlaid with any saved overrides from shortcuts.json) so the UI
+        # reflects what's actually active in the live ShortcutRegistry.
         config = ConfiguracoesPage(
-            current_theme="dark" if self._dark else "light",
-            bindings=dict(DEFAULT_SHORTCUTS),
+            current_theme=self._theme_pref,
+            bindings=load_user_shortcuts(),
             sync_manager=self._sync_manager,
             conn=self._conn,
+            current_user_id=self._user_id,
             dark=self._dark,
         )
         config.theme_changed.connect(self._on_theme_changed)
@@ -233,6 +339,18 @@ class MainWindow(QMainWindow):
     # Theme
     # ------------------------------------------------------------------
 
+    def _resolve_dark(self) -> bool:
+        """§0.3: turn the user's preference into a concrete dark-mode boolean.
+
+        - ``light`` / ``dark`` → fixed
+        - ``auto``             → mirror the OS color scheme
+        """
+        if self._theme_pref == _THEME_DARK:
+            return True
+        if self._theme_pref == _THEME_AUTO:
+            return _system_prefers_dark()
+        return False
+
     def _apply_theme(self) -> None:
         p = DARK if self._dark else LIGHT
         # BUG-10: use qss_dark for dark theme instead of always qss_light
@@ -242,17 +360,103 @@ class MainWindow(QMainWindow):
         else:
             qss = build_qss(p)
         self.setStyleSheet(qss)
+        # N5: propagate the theme change to widgets/pages whose inline styles
+        # cache a Palette. The global QSS above handles object-name styled
+        # widgets; this hook covers everything that paints from self._p.
+        self._propagate_theme()
+
+    def _propagate_theme(self) -> None:
+        """N5: ask every theme-aware child to re-paint with the new palette."""
+        targets: list[Any] = [
+            getattr(self, "_status_bar", None),
+            getattr(self, "_sidebar", None),
+            getattr(self, "_command_palette", None),
+            getattr(self, "_toast", None),
+        ]
+        # Pages registered in the stack
+        if hasattr(self, "_pages"):
+            targets.extend(self._pages.values())
+        for w in targets:
+            if w is None:
+                continue
+            apply = getattr(w, "apply_theme", None)
+            if callable(apply):
+                try:
+                    apply(self._dark)
+                except Exception:  # noqa: BLE001
+                    # A misbehaving page must not cripple the toggle.
+                    pass
+
+    def _persist_theme_pref(self) -> None:
+        """§0.3: remember the user's choice across launches."""
+        try:
+            QSettings(_SETTINGS_ORG, _SETTINGS_APP).setValue(
+                _KEY_THEME_PREF, self._theme_pref
+            )
+        except Exception:  # noqa: BLE001
+            pass
 
     def _toggle_theme(self) -> None:
-        self._dark = not self._dark
+        # §0.3: toggle flips between concrete light/dark — auto stays a
+        # deliberate, separate choice users only get from the picker.
+        self._theme_pref = _THEME_LIGHT if self._dark else _THEME_DARK
+        self._dark = self._theme_pref == _THEME_DARK
         self._apply_theme()
+        self._persist_theme_pref()
         self._push_toast(
             f"Tema {'escuro' if self._dark else 'claro'} ativado", "info"
         )
 
     def _on_theme_changed(self, theme: str) -> None:
-        self._dark = theme == "dark"
+        # §0.3 / BUG-N1: previously this collapsed "auto" → False (always
+        # light). Now it stores the preference and resolves dark via the OS.
+        if theme not in _VALID_THEMES:
+            return
+        self._theme_pref = theme
+        self._dark = self._resolve_dark()
         self._apply_theme()
+        self._persist_theme_pref()
+
+    def _on_system_color_scheme_changed(self, _scheme: object = None) -> None:
+        """§0.3: react to OS theme changes when the user picked Auto."""
+        if self._theme_pref != _THEME_AUTO:
+            return
+        new_dark = _system_prefers_dark()
+        if new_dark == self._dark:
+            return
+        self._dark = new_dark
+        self._apply_theme()
+
+    def _on_relation_clicked(self, target_base: str, page_id: str) -> None:
+        """§3.2: navigate to the table page that owns *target_base* and
+        select the row whose ``page_id`` matches. Falls back to plain
+        navigation if no row is found (still useful — opens the right table)."""
+        page_id_to_navigate = {
+            "Processos": _PAGE_PROCESSOS,
+            "Clientes": _PAGE_CLIENTES,
+            "Tarefas": _PAGE_TAREFAS,
+            "Catalogo": _PAGE_CATALOGO,
+        }.get(target_base)
+        if page_id_to_navigate is None:
+            return
+        self._navigate(page_id_to_navigate)
+        # Try to focus the matching row.
+        page = self._pages.get(page_id_to_navigate)
+        if page is None:
+            return
+        model = getattr(page, "_model", None)
+        proxy = getattr(page, "_proxy", None)
+        table = getattr(page, "_table", None)
+        if model is None or proxy is None or table is None:
+            return
+        for row in range(model.rowCount()):
+            if model.get_page_id(row) == page_id:
+                src_idx = model.index(row, 0)
+                proxy_idx = proxy.mapFromSource(src_idx)
+                if proxy_idx.isValid():
+                    table.setCurrentIndex(proxy_idx)
+                    table.scrollTo(proxy_idx)
+                break
 
     def _on_token_changed(self, token: str) -> None:
         self._token = token
@@ -264,6 +468,87 @@ class MainWindow(QMainWindow):
             if hasattr(page, "_token"):
                 page._token = token  # type: ignore[union-attr]
         self._push_toast("Token atualizado com sucesso.", "success")
+
+    # ------------------------------------------------------------------
+    # BUG-OP-11: re-authentication
+    # ------------------------------------------------------------------
+
+    def _on_auth_invalidated(self) -> None:
+        """Open the re-auth dialog when Notion rejects our token.
+
+        Idempotent: if a dialog is already open we drop subsequent emissions
+        on the floor instead of stacking modals. Dirty cells are *never*
+        touched by this slot — they survive the failure and stay yellow
+        until the user retries the save (or discards explicitly).
+        """
+        if self._auth_dialog_open:
+            return
+        self._auth_dialog_open = True
+        try:
+            self._status_bar.set_sync_status("Token inválido")
+            choice = self._show_reauth_dialog()
+            if choice == "reauthenticate":
+                self._open_reauth_flow()
+            else:
+                # "Mais tarde": stay in degraded state — saves will keep
+                # failing until the user re-authenticates, but dirty cells
+                # stay visible and the user can choose when to retry.
+                self._push_toast(
+                    "Token inválido. Edições não serão salvas até "
+                    "re-autenticar.",
+                    "warning",
+                )
+        finally:
+            self._auth_dialog_open = False
+
+    def _show_reauth_dialog(self) -> str:
+        """Modal blocker: returns 'reauthenticate' or 'later'.
+
+        Split into its own method so tests can monkeypatch it without
+        spinning up a real QMessageBox. Real implementation uses Qt's
+        QMessageBox so we don't drag in a heavyweight custom dialog.
+        """
+        from PySide6.QtWidgets import QMessageBox
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("Token Notion inválido")
+        box.setText(
+            "O token de integração com o Notion expirou ou foi revogado."
+        )
+        box.setInformativeText(
+            "Suas edições não salvas estão preservadas.\n\n"
+            "Clique em Re-autenticar para inserir um novo token."
+        )
+        reauth_btn = box.addButton(
+            "Re-autenticar", QMessageBox.ButtonRole.AcceptRole
+        )
+        box.addButton("Mais tarde", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(reauth_btn)
+        box.exec()
+        return "reauthenticate" if box.clickedButton() is reauth_btn else "later"
+
+    def _open_reauth_flow(self) -> None:
+        """Hand control back to the existing LoginWindow in 'first-time'
+        mode so the user can paste a new secret_… token. On success, the
+        new token propagates through ``_on_token_changed`` exactly like a
+        manual change in Configurações.
+        """
+        from notion_rpadv.auth.login_window import LoginWindow
+        from notion_rpadv.auth.token_store import get_token
+
+        dlg = LoginWindow(parent=self)
+        if dlg.exec():
+            new_token = getattr(dlg, "_token_value", "") or get_token() or ""
+            if new_token and new_token != self._token:
+                self._on_token_changed(new_token)
+            else:
+                # User went through the dialog but kept the same token;
+                # status bar still says "Token inválido" until next sync.
+                self._push_toast(
+                    "Mesmo token mantido. Re-autentique novamente em "
+                    "Configurações se o problema persistir.",
+                    "info",
+                )
 
     # ------------------------------------------------------------------
     # Command palette
@@ -362,16 +647,74 @@ class MainWindow(QMainWindow):
             lambda msg: self._push_toast(f"Erro ao salvar: {msg}", "error")
         )
 
-    def _on_commit_finished(self, base: str, succeeded: int, failed: int) -> None:
+        # BUG-OP-11: a single slot reacts to auth invalidation regardless of
+        # whether the failure came from a save (CommitWorker), a revert
+        # (_RevertWorker), or a sync (SyncWorker). The slot itself is
+        # idempotent so multiple emissions in a single batch only open one
+        # dialog.
+        self._facade.auth_invalidated.connect(self._on_auth_invalidated)
+        self._sync_manager.auth_invalidated.connect(self._on_auth_invalidated)
+
+    def _on_commit_finished(self, base: str, results: list[dict]) -> None:
+        # BUG-OP-03: results is a per-cell list. Build a toast that names
+        # the failing records so the user knows which rows to revisit
+        # instead of seeing "5 salvas, 2 com erro" without context.
         self._status_bar.set_sync_status("Sincronizado")
-        if failed == 0:
+        succeeded = sum(1 for r in results if r.get("ok"))
+        failed = [r for r in results if not r.get("ok")]
+        if not failed:
             self._push_toast(
                 f"{succeeded} edição(ões) salva(s) no Notion.", "success"
             )
-        else:
+            return
+        # Build a "<record name> (<field label>)" snippet for up to 3
+        # failures, then truncate with a pointer to the Logs page.
+        snippets = self._format_failure_snippets(base, failed, max_items=3)
+        if len(failed) <= 3:
+            detail = ", ".join(snippets)
+            kind = "warning" if succeeded > 0 else "error"
             self._push_toast(
-                f"{succeeded} salvas, {failed} com erro.", "warning"
+                f"{succeeded} salvas, {len(failed)} falhas em: {detail}",
+                kind,
             )
+        else:
+            detail = ", ".join(snippets)
+            kind = "warning" if succeeded > 0 else "error"
+            self._push_toast(
+                f"{succeeded} salvas, {len(failed)} falhas em: {detail} "
+                f"(veja Logs para detalhes)",
+                kind,
+            )
+
+    def _format_failure_snippets(
+        self, base: str, failed: list[dict], max_items: int = 3,
+    ) -> list[str]:
+        """BUG-OP-03: render `<record title> (<field label>)` for up to
+        *max_items* failures so the toast points the user at the rows that
+        need attention. Falls back to page_id / raw key when the title or
+        schema label is missing."""
+        # Lazy imports to keep app.py startup light.
+        from notion_bulk_edit.schemas import get_prop
+        from notion_rpadv.cache import db as cache_db
+        from notion_rpadv.models.base_table_model import _TITLE_KEY_BY_BASE
+        title_key = _TITLE_KEY_BY_BASE.get(base, "")
+        snippets: list[str] = []
+        for r in failed[:max_items]:
+            pid = str(r.get("page_id", ""))
+            key = str(r.get("key", ""))
+            # Title (record name)
+            title = ""
+            if title_key:
+                rec = cache_db.get_record(self._conn, base, pid)
+                if rec is not None:
+                    title = str(rec.get(title_key) or "").strip()
+            if not title:
+                title = pid[:8] or "?"
+            # Field label
+            spec = get_prop(base, key)
+            label = spec.label if spec is not None else key
+            snippets.append(f"{title} ({label})")
+        return snippets
 
     def _on_import_done(self, base: str, rows: int) -> None:
         self._push_toast(f"{rows} registro(s) importado(s) para {base}.", "success")
@@ -394,8 +737,25 @@ class MainWindow(QMainWindow):
             "discard":       self._discard_current_page,
             "new_record":    self._new_record_current_page,
         }
+        # ShortcutRegistry.__init__ already pulls user overrides from
+        # shortcuts.json so the QShortcuts created by register_all() reflect
+        # any customisation the user did in a previous session (BUG-OP-07).
         self._shortcut_registry = ShortcutRegistry(self, handlers)
         self._shortcut_registry.register_all()
+
+        # BUG-OP-07: Configurações emits shortcut_changed when the inline
+        # capture saves. Connect that to the live registry so the QShortcut
+        # is rebound in the same session (it already gets persisted to
+        # shortcuts.json by Configurações before the emit).
+        config_page = self._pages.get(_PAGE_CONFIG)
+        if config_page is not None and hasattr(config_page, "shortcut_changed"):
+            config_page.shortcut_changed.connect(self._on_shortcut_changed)
+
+    def _on_shortcut_changed(self, action: str, new_sequence: str) -> None:
+        """BUG-OP-07: rebind the live QShortcut so the new key sequence
+        works without a restart. Persistence to disk already happened in
+        Configurações.save_user_shortcuts before the signal fired."""
+        self._shortcut_registry.update_binding(action, new_sequence)
 
     def _refresh_current_page(self) -> None:
         current = self._stack.currentWidget()

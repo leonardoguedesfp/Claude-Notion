@@ -5,7 +5,9 @@ import sqlite3
 
 from PySide6.QtWidgets import QWidget
 
+from notion_bulk_edit.schemas import colunas_visiveis
 from notion_rpadv.cache.sync import SyncManager
+from notion_rpadv.models.delegates import CnjDelegate
 from notion_rpadv.pages.base_table_page import BaseTablePage
 from notion_rpadv.services.notion_facade import NotionFacade
 
@@ -22,6 +24,7 @@ class ProcessosPage(BaseTablePage):
         sync_manager: SyncManager | None = None,
         dark: bool = False,
         parent: QWidget | None = None,
+        audit_conn: sqlite3.Connection | None = None,
     ) -> None:
         super().__init__(
             base="Processos",
@@ -32,4 +35,11 @@ class ProcessosPage(BaseTablePage):
             sync_manager=sync_manager,
             dark=dark,
             parent=parent,
+            audit_conn=audit_conn,
         )
+        # §3.8: install the CNJ-specific delegate on the CNJ column so rows
+        # with a `processo_pai` render the parent CNJ inline (↳ ABOVE own).
+        cols = colunas_visiveis("Processos")
+        if "cnj" in cols:
+            cnj_col = cols.index("cnj")
+            self._table.setItemDelegateForColumn(cnj_col, CnjDelegate(self._table))

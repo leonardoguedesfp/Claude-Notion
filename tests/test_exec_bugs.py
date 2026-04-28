@@ -216,13 +216,15 @@ def test_display_value_rollup_list():
 
 
 @requires_pyside6
-def test_display_value_rollup_empty_list():
-    """BUG-EXEC-08: rollup with empty list renders as empty string."""
+def test_display_value_rollup_empty_list_em_dash():
+    """BUG-EXEC-08 + §3.3: rollup with empty list renders as the em-dash
+    placeholder ("—") so users can tell "no values" apart from a blank
+    cell. Updated from the original "" expectation when §3.3 landed."""
     from notion_bulk_edit.schemas import PropSpec
     from notion_rpadv.models.base_table_model import _display_value
 
     spec = PropSpec(notion_name="X", tipo="rollup", label="X")
-    assert _display_value(spec, []) == ""
+    assert _display_value(spec, []) == "—"
 
 
 @requires_pyside6

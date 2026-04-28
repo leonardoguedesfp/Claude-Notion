@@ -11,3 +11,6 @@ build/
 *.spec
 *.ico
 .env
+
+# Claude Code CLI cache
+.claude/

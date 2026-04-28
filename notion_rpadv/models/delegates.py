@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from PySide6.QtCore import QDate, QModelIndex, Qt
-from PySide6.QtGui import QColor, QPainter, QPen, QBrush
+from PySide6.QtCore import QDate, QModelIndex, QRect, Qt
+from PySide6.QtGui import QColor, QFont, QPainter, QPen, QBrush
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -270,6 +270,63 @@ class PropDelegate(QStyledItemDelegate):
     ) -> None:
         spec = _get_spec_from_index(index)
 
+        # §3.2: relation cells render as accent chip-rels — visually distinct
+        # from select/multi_select chips and clickable (the click handling is
+        # wired up in BaseTablePage via the table's doubleClicked signal).
+        if spec is not None and spec.tipo == "relation":
+            raw: Any = index.data(Qt.ItemDataRole.DisplayRole)
+            text = str(raw) if raw else ""
+            super().paint(painter, option, index)
+            if not text or text == "—":
+                return
+            # Split the comma-resolved name list back into chips.
+            names = [n.strip() for n in text.split(",") if n.strip()]
+            if not names:
+                return
+
+            painter.save()
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            rect = option.rect
+            x = rect.x() + _CHIP_PADDING_H
+            y = rect.y() + (rect.height() - 20) // 2
+
+            font = QApplication.font()
+            font.setPointSize(8)
+            painter.setFont(font)
+            fm = painter.fontMetrics()
+
+            # Accent-tinted chip — DELTA "chip cor --accent (chip-rel)".
+            from notion_rpadv.theme.tokens import LIGHT
+            chip_bg = QColor(LIGHT.app_accent_soft)
+            chip_fg = QColor(LIGHT.app_accent)
+
+            for name in names:
+                if x >= rect.right() - _CHIP_PADDING_H:
+                    break
+                text_w = fm.horizontalAdvance(name)
+                chip_w = text_w + _CHIP_PADDING_H * 2
+                chip_h = fm.height() + _CHIP_PADDING_V * 2
+
+                chip_rect_right = min(x + chip_w, rect.right() - _CHIP_PADDING_H)
+                actual_w = chip_rect_right - x
+
+                painter.setBrush(QBrush(chip_bg))
+                painter.setPen(Qt.PenStyle.NoPen)
+                from PySide6.QtCore import QRectF
+                painter.drawRoundedRect(
+                    QRectF(x, y, actual_w, chip_h), _CHIP_RADIUS, _CHIP_RADIUS
+                )
+                painter.setPen(QPen(chip_fg))
+                from PySide6.QtCore import QRect as _QRect
+                painter.drawText(
+                    _QRect(x + _CHIP_PADDING_H, y, actual_w - _CHIP_PADDING_H, chip_h),
+                    Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+                    name,
+                )
+                x += actual_w + _CHIP_GAP
+            painter.restore()
+            return
+
         # For select / multi_select, draw chip-style pills.
         if spec is not None and spec.tipo in ("select", "multi_select"):
             raw: Any = index.data(Qt.ItemDataRole.DisplayRole)
@@ -341,3 +398,164 @@ class PropDelegate(QStyledItemDelegate):
 
         # Default painting for all other types.
         super().paint(painter, option, index)
+
+
+class SucessorDelegate(QStyledItemDelegate):
+    """§3.7 paints the "Sucessor de" column as `↳ Nome (†)` when set,
+    or as the empty placeholder when not.
+
+    It also draws the value with the chip-rel accent treatment so the cell
+    visually anchors the user back to the parent record.
+    """
+
+    def paint(
+        self,
+        painter: QPainter,
+        option: QStyleOptionViewItem,
+        index: QModelIndex,
+    ) -> None:
+        super().paint(painter, option, QModelIndex())
+        text = str(index.data(Qt.ItemDataRole.DisplayRole) or "")
+        if not text or text == "—":
+            super().paint(painter, option, index)
+            return
+
+        from notion_rpadv.theme.tokens import LIGHT
+        accent_fg = QColor(LIGHT.app_accent)
+        rect = option.rect
+
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        f = QFont(QApplication.font())
+        f.setItalic(True)
+        f.setPointSize(9)
+        painter.setFont(f)
+        painter.setPen(QPen(accent_fg))
+        # Draw "↳ <name> (†)" — the cross marker emphasises the
+        # successor-of-a-deceased nuance from DELTA §3.7.
+        painter.drawText(
+            QRect(rect.x() + 8, rect.y(), rect.width() - 12, rect.height()),
+            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+            f"↳ {text} (†)",
+        )
+        painter.restore()
+
+
+class CnjDelegate(QStyledItemDelegate):
+    """§3.8 paints the CNJ column with a two-line layout when the row has
+    a ``processo_pai`` relation set.
+
+    Layout:
+      ↳ <CNJ pai>      — small monospace, muted
+      <CNJ próprio>    — normal monospace, strong colour
+
+    Falls back to default rendering for processes with no parent.
+    """
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+
+    def paint(
+        self,
+        painter: QPainter,
+        option: QStyleOptionViewItem,
+        index: QModelIndex,
+    ) -> None:
+        # Locate the source model (resolve through the proxy chain) so we
+        # can pull the sibling 'processo_pai' value and the cache lookup.
+        model = index.model()
+        src_index = index
+        while hasattr(model, "sourceModel"):
+            src_model = model.sourceModel()
+            src_index = model.mapToSource(src_index) if hasattr(model, "mapToSource") else src_index
+            model = src_model
+
+        cols: list[str] | None = getattr(model, "_cols", None)
+        base: str | None = getattr(model, "_base", None)
+        conn = getattr(model, "_conn", None)
+
+        # Default painting if we can't resolve sibling data.
+        if cols is None or base != "Processos" or conn is None:
+            super().paint(painter, option, index)
+            return
+
+        # Look up the row's processo_pai cell value (list[page_id]).
+        try:
+            row = src_index.row()
+            record = model.get_record(row) if hasattr(model, "get_record") else {}
+            parent_ids = record.get("processo_pai") or []
+        except Exception:  # noqa: BLE001
+            parent_ids = []
+
+        # Resolve parent CNJ from cache (may be empty if parent not synced).
+        parent_cnj = ""
+        if isinstance(parent_ids, list) and parent_ids:
+            try:
+                from notion_rpadv.cache import db as cache_db
+                parent_rec = cache_db.get_record(conn, "Processos", str(parent_ids[0]))
+                if parent_rec is not None:
+                    parent_cnj = str(parent_rec.get("cnj") or "")
+            except Exception:  # noqa: BLE001
+                parent_cnj = ""
+
+        if not parent_cnj:
+            # No (resolvable) parent — let the default delegate paint.
+            super().paint(painter, option, index)
+            return
+
+        # ----- Two-line render -----
+        # Background first (selection / dirty / alternating).
+        super().paint(painter, option, QModelIndex())
+
+        own_cnj = str(index.data(Qt.ItemDataRole.DisplayRole) or "")
+        rect = option.rect
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        # Pull palette tokens for the muted/strong text colours.
+        from notion_rpadv.theme.tokens import LIGHT
+        muted = QColor(LIGHT.app_fg_subtle)
+        strong = QColor(LIGHT.app_fg_strong)
+
+        # Top line: parent CNJ in smaller monospace.
+        top_font = QFont("Courier New")
+        top_font.setPixelSize(10)
+        painter.setFont(top_font)
+        painter.setPen(QPen(muted))
+        top_rect = QRect(
+            rect.x() + 8, rect.y() + 4, rect.width() - 12, rect.height() // 2 - 2
+        )
+        painter.drawText(
+            top_rect,
+            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+            f"↳ {parent_cnj}",
+        )
+
+        # Bottom line: own CNJ.
+        bot_font = QFont("Courier New")
+        bot_font.setPixelSize(12)
+        bot_font.setBold(True)
+        painter.setFont(bot_font)
+        painter.setPen(QPen(strong))
+        bot_rect = QRect(
+            rect.x() + 8,
+            rect.y() + rect.height() // 2,
+            rect.width() - 12,
+            rect.height() // 2 - 2,
+        )
+        painter.drawText(
+            bot_rect,
+            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+            own_cnj,
+        )
+
+        painter.restore()
+
+    def sizeHint(
+        self, option: QStyleOptionViewItem, index: QModelIndex
+    ) -> Any:
+        size = super().sizeHint(option, index)
+        # §3.8: rows with a parent are taller; force a uniform tall row so
+        # mixed grids stay aligned.
+        size.setHeight(max(size.height(), 38))
+        return size

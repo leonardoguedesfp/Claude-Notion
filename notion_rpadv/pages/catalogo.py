@@ -22,6 +22,7 @@ class CatalogoPage(BaseTablePage):
         sync_manager: SyncManager | None = None,
         dark: bool = False,
         parent: QWidget | None = None,
+        audit_conn: sqlite3.Connection | None = None,
     ) -> None:
         super().__init__(
             base="Catalogo",
@@ -32,4 +33,5 @@ class CatalogoPage(BaseTablePage):
             sync_manager=sync_manager,
             dark=dark,
             parent=parent,
+            audit_conn=audit_conn,
         )

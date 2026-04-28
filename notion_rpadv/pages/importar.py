@@ -188,11 +188,17 @@ class _Step1Widget(QWidget):
         btn_row = QHBoxLayout()
         btn_row.setSpacing(SP_3)
 
-        self._template_btn = self._make_secondary_btn("Gerar Template", p)
+        # BUG-V2-01: explicit text labels on plain QPushButton (no icon-only),
+        # named "BtnSecondary" so the global QSS rule paints them legibly in
+        # both themes — the inline QPushButton stylesheet was rendering text
+        # the same colour as the background after theme toggles.
+        self._template_btn = self._make_secondary_btn("Gerar template", p)
+        self._template_btn.setObjectName("BtnSecondary")
         self._template_btn.clicked.connect(self._on_generate_template)
         btn_row.addWidget(self._template_btn)
 
-        self._file_btn = self._make_secondary_btn("Escolher Arquivo (.xlsx)", p)
+        self._file_btn = self._make_secondary_btn("Escolher arquivo (.xlsx)", p)
+        self._file_btn.setObjectName("BtnSecondary")
         self._file_btn.clicked.connect(self._on_choose_file)
         btn_row.addWidget(self._file_btn)
 
@@ -636,20 +642,48 @@ class ImportarPage(QWidget):
     # UI construction
     # ------------------------------------------------------------------
 
+    def apply_theme(self, dark: bool) -> None:
+        """N5: re-pin the page background and heading colour for the new
+        theme. Inline button/step styles are still palette-locked at build
+        time — for now they remain on the LIGHT palette but the global QSS
+        keeps them legible via QPushButton#BtnSecondary."""
+        if dark == self._dark:
+            return
+        self._dark = dark
+        self._p = DARK if dark else LIGHT
+        self.setStyleSheet(
+            f"QWidget#ImportarPage {{ background-color: {self._p.app_bg}; }}"
+        )
+        if hasattr(self, "_heading"):
+            self._heading.setStyleSheet(
+                f"color: {self._p.app_fg_strong}; background: transparent; border: none;"
+            )
+
     def _build_ui(self) -> None:
         p = self._p
+        # BUG-V2-03: pin the page background to the theme token so the page
+        # cannot accidentally render dark when the rest of the app is light
+        # (or vice-versa) regardless of which global QSS is active.
+        self.setObjectName("ImportarPage")
+        self.setStyleSheet(
+            f"QWidget#ImportarPage {{ background-color: {p.app_bg}; }}"
+        )
         root = QVBoxLayout(self)
         root.setContentsMargins(SP_8, SP_6, SP_8, SP_6)
         root.setSpacing(SP_6)
 
-        # Page heading
-        heading = QLabel("Importar Dados")
+        # BUG-V2-12: use the semantic strong-text token so the heading flips
+        # cream-on-navy in dark mode instead of staying low-contrast navy.
+        # N5: kept as ``self._heading`` so apply_theme can recolour it.
+        self._heading = QLabel("Importar Dados")
         heading_font = QFont(FONT_DISPLAY)
         heading_font.setPixelSize(22)
         heading_font.setWeight(QFont.Weight(FW_BOLD))
-        heading.setFont(heading_font)
-        heading.setStyleSheet(f"color: {p.navy_base}; background: transparent; border: none;")
-        root.addWidget(heading)
+        self._heading.setFont(heading_font)
+        self._heading.setStyleSheet(
+            f"color: {p.app_fg_strong}; background: transparent; border: none;"
+        )
+        root.addWidget(self._heading)
 
         # Stepper
         self._stepper = _StepperWidget(p)

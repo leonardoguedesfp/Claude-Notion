@@ -66,9 +66,13 @@ class LogsPage(QWidget):
         facade: NotionFacade,
         dark: bool = False,
         parent: QWidget | None = None,
+        audit_conn: sqlite3.Connection | None = None,
     ) -> None:
         super().__init__(parent)
         self._conn = conn
+        # BUG-OP-09: edit_log lives in audit.db. Fall back to cache conn so
+        # tests using a single in-memory conn keep working.
+        self._audit_conn: sqlite3.Connection = audit_conn or conn
         self._token = token
         self._user = user
         self._facade = facade
@@ -90,7 +94,8 @@ class LogsPage(QWidget):
     def refresh(self) -> None:
         """Reload log entries from SQLite and repopulate the table."""
         try:
-            self._entries = get_log_entries(self._conn, limit=200)
+            # BUG-OP-09: read from audit.db.
+            self._entries = get_log_entries(self._audit_conn, limit=200)
         except Exception:  # noqa: BLE001
             self._entries = []
         self._populate_table()
@@ -99,24 +104,63 @@ class LogsPage(QWidget):
     # UI construction
     # ------------------------------------------------------------------
 
+    def apply_theme(self, dark: bool) -> None:
+        """N5: switch palette and refresh the inline-styled page chrome."""
+        if dark == self._dark:
+            return
+        self._dark = dark
+        self._p = DARK if dark else LIGHT
+        self.setStyleSheet(
+            f"QWidget#LogsPage {{ background-color: {self._p.app_bg}; }}"
+        )
+        if hasattr(self, "_heading"):
+            self._heading.setStyleSheet(
+                f"color: {self._p.app_fg_strong}; background: transparent; border: none;"
+            )
+        if hasattr(self, "_sub_lbl"):
+            self._sub_lbl.setStyleSheet(
+                f"color: {self._p.app_fg_muted}; font-size: {FS_SM2}px; "
+                f"background: transparent; border: none;"
+            )
+        # Repopulate the table so per-row inline styles (badge / button) pick
+        # up the palette. ``refresh()`` reloads from SQLite which triggers
+        # ``_populate_table`` — the natural place where row colours are set.
+        self.refresh()
+
     def _build_ui(self) -> None:
         p = self._p
+        # BUG-V2-03: pin the page background to the theme token so this page
+        # tracks the active theme regardless of which global QSS is loaded.
+        self.setObjectName("LogsPage")
+        self.setStyleSheet(
+            f"QWidget#LogsPage {{ background-color: {p.app_bg}; }}"
+        )
         root = QVBoxLayout(self)
         root.setContentsMargins(SP_8, SP_6, SP_8, SP_6)
         root.setSpacing(SP_4)
 
         # Header row
         header_row = QHBoxLayout()
-        heading = QLabel("Logs de Edição")
+        # BUG-V2-13: use semantic strong-text token instead of brand-only
+        # navy_base, which is illegible in dark mode.
+        # N5: stash on self so apply_theme() can recolour it.
+        self._heading = QLabel("Logs de Edição")
         heading_font = QFont(FONT_DISPLAY)
         heading_font.setPixelSize(22)
         heading_font.setWeight(QFont.Weight(FW_BOLD))
-        heading.setFont(heading_font)
-        heading.setStyleSheet(f"color: {p.navy_base}; background: transparent; border: none;")
-        header_row.addWidget(heading)
+        self._heading.setFont(heading_font)
+        self._heading.setStyleSheet(
+            f"color: {p.app_fg_strong}; background: transparent; border: none;"
+        )
+        header_row.addWidget(self._heading)
         header_row.addStretch()
 
+        # BUG-V2-02: explicit text + BtnSecondary objectName so the global
+        # QSS guarantees a legible label in both themes (the previous inline
+        # rule could collapse to text == background in some cases, leaving
+        # an empty rectangle).
         refresh_btn = QPushButton("↻ Atualizar")
+        refresh_btn.setObjectName("BtnSecondary")
         refresh_btn.setFixedHeight(32)
         refresh_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         refresh_btn.setStyleSheet(
@@ -133,12 +177,14 @@ class LogsPage(QWidget):
         header_row.addWidget(refresh_btn)
         root.addLayout(header_row)
 
-        # Sub-label
-        sub = QLabel("Histórico das últimas 200 edições. Clique em Reverter para desfazer uma alteração.")
-        sub.setStyleSheet(
+        # Sub-label — kept as attribute for apply_theme.
+        self._sub_lbl = QLabel(
+            "Histórico das últimas 200 edições. Clique em Reverter para desfazer uma alteração."
+        )
+        self._sub_lbl.setStyleSheet(
             f"color: {p.app_fg_muted}; font-size: {FS_SM2}px; background: transparent; border: none;"
         )
-        root.addWidget(sub)
+        root.addWidget(self._sub_lbl)
 
         # Table
         self._table = QTableWidget()

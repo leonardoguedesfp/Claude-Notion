@@ -252,10 +252,13 @@ class TestBug07CommitBase:
         conn = _make_conn()
         worker = CommitWorker("token", conn, [], "deborah", "Processos")
         emitted: list[Any] = []
-        worker.finished.connect(lambda b, s, f: emitted.append((b, s, f)))
+        # BUG-OP-03: signal shape is (base, results: list[dict]).
+        worker.finished.connect(lambda b, results: emitted.append((b, results)))
         worker.run()
         assert len(emitted) == 1
         assert emitted[0][0] == "Processos", f"base should be 'Processos', got '{emitted[0][0]}'"
+        # Empty edits → empty results list, but base still propagates.
+        assert emitted[0][1] == []
 
     @requires_pyside6
     def test_clear_dirty_scoped_to_base(self) -> None:
@@ -272,12 +275,18 @@ class TestBug07CommitBase:
         page = BaseTablePage("Processos", conn, "token", "deborah", facade, sync)
         page._model._dirty = {("p1", "status"): "Ativo"}
 
+        # BUG-OP-03: new signal shape (base, results) with per-cell dicts.
+        success_result = [{
+            "page_id": "p1", "key": "status", "edit_id": 0,
+            "ok": True, "error": None,
+        }]
+
         # Wrong base — must NOT clear
-        page._on_commit_finished("Clientes", 1, 0)
+        page._on_commit_finished("Clientes", success_result)
         assert bool(page._model._dirty), "dirty cleared for wrong base — BUG-07"
 
-        # Own base — must clear
-        page._on_commit_finished("Processos", 1, 0)
+        # Own base — must clear (success entry → cell goes clean)
+        page._on_commit_finished("Processos", success_result)
         assert not bool(page._model._dirty), "dirty not cleared after own base commit"
 
 

@@ -106,21 +106,50 @@ class TableFilterProxy(QSortFilterProxyModel):
                 return False
 
         # --- Free-text search ---
+        # BUG-OP-04 / BUG-OP-05: match against BOTH DisplayRole (the
+        # formatted text the user sees) and EditRole (the canonical raw
+        # value). Without this, ISO dates ("2025-03-20") and unformatted
+        # numbers ("78500") never match because DisplayRole shows them as
+        # BR-formatted strings ("20/03/2025", "R$ 78.500,00").
         if self._search_text:
             needle = self._search_text.lower()
-            matched = False
-            for col in range(col_count):
-                idx = source.index(source_row, col, source_parent)
-                cell_display = str(
-                    source.data(idx, Qt.ItemDataRole.DisplayRole) or ""
-                )
-                if needle in cell_display.lower():
-                    matched = True
-                    break
-            if not matched:
+            if not self._row_matches_search(
+                source, source_row, source_parent, col_count, needle,
+            ):
                 return False
 
         return True
+
+    def _row_matches_search(
+        self,
+        source: Any,
+        source_row: int,
+        source_parent: QModelIndex,
+        col_count: int,
+        needle: str,
+    ) -> bool:
+        """BUG-OP-04 / BUG-OP-05: return True if *needle* matches any
+        column's DisplayRole or EditRole. Extracted so the dual-role
+        sweep is testable in isolation and so the loop body stays small.
+        """
+        for col in range(col_count):
+            idx = source.index(source_row, col, source_parent)
+            for role in (Qt.ItemDataRole.DisplayRole,
+                         Qt.ItemDataRole.EditRole):
+                value = source.data(idx, role)
+                if value is None:
+                    continue
+                # Lists (multi_select, relations) join into the same
+                # comma-separated form `unique_source_values` already uses.
+                if isinstance(value, list):
+                    haystack = ", ".join(str(v) for v in value)
+                else:
+                    haystack = str(value)
+                if not haystack:
+                    continue
+                if needle in haystack.lower():
+                    return True
+        return False
 
     # ------------------------------------------------------------------
     # Convenience: unique values for a column (for filter dropdowns)

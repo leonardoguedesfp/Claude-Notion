@@ -10,6 +10,7 @@ from PySide6.QtGui import QBrush, QColor, QFont
 from notion_bulk_edit.encoders import format_br_date, format_brl
 from notion_bulk_edit.schemas import PropSpec, colunas_visiveis, get_prop, is_nao_editavel
 from notion_rpadv.cache import db as cache_db
+from notion_rpadv.theme.tokens import LIGHT
 
 # BUG-V3: title key used when resolving relation page_ids to display names
 _TITLE_KEY_BY_BASE: dict[str, str] = {
@@ -18,6 +19,44 @@ _TITLE_KEY_BY_BASE: dict[str, str] = {
     "Tarefas": "titulo",
     "Catalogo": "titulo",
 }
+
+# BUG-V2-04: title fragments that mark a Notion "template" row that must
+# never appear in the user-facing tables, even if the sync filter missed it.
+_TEMPLATE_TITLE_FRAGMENTS: tuple[str, ...] = (
+    "🟧",
+    "modelo — usar",
+    "modelo - usar",
+    "modelo -- usar",
+    "modelo – usar",  # en-dash
+)
+
+
+def _looks_like_template_row(record: dict, title_key: str) -> bool:
+    """BUG-V2-04: detect rows whose title matches the "Modelo — usar como template"
+    convention. The check is case-insensitive and tolerant to em/en-dash variants."""
+    title = record.get(title_key)
+    if not isinstance(title, str) or not title:
+        return False
+    lowered = title.lower()
+    return any(frag.lower() in lowered for frag in _TEMPLATE_TITLE_FRAGMENTS)
+
+
+def _count_processos_for_cliente(conn: sqlite3.Connection, cliente_page_id: str) -> int:
+    """BUG-V2-09: count rows in the local Processos cache whose 'cliente'
+    relation references *cliente_page_id*. Returns 0 if the cache has no
+    Processos data yet."""
+    if not cliente_page_id:
+        return 0
+    try:
+        processos = cache_db.get_all_records(conn, "Processos")
+    except Exception:  # noqa: BLE001
+        return 0
+    count = 0
+    for proc in processos:
+        rel = proc.get("cliente")
+        if isinstance(rel, list) and cliente_page_id in (str(x) for x in rel):
+            count += 1
+    return count
 
 
 def _resolve_relation(conn: sqlite3.Connection, page_ids: list, target_base: str) -> str:
@@ -41,16 +80,32 @@ _COLOR_ROW_ALT = QColor("#F5F5F5")    # alternating row tint
 _COLOR_ROW_EVEN = QColor("#FFFFFF")
 
 
+_EMPTY_PLACEHOLDER: str = "—"  # §3.3 em-dash for null/empty cells
+
+
 def _display_value(spec: PropSpec, raw: Any) -> str:
-    """Convert a raw Python value to a human-readable string for DisplayRole."""
+    """Convert a raw Python value to a human-readable string for DisplayRole.
+
+    §3.3: null/empty cells render as a soft em-dash (rendered in
+    ``app_fg_subtle`` by the model's ForegroundRole), not as blank space —
+    so users can tell "no value" apart from "0" or "False".
+    """
     if raw is None:
-        return ""
-    # BUG-V4: empty list should render as blank, not '[]'
+        return _EMPTY_PLACEHOLDER
+    # BUG-V4: empty list should render as the placeholder, not '[]'
     if isinstance(raw, list) and len(raw) == 0:
-        return ""
+        return _EMPTY_PLACEHOLDER
+    if isinstance(raw, str) and raw.strip() == "":
+        return _EMPTY_PLACEHOLDER
     tipo = spec.tipo
     if tipo == "number":
-        if spec.formato == "brl":
+        # BUG-OP-05 follow-up: schemas declare ``formato="BRL"`` (uppercase)
+        # but this comparison was lowercase, so currency cells rendered the
+        # raw float ("78500.0") instead of "R$ 78.500,00". Without the
+        # formatted string in DisplayRole, even the dual-role search couldn't
+        # match a query like "R$ 78" — and the column itself was unreadable
+        # for users who expected BR currency. Compare case-insensitively.
+        if spec.formato.upper() == "BRL":
             try:
                 return format_brl(float(raw))
             except (TypeError, ValueError):
@@ -65,7 +120,8 @@ def _display_value(spec: PropSpec, raw: Any) -> str:
         except Exception:  # noqa: BLE001
             return str(raw)
     if tipo == "checkbox":
-        return "✓" if raw else "✗"
+        # BUG-V2-10: False renders as blank (not "✗"/"x" which reads as a positive mark in pt-BR)
+        return "✓" if raw else ""
     if tipo == "multi_select":
         if isinstance(raw, list):
             return ", ".join(str(v) for v in raw)
@@ -102,33 +158,103 @@ class BaseTableModel(QAbstractTableModel):
     """QAbstractTableModel backed by SQLite cache for a single Notion base."""
 
     dirty_changed: Signal = Signal(bool)
+    # BUG-OP-06: emitted when reload(preserve_dirty=True) drops a dirty entry
+    # because the row was deleted remotely. (page_id, key)
+    dirty_dropped: Signal = Signal(str, str)
+    # BUG-OP-06: emitted when reload(preserve_dirty=True) detects a server-side
+    # change conflicting with an unsaved local edit. (page_id, key,
+    # local_value, remote_value). Values are typed as `object` because
+    # multi_select / relation cells carry lists.
+    dirty_conflict_detected: Signal = Signal(str, str, object, object)
 
     def __init__(
         self,
         base: str,
         conn: sqlite3.Connection,
         parent: Any = None,
+        audit_conn: sqlite3.Connection | None = None,
     ) -> None:
         super().__init__(parent)
         self._base = base
         self._conn = conn
+        # BUG-OP-09: pending_edits/edit_log live in the audit database. A
+        # caller (page) that knows about the split passes a dedicated
+        # audit_conn; in-memory tests that share one conn for both schemas
+        # fall back to the same handle.
+        self._audit_conn: sqlite3.Connection = audit_conn or conn
         self._cols: list[str] = colunas_visiveis(base)
         self._rows: list[dict[str, Any]] = []
         # BUG-24: keyed by (page_id, key) instead of (row_idx, key)
         self._dirty: dict[tuple[str, str], Any] = {}
+        # BUG-OP-06: snapshot of the cache value at the time the user started
+        # editing each cell, used by reload(preserve_dirty=True) to detect
+        # whether a sync-induced remote change conflicts with the local edit.
+        self._dirty_original: dict[tuple[str, str], Any] = {}
         self.reload()
 
     # ------------------------------------------------------------------
     # Data loading
     # ------------------------------------------------------------------
 
-    def reload(self) -> None:
-        """Reload rows from SQLite and reset the model."""
+    def reload(self, *, preserve_dirty: bool = False) -> None:
+        """Reload rows from SQLite and reset the model.
+
+        BUG-OP-06: when called from the post-sync code path the caller passes
+        ``preserve_dirty=True`` so unsaved edits survive the refresh. For
+        each surviving dirty cell we still emit the conflict signal if the
+        cache value moved while the user was editing. Cells whose row was
+        deleted remotely are dropped and surfaced via ``dirty_dropped``.
+        """
         self.beginResetModel()
-        self._rows = cache_db.get_all_records(self._conn, self._base)
-        self._dirty.clear()
+        saved_dirty = dict(self._dirty) if preserve_dirty else {}
+        saved_originals = dict(self._dirty_original) if preserve_dirty else {}
+
+        rows = cache_db.get_all_records(self._conn, self._base)
+        # BUG-V2-04: filter out template/sentinel rows by title pattern so the
+        # "🟧 Modelo — usar como template" row never reaches the table view.
+        title_key = _TITLE_KEY_BY_BASE.get(self._base, "")
+        if title_key:
+            rows = [r for r in rows if not _looks_like_template_row(r, title_key)]
+        self._rows = rows
+
+        if not preserve_dirty:
+            self._dirty.clear()
+            self._dirty_original.clear()
+            self.endResetModel()
+            self.dirty_changed.emit(False)
+            return
+
+        # Preserve-dirty path. Index new rows by page_id for O(1) lookup so
+        # the reapply loop is O(N_dirty), not O(N_dirty * N_rows).
+        rows_by_id = {r.get("page_id"): r for r in rows}
+        kept_dirty: dict[tuple[str, str], Any] = {}
+        kept_originals: dict[tuple[str, str], Any] = {}
+        dropped: list[tuple[str, str]] = []
+        conflicts: list[tuple[str, str, Any, Any]] = []
+
+        for (page_id, key), local_value in saved_dirty.items():
+            new_row = rows_by_id.get(page_id)
+            if new_row is None:
+                dropped.append((page_id, key))
+                continue
+            kept_dirty[(page_id, key)] = local_value
+            original = saved_originals.get((page_id, key))
+            kept_originals[(page_id, key)] = original
+            new_remote = new_row.get(key)
+            # Conflict iff the cache value at first-edit time differs from
+            # the value the sync just brought down.
+            if not _values_equal(original, new_remote):
+                conflicts.append((page_id, key, local_value, new_remote))
+
+        self._dirty = kept_dirty
+        self._dirty_original = kept_originals
         self.endResetModel()
-        self.dirty_changed.emit(False)
+
+        for page_id, key in dropped:
+            self.dirty_dropped.emit(page_id, key)
+        for page_id, key, local_value, remote_value in conflicts:
+            self.dirty_conflict_detected.emit(page_id, key, local_value, remote_value)
+        self.dirty_changed.emit(bool(self._dirty))
 
     # ------------------------------------------------------------------
     # QAbstractTableModel overrides
@@ -150,16 +276,19 @@ class BaseTableModel(QAbstractTableModel):
         orientation: Qt.Orientation,
         role: int = Qt.ItemDataRole.DisplayRole,
     ) -> Any:
-        if role != Qt.ItemDataRole.DisplayRole:
-            return None
         if orientation == Qt.Orientation.Horizontal:
             if 0 <= section < len(self._cols):
                 key = self._cols[section]
                 spec = get_prop(self._base, key)
-                if spec is not None:
-                    return spec.label
-                return key
-        else:
+                label = spec.label if spec is not None else key
+                if role == Qt.ItemDataRole.DisplayRole:
+                    return label
+                # §3.1: tooltip carries the full label so a user-shrunk column
+                # still discloses what it represents.
+                if role == Qt.ItemDataRole.ToolTipRole:
+                    return label
+            return None
+        if role == Qt.ItemDataRole.DisplayRole:
             return str(section + 1)
         return None
 
@@ -189,6 +318,17 @@ class BaseTableModel(QAbstractTableModel):
         # Raw value: prefer dirty override, fall back to cached.
         raw: Any = self._dirty[dirty_key] if is_dirty else record.get(key)
 
+        # BUG-V2-09: when the Notion rollup for "Nº de Processos" arrives empty
+        # (common for data sources that haven't materialised the rollup yet),
+        # compute the count locally by counting Processos rows referencing this
+        # client's page_id. Keeps the column populated without re-syncing.
+        if (
+            self._base == "Clientes"
+            and key == "n_processos"
+            and (raw is None or raw == "" or raw == [])
+        ):
+            raw = _count_processos_for_cliente(self._conn, page_id)
+
         if role == Qt.ItemDataRole.DisplayRole:
             if spec is not None:
                 # BUG-V3: for relation columns, resolve page_ids to readable names
@@ -212,6 +352,10 @@ class BaseTableModel(QAbstractTableModel):
             return QBrush(_COLOR_ROW_EVEN)
 
         if role == Qt.ItemDataRole.ForegroundRole:
+            # §3.3: dim the em-dash placeholder so it reads as "no value".
+            display = self.data(index, Qt.ItemDataRole.DisplayRole)
+            if display == _EMPTY_PLACEHOLDER:
+                return QBrush(QColor(LIGHT.app_fg_subtle))
             return None
 
         if role == Qt.ItemDataRole.FontRole:
@@ -256,7 +400,16 @@ class BaseTableModel(QAbstractTableModel):
         # BUG-25: use type-aware comparison instead of bare ==
         if _values_equal(value, original):
             self._dirty.pop(dirty_key, None)
+            # BUG-OP-06: drop the original snapshot too — the cell is no
+            # longer dirty.
+            self._dirty_original.pop(dirty_key, None)
         else:
+            # BUG-OP-06: snapshot the pre-edit cache value the first time
+            # the user dirties this cell. Subsequent edits keep the same
+            # snapshot so conflict detection compares against the *original*
+            # value the user saw, not their last typed-but-not-saved value.
+            if dirty_key not in self._dirty_original:
+                self._dirty_original[dirty_key] = original
             self._dirty[dirty_key] = value
 
         self.dataChanged.emit(index, index, [role, Qt.ItemDataRole.BackgroundRole])
@@ -284,7 +437,13 @@ class BaseTableModel(QAbstractTableModel):
     # ------------------------------------------------------------------
 
     def get_dirty_edits(self) -> list[dict[str, Any]]:
-        """Return list of edit dicts compatible with CommitWorker."""
+        """Return list of edit dicts compatible with CommitWorker.
+
+        Pure read — used by the dirty-counter UI. The returned ``id`` is 0
+        because no DB row has been allocated yet; callers that intend to
+        send these to the API should go through ``flush_dirty_to_pending``
+        which persists each entry and returns dicts with real ids.
+        """
         result: list[dict[str, Any]] = []
         for (page_id, key), new_value in self._dirty.items():
             record = next((r for r in self._rows if r.get("page_id") == page_id), None)
@@ -301,29 +460,109 @@ class BaseTableModel(QAbstractTableModel):
             })
         return result
 
-    def clear_dirty(self) -> None:
-        """Mark all cells as clean (called after saving)."""
+    def flush_dirty_to_pending(self) -> list[dict[str, Any]]:
+        """BUG-OP-01/02: persist each dirty cell to the *pending_edits*
+        table and return the edits list with real ids.
+
+        After CommitWorker confirms the API call, it calls
+        ``cache_db.mark_edit_applied(edit_id, user)`` which moves the row
+        from ``pending_edits`` (status='pending') to ``edit_log``. Without
+        a real id at this point, that move never happens — that is BUG-OP-01.
+
+        Idempotency (BUG-OP-02): if this method is called twice for the
+        same dirty cell (e.g. retry after a transient API failure), the
+        helper ``cache_db.upsert_pending_edit`` reuses the existing row's
+        id rather than inserting a duplicate.
+
+        Read-only-typed cells (rollup, formula, created_time,
+        last_edited_time) are filtered out at the dirty-cell stage by the
+        delegate, so they never reach this code path. We additionally guard
+        here so the persistence layer never sees a non-encodable type.
+        """
+        result: list[dict[str, Any]] = []
+        for (page_id, key), new_value in self._dirty.items():
+            record = next(
+                (r for r in self._rows if r.get("page_id") == page_id), None
+            )
+            if record is None:
+                continue
+            spec = get_prop(self._base, key)
+            if spec is not None and spec.tipo in (
+                "rollup", "formula", "created_time", "last_edited_time",
+            ):
+                continue
+            # Use the snapshot taken at first edit so the revert chain is
+            # anchored to what the user actually replaced, not to the live
+            # cell value (which == the dirty value while editing).
+            old_value: Any = self._dirty_original.get(
+                (page_id, key), record.get(key)
+            )
+            # BUG-OP-09: route through the audit connection.
+            edit_id = cache_db.upsert_pending_edit(
+                self._audit_conn, self._base, page_id, key,
+                old_value, new_value,
+            )
+            result.append({
+                "id": edit_id,
+                "base": self._base,
+                "page_id": page_id,
+                "key": key,
+                "old_value": old_value,
+                "new_value": new_value,
+            })
+        return result
+
+    def clear_dirty(
+        self,
+        cells_to_clear: list[tuple[str, str]] | None = None,
+    ) -> None:
+        """Mark cells as clean.
+
+        BUG-OP-03: when ``cells_to_clear`` is passed, only those cells lose
+        their dirty state — used after a partial save so the cells whose
+        API call failed remain visibly dirty for retry. With the default
+        ``None`` we fall back to the legacy "clear everything" behaviour
+        used by post-revert and other paths.
+        """
         if not self._dirty:
             return
-        # Apply dirty values into the backing rows so reload is not required.
-        for (page_id, key), new_value in self._dirty.items():
+
+        if cells_to_clear is None:
+            keys_to_clear = list(self._dirty.keys())
+        else:
+            # Filter to keys that actually exist in _dirty so callers can
+            # pass over-broad lists without raising.
+            keys_to_clear = [k for k in cells_to_clear if k in self._dirty]
+
+        if not keys_to_clear:
+            return
+
+        # Apply each cleared dirty value into the backing rows so reload
+        # is not required.
+        for (page_id, key) in keys_to_clear:
+            new_value = self._dirty.get((page_id, key))
             for row in self._rows:
                 if row.get("page_id") == page_id:
                     row[key] = new_value
                     break
-        self._dirty.clear()
+            self._dirty.pop((page_id, key), None)
+            # BUG-OP-06: snapshots are tied to the live dirty set.
+            self._dirty_original.pop((page_id, key), None)
+
         self.dataChanged.emit(
             self.index(0, 0),
             self.index(len(self._rows) - 1, len(self._cols) - 1),
             [Qt.ItemDataRole.BackgroundRole],
         )
-        self.dirty_changed.emit(False)
+        self.dirty_changed.emit(bool(self._dirty))
 
     def discard_dirty(self) -> None:
         """Revert all dirty cells to their original cached values."""
         if not self._dirty:
             return
         self._dirty.clear()
+        # BUG-OP-06: discard drops both the dirty values and their snapshots.
+        self._dirty_original.clear()
         self.dataChanged.emit(
             self.index(0, 0),
             self.index(len(self._rows) - 1, len(self._cols) - 1),

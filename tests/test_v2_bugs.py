@@ -245,13 +245,15 @@ def test_resolve_relation_missing_page():
 # ---------------------------------------------------------------------------
 
 @requires_pyside6
-def test_display_value_empty_list():
-    """BUG-V4: empty list [] should display as empty string."""
+def test_display_value_empty_list_em_dash():
+    """BUG-V4 + §3.3: empty list [] renders as the em-dash placeholder
+    ("—") so users can tell "no value" apart from a blank cell. Updated
+    from the original "" expectation when §3.3 landed."""
     from notion_bulk_edit.schemas import PropSpec
     from notion_rpadv.models.base_table_model import _display_value
 
     spec = PropSpec(notion_name="X", tipo="multi_select", label="X")
-    assert _display_value(spec, []) == ""
+    assert _display_value(spec, []) == "—"
 
 
 @requires_pyside6
