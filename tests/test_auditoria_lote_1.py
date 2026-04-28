@@ -257,16 +257,24 @@ def test_shortcut_registry_has_no_new_record_action() -> None:
 # manual.
 
 
-@requires_pyside6
-def test_cnj_delegate_setclip_in_source() -> None:
-    """Verificação estática: source de CnjDelegate.paint contém
-    setClipRect (defesa explícita contra regressão acidental)."""
-    import inspect
-    from notion_rpadv.models.delegates import CnjDelegate
+# Round simplificação CnjDelegate (Lote 1): CnjDelegate foi REMOVIDO
+# da hierarquia de delegates. O teste antigo
+# ``test_cnj_delegate_setclip_in_source`` perdeu sentido junto com a
+# classe — o Round 1 aplicou setClipRect lá, o hotfix v2 reescreveu
+# tudo via initStyleOption, e este round descartou a coluna two-line.
+# Coluna numero_do_processo agora cai no PropDelegate default.
 
-    src = inspect.getsource(CnjDelegate.paint)
-    assert "setClipRect" in src, (
-        "CnjDelegate.paint deve chamar painter.setClipRect (P0-001)."
+
+@requires_pyside6
+def test_cnj_delegate_class_removed() -> None:
+    """Round simplificação (Lote 1): garantir que CnjDelegate não voltou
+    acidentalmente. Hierarquia processual é vista pela coluna 'Processo
+    pai' (relation, picker da Fase 4)."""
+    from notion_rpadv.models import delegates as dmod
+    assert not hasattr(dmod, "CnjDelegate"), (
+        "CnjDelegate foi removido neste round — voltar a ter regride "
+        "a decisão de design (two-line redundante com coluna Processo "
+        "pai) e o bug de scroll ghost."
     )
 
 
@@ -354,47 +362,32 @@ def test_clientes_delegate_rebinds_on_modelreset() -> None:
 
 
 @requires_pyside6
-def test_processos_cnj_delegate_persists_after_picker_change() -> None:
-    """Depois de qualquer picker change em Processos, CnjDelegate continua
-    no índice de 'numero_do_processo' (que é sempre 0, mas exercitamos
-    a robustez do re-bind)."""
+def test_processos_no_specific_delegate_on_title_column() -> None:
+    """Round simplificação CnjDelegate (Lote 1): a coluna do título em
+    Processos NÃO recebe mais delegate específico. Cai no PropDelegate
+    global (default) que pinta o CNJ em font default sem two-line. Sem
+    CnjDelegate, ProcessosPage também não tem mais ``_install_delegates``
+    nem ``_cnj_delegate``."""
     import sys
     from PySide6.QtWidgets import QApplication
     QApplication.instance() or QApplication(sys.argv)
 
-    from notion_bulk_edit.config import DATA_SOURCES
-    from notion_bulk_edit.schema_registry import get_schema_registry
-    from notion_rpadv.cache import db as cache_db
-    from notion_rpadv.models.delegates import CnjDelegate
     from notion_rpadv.pages.processos import ProcessosPage
     from notion_rpadv.services.notion_facade import NotionFacade
 
-    reg = get_schema_registry()
-    audit_conn = reg._audit_conn
     cache_conn = _make_conn()
     facade = NotionFacade("dummy", cache_conn)
-    dsid = DATA_SOURCES["Processos"]
-    cache_db.clear_user_columns(audit_conn, "leonardo", dsid)
-    try:
-        page = ProcessosPage(
-            conn=cache_conn, token="dummy", user="leonardo",
-            facade=facade, audit_conn=audit_conn,
-        )
-        # Hide a non-title column → reload → CnjDelegate ainda em col 0.
-        cols = page._model.cols()
-        non_title = [c for c in cols if c != "numero_do_processo"]
-        new_cols = [c for c in cols if c != non_title[0]]
-        cache_db.set_user_columns(audit_conn, "leonardo", dsid, new_cols)
-        page._model.reload(preserve_dirty=True)
-
-        cnj_idx = page._model.cols().index("numero_do_processo")
-        d = page._table.itemDelegateForColumn(cnj_idx)
-        assert isinstance(d, CnjDelegate), (
-            f"CnjDelegate deveria continuar na coluna do título "
-            f"(col {cnj_idx}); obtido {type(d).__name__}."
-        )
-    finally:
-        cache_db.clear_user_columns(audit_conn, "leonardo", dsid)
+    page = ProcessosPage(
+        conn=cache_conn, token="dummy", user="leonardo", facade=facade,
+    )
+    assert not hasattr(page, "_cnj_delegate"), (
+        "ProcessosPage._cnj_delegate não deveria mais existir "
+        "(CnjDelegate foi removido)."
+    )
+    assert not hasattr(page, "_install_delegates"), (
+        "ProcessosPage._install_delegates só fazia sentido para o "
+        "re-bind do CnjDelegate; sem ele, deve ser removido."
+    )
 
 
 # ---------------------------------------------------------------------------

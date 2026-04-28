@@ -19,7 +19,6 @@ from __future__ import annotations
 from typing import Any
 
 from PySide6.QtCore import QPoint, Qt
-from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QCheckBox,
     QHBoxLayout,
@@ -31,23 +30,13 @@ from PySide6.QtWidgets import (
 )
 
 from notion_bulk_edit.schemas import PropSpec
+from notion_rpadv.theme.notion_colors import chip_colors_for, hex_to_color_name
 
 
 # Estilo de chip pequeno (compatível com PropDelegate paint).
 _CHIP_PADDING_H = 6
 _CHIP_PADDING_V = 2
 _CHIP_RADIUS = 10
-_CHIP_DEFAULT_BG = "#E0E0E0"
-_CHIP_DEFAULT_FG = "#212121"
-
-
-def _contrasting_text_color(bg_hex: str) -> str:
-    """Retorna #111111 ou #FAFAFA conforme luminância do fundo."""
-    c = QColor(bg_hex)
-    if not c.isValid():
-        return _CHIP_DEFAULT_FG
-    luminance = 0.299 * c.red() + 0.587 * c.green() + 0.114 * c.blue()
-    return "#111111" if luminance > 128 else "#FAFAFA"
 
 
 class MultiSelectEditor(QWidget):
@@ -163,8 +152,13 @@ class MultiSelectEditor(QWidget):
         cor_map: dict[str, str] = self._spec.cor_por_valor or {}
 
         for opcao in self.values():
-            bg_hex = cor_map.get(opcao, _CHIP_DEFAULT_BG)
-            fg_hex = _contrasting_text_color(bg_hex)
+            # Round simplificação chip palette (Lote 1): paleta vem de
+            # notion_colors.chip_colors_for, mesmo source que o
+            # PropDelegate paint. cor_map tem hex (Fase 3); reverte
+            # para nome e busca par (bg_light, fg_dark).
+            hex_color = cor_map.get(opcao, "")
+            color_name = hex_to_color_name(hex_color)
+            bg_hex, fg_hex = chip_colors_for(color_name)
             chip = QLabel(opcao)
             chip.setStyleSheet(
                 f"QLabel {{"

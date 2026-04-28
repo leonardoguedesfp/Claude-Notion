@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 
 from notion_bulk_edit.config import NOTION_USERS
 from notion_bulk_edit.schemas import PropSpec, get_prop
+from notion_rpadv.theme.notion_colors import chip_colors_for, hex_to_color_name
 from notion_rpadv.widgets.multi_select_editor import MultiSelectEditor
 
 # Types that cannot be edited via a delegate.
@@ -41,25 +42,15 @@ _PEOPLE_OPTIONS: list[tuple[str, str]] = [
     (uid, info.get("name", uid)) for uid, info in NOTION_USERS.items()
 ]
 
-# Fallback chip colour when cor_por_valor has no match.
-_CHIP_DEFAULT_BG = QColor("#E0E0E0")
-_CHIP_DEFAULT_FG = QColor("#212121")
+# Round simplificação chip palette (Lote 1): paleta vem agora de
+# notion_rpadv.theme.notion_colors.chip_colors_for — fundo claro tonal +
+# texto escuro saturado da mesma família. Substituiu o binário preto/
+# branco do _contrasting_text_color que ficava agressivo em fundos
+# coloridos claros.
 _CHIP_PADDING_H = 6
 _CHIP_PADDING_V = 2
 _CHIP_RADIUS = 10
 _CHIP_GAP = 4
-
-
-def _parse_color(hex_color: str) -> QColor:
-    """Parse a hex color string, return a default if invalid."""
-    c = QColor(hex_color)
-    return c if c.isValid() else _CHIP_DEFAULT_BG
-
-
-def _contrasting_text_color(bg: QColor) -> QColor:
-    """Return black or white based on background luminance."""
-    luminance = 0.299 * bg.red() + 0.587 * bg.green() + 0.114 * bg.blue()
-    return QColor("#111111") if luminance > 128 else QColor("#FAFAFA")
 
 
 def _get_spec_from_index(index: QModelIndex) -> PropSpec | None:
@@ -433,9 +424,15 @@ class PropDelegate(QStyledItemDelegate):
                 if x >= rect.right() - _CHIP_PADDING_H:
                     break  # no more space
 
+                # Round simplificação chip palette (Lote 1): cor_por_valor
+                # armazena hex (vinda de NOTION_COLOR_TO_HEX em
+                # _dict_to_propspec). Fazemos lookup reverso hex → name e
+                # depois name → (bg_light, fg_dark) via paleta dedicada.
                 hex_color = cor_map.get(chip_text, "")
-                bg = _parse_color(hex_color) if hex_color else _CHIP_DEFAULT_BG
-                fg = _contrasting_text_color(bg)
+                color_name = hex_to_color_name(hex_color)
+                bg_hex, fg_hex = chip_colors_for(color_name)
+                bg = QColor(bg_hex)
+                fg = QColor(fg_hex)
 
                 text_w = fm.horizontalAdvance(chip_text)
                 chip_w = text_w + _CHIP_PADDING_H * 2
@@ -533,185 +530,24 @@ class SucessorDelegate(QStyledItemDelegate):
         painter.restore()
 
 
-class CnjDelegate(QStyledItemDelegate):
-    """§3.8 paints the CNJ column with a two-line layout when the row has
-    a ``processo_pai`` relation set.
-
-    Layout:
-      ↳ <CNJ pai>      — small monospace, muted
-      <CNJ próprio>    — normal monospace, strong colour
-
-    Falls back to default rendering for processes with no parent.
-    """
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-
-    def initStyleOption(
-        self,
-        option: QStyleOptionViewItem,
-        index: QModelIndex,
-    ) -> None:
-        """Hotfix paint ghosts v2: zera sempre ``option.text``.
-        CnjDelegate sempre renderiza o CNJ com pintura customizada —
-        seja two-line (com parent) ou single-line bold no fallback. O
-        texto padrão de Qt nunca é desejado nesta coluna.
-
-        Consequência: o caminho fallback (sem parent) não pode mais usar
-        ``super().paint(painter, option, index)`` esperando que Qt
-        desenhe o texto — ele agora pinta o CNJ próprio manualmente
-        (ver ``paint``).
-        """
-        super().initStyleOption(option, index)
-        option.text = ""
-        option.features &= ~QStyleOptionViewItem.ViewItemFeature.HasDisplay
-
-    def paint(
-        self,
-        painter: QPainter,
-        option: QStyleOptionViewItem,
-        index: QModelIndex,
-    ) -> None:
-        # Locate the source model (resolve through the proxy chain) so we
-        # can pull the sibling 'processo_pai' value and the cache lookup.
-        model = index.model()
-        src_index = index
-        while hasattr(model, "sourceModel"):
-            src_model = model.sourceModel()
-            src_index = model.mapToSource(src_index) if hasattr(model, "mapToSource") else src_index
-            model = src_model
-
-        cols: list[str] | None = getattr(model, "_cols", None)
-        base: str | None = getattr(model, "_base", None)
-        conn = getattr(model, "_conn", None)
-
-        # Default painting if we can't resolve sibling data.
-        if cols is None or base != "Processos" or conn is None:
-            super().paint(painter, option, index)
-            return
-
-        # Look up the row's processo_pai cell value (list[page_id]).
-        try:
-            row = src_index.row()
-            record = model.get_record(row) if hasattr(model, "get_record") else {}
-            parent_ids = record.get("processo_pai") or []
-        except Exception:  # noqa: BLE001
-            parent_ids = []
-
-        # Resolve parent CNJ from cache (may be empty if parent not synced).
-        # Fase 3: fallback legado 'cnj' removido — schema dinâmico já é a
-        # fonte única e cache convergiu para 'numero_do_processo'.
-        parent_cnj = ""
-        if isinstance(parent_ids, list) and parent_ids:
-            try:
-                from notion_rpadv.cache import db as cache_db
-                parent_rec = cache_db.get_record(conn, "Processos", str(parent_ids[0]))
-                if parent_rec is not None:
-                    parent_cnj = str(parent_rec.get("numero_do_processo") or "")
-            except Exception:  # noqa: BLE001
-                parent_cnj = ""
-
-        if not parent_cnj:
-            # Hotfix paint ghosts v2: sem parent, fallback single-line.
-            # super().paint pinta apenas background (initStyleOption zera
-            # o text). Pintamos o CNJ próprio manualmente em monospace
-            # bold consistente com o bot_rect do two-line render.
-            super().paint(painter, option, index)
-            own_cnj_fb = str(index.data(Qt.ItemDataRole.DisplayRole) or "")
-            if own_cnj_fb and own_cnj_fb != "—":
-                from notion_rpadv.theme.tokens import LIGHT
-                strong_fb = QColor(LIGHT.app_fg_strong)
-                fb_font = QFont("Courier New")
-                fb_font.setPixelSize(12)
-                fb_font.setBold(True)
-                painter.save()
-                painter.setClipRect(option.rect)
-                painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-                painter.setFont(fb_font)
-                painter.setPen(QPen(strong_fb))
-                painter.drawText(
-                    option.rect.adjusted(8, 0, -4, 0),
-                    Qt.AlignmentFlag.AlignVCenter
-                    | Qt.AlignmentFlag.AlignLeft,
-                    own_cnj_fb,
-                )
-                painter.restore()
-            elif own_cnj_fb == "—":
-                # Placeholder — desenhar manualmente em cinza.
-                painter.save()
-                painter.setClipRect(option.rect)
-                painter.setPen(QPen(QColor("#9CA3AF")))
-                painter.drawText(
-                    option.rect.adjusted(8, 0, -4, 0),
-                    Qt.AlignmentFlag.AlignVCenter
-                    | Qt.AlignmentFlag.AlignLeft,
-                    own_cnj_fb,
-                )
-                painter.restore()
-            return
-
-        # ----- Two-line render -----
-        # Hotfix paint ghosts v2: super().paint(painter, option, index)
-        # pinta SÓ o background (selection / dirty / alternating) porque
-        # o initStyleOption override desta classe zera opt.text. Antes,
-        # o ``super().paint(... QModelIndex())`` com índice inválido era
-        # um hack instável; o helper v1 era furado porque Qt repopulava
-        # opt.text via initStyleOption interno.
-        super().paint(painter, option, index)
-
-        own_cnj = str(index.data(Qt.ItemDataRole.DisplayRole) or "")
-        rect = option.rect
-        painter.save()
-        # P0-001 (Lote 1): clip explícito ao retângulo da célula como
-        # defesa em profundidade contra paint hints distantes (scroll com
-        # repaint parcial).
-        painter.setClipRect(option.rect)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-
-        # Pull palette tokens for the muted/strong text colours.
-        from notion_rpadv.theme.tokens import LIGHT
-        muted = QColor(LIGHT.app_fg_subtle)
-        strong = QColor(LIGHT.app_fg_strong)
-
-        # Top line: parent CNJ in smaller monospace.
-        top_font = QFont("Courier New")
-        top_font.setPixelSize(10)
-        painter.setFont(top_font)
-        painter.setPen(QPen(muted))
-        top_rect = QRect(
-            rect.x() + 8, rect.y() + 4, rect.width() - 12, rect.height() // 2 - 2
-        )
-        painter.drawText(
-            top_rect,
-            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
-            f"↳ {parent_cnj}",
-        )
-
-        # Bottom line: own CNJ.
-        bot_font = QFont("Courier New")
-        bot_font.setPixelSize(12)
-        bot_font.setBold(True)
-        painter.setFont(bot_font)
-        painter.setPen(QPen(strong))
-        bot_rect = QRect(
-            rect.x() + 8,
-            rect.y() + rect.height() // 2,
-            rect.width() - 12,
-            rect.height() // 2 - 2,
-        )
-        painter.drawText(
-            bot_rect,
-            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
-            own_cnj,
-        )
-
-        painter.restore()
-
-    def sizeHint(
-        self, option: QStyleOptionViewItem, index: QModelIndex
-    ) -> Any:
-        size = super().sizeHint(option, index)
-        # §3.8: rows with a parent are taller; force a uniform tall row so
-        # mixed grids stay aligned.
-        size.setHeight(max(size.height(), 38))
-        return size
+# Round simplificação CnjDelegate (Lote 1): classe removida.
+#
+# Antes, CnjDelegate desenhava a coluna numero_do_processo com layout
+# two-line quando a linha tinha processo_pai resolvido — ↳ parent_cnj
+# pequeno em cima do own_cnj em bold. Decisão de design:
+#
+# 1. Hierarquia processual já é visível pela coluna "Processo pai"
+#    (relation, oculta por default no picker da Fase 4 — usuário
+#    habilita se quiser). Two-line era redundância.
+# 2. O custo da renderização customizada acumulou:
+#    - bug de scroll ghost (Round 1) que o setClipRect mascarou.
+#    - bug de Qt repopular opt.text via initStyleOption interno
+#      (hotfix v2) que demandou override de virtual + paint manual
+#      do CNJ no fallback.
+# 3. Sem CnjDelegate, a coluna numero_do_processo cai no caminho
+#    default de PropDelegate.paint (último super().paint do método),
+#    que pinta texto em font default. Visualmente uniforme em todas
+#    as linhas, sem ghost possível.
+#
+# A coluna "Processo pai" ganha uso real: chip de relation azul claro,
+# clicável (double-click navega para o pai). Substituto melhor.

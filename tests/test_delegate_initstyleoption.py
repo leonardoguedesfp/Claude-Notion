@@ -1,5 +1,5 @@
 """Hotfix paint ghosts v2 (Lote 1): testes do override de
-``initStyleOption`` em PropDelegate / CnjDelegate / SucessorDelegate.
+``initStyleOption`` em PropDelegate / SucessorDelegate.
 
 Substitui ``test_paint_bg_helper.py`` (v1, removido). O helper externo
 ``_paint_background_only`` do v1 era furado: zerava ``opt.text`` em
@@ -11,10 +11,13 @@ A solução real é fazer override do próprio ``initStyleOption`` (que é
 virtual). Quando Qt chama internamente, cai no override que zera o
 text nas condições corretas.
 
-Os testes abaixo validam as 3 implementações do override:
+Round simplificação CnjDelegate (Lote 1): CnjDelegate foi removido
+junto com seu override. Coluna numero_do_processo agora usa
+PropDelegate default — texto pintado normalmente.
+
+Os testes abaixo validam as 2 implementações remanescentes do override:
 - PropDelegate zera para tipos chip (relation/select/multi_select).
 - PropDelegate preserva para tipos default (rich_text, number, date).
-- CnjDelegate zera sempre.
 - SucessorDelegate zera só quando há valor (preserva placeholder "—").
 """
 from __future__ import annotations
@@ -137,33 +140,11 @@ def test_propdelegate_initstyleoption_no_spec_preserves_text() -> None:
         dmod._get_spec_from_index = original
 
 
-# ---------------------------------------------------------------------------
-# CnjDelegate.initStyleOption — sempre zera
-# ---------------------------------------------------------------------------
-
-
-@requires_pyside6
-def test_cnjdelegate_initstyleoption_always_zeros_text() -> None:
-    """CnjDelegate sempre pinta CNJ customizado — text deve ser sempre
-    zerado, independentemente de spec/conteúdo."""
-    import sys
-    from PySide6.QtCore import QModelIndex
-    from PySide6.QtWidgets import QApplication, QStyleOptionViewItem
-    QApplication.instance() or QApplication(sys.argv)
-
-    from notion_rpadv.models.delegates import CnjDelegate
-
-    delegate = CnjDelegate()
-    opt = QStyleOptionViewItem()
-    opt.text = "0001234-12.2024.8.13.0024"
-    delegate.initStyleOption(opt, QModelIndex())
-    assert opt.text == "", (
-        f"CnjDelegate.initStyleOption deveria sempre zerar text; "
-        f"obtido {opt.text!r}."
-    )
-    assert not (
-        opt.features & QStyleOptionViewItem.ViewItemFeature.HasDisplay
-    ), "HasDisplay deveria ser removida sempre no CnjDelegate."
+# Round simplificação CnjDelegate (Lote 1): CnjDelegate foi REMOVIDO
+# da hierarquia. O teste antigo de initStyleOption do CnjDelegate
+# perdeu sentido. Coluna numero_do_processo agora cai no PropDelegate
+# default — initStyleOption padrão do Qt pinta texto normalmente
+# (preserva cabeçalho, tipo de conteúdo, etc.).
 
 
 # ---------------------------------------------------------------------------
