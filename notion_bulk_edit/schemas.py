@@ -16,8 +16,17 @@ Tipos suportados da API Notion:
 """
 from __future__ import annotations
 
+import logging
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import TYPE_CHECKING, Any, Optional
+
+if TYPE_CHECKING:
+    # Fase 1 — schema dinâmico: re-export de OptionSpec sem ciclo de import
+    # em runtime. Em runtime, expomos via PEP 562 __getattr__ no fim do módulo.
+    from notion_bulk_edit.schema_registry import OptionSpec  # noqa: F401
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -88,9 +97,15 @@ _COR_AREA: dict[str, str] = {
 
 # ---------------------------------------------------------------------------
 # Schemas das bases
+#
+# Fase 1 — schema dinâmico: o dict literal abaixo virou ``_LEGACY_SCHEMAS``
+# (privado). O símbolo público ``SCHEMAS`` é um proxy (definido após o dict)
+# que devolve do registry dinâmico quando ``USE_DYNAMIC_SCHEMA`` está True
+# e a base está em ``DYNAMIC_BASES``; caso contrário, devolve do dict legado.
+# Removido na Fase 3 (assumido todas as bases migradas).
 # ---------------------------------------------------------------------------
 
-SCHEMAS: dict[str, dict[str, PropSpec]] = {
+_LEGACY_SCHEMAS: dict[str, dict[str, PropSpec]] = {
 
     "Processos": {
         "cnj": PropSpec(
@@ -447,6 +462,105 @@ SCHEMAS: dict[str, dict[str, PropSpec]] = {
         ),
     },
 }
+
+
+# ---------------------------------------------------------------------------
+# Fase 1 — schema dinâmico: proxy de SCHEMAS
+# ---------------------------------------------------------------------------
+
+# Lista canônica das 4 bases conhecidas. Fase 4b adiciona "Documentos".
+_KNOWN_BASES: tuple[str, ...] = ("Processos", "Clientes", "Tarefas", "Catalogo")
+
+
+class _BaseSchemaProxy(Mapping[str, PropSpec]):
+    """Proxy para o dict de propriedades de uma base.
+
+    Em cada acesso, decide se serve do registry dinâmico (Fase 0) ou
+    cai no ``_LEGACY_SCHEMAS`` hardcoded. A decisão depende de:
+      - ``config.USE_DYNAMIC_SCHEMA`` (flag global)
+      - ``config.DYNAMIC_BASES`` (whitelist por-base, ativada na Fase 2)
+
+    O ``_backing()`` recalcula a cada acesso porque os testes flipam as
+    flags em runtime; cachear quebraria a expectativa.
+    """
+
+    def __init__(self, base_name: str) -> None:
+        self._base = base_name
+
+    def _backing(self) -> dict[str, PropSpec]:
+        # Imports adiados para evitar ciclo durante o load do módulo.
+        from notion_bulk_edit import config
+
+        use_dynamic = getattr(config, "USE_DYNAMIC_SCHEMA", False)
+        dynamic_bases = getattr(config, "DYNAMIC_BASES", set())
+        if use_dynamic and self._base in dynamic_bases:
+            try:
+                from notion_bulk_edit.schema_registry import get_schema_registry
+                schema = get_schema_registry().schema_for_base(self._base)
+                if schema:
+                    return schema
+            except RuntimeError:
+                # Singleton não inicializado — fallback silencioso.
+                pass
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    "Falha ao consultar schema dinâmico de %s; "
+                    "caindo no _LEGACY_SCHEMAS.", self._base,
+                )
+        return _LEGACY_SCHEMAS.get(self._base, {})
+
+    def __getitem__(self, key: str) -> PropSpec:
+        return self._backing()[key]
+
+    def __iter__(self) -> Any:
+        return iter(self._backing())
+
+    def __len__(self) -> int:
+        return len(self._backing())
+
+    def __contains__(self, key: object) -> bool:
+        return key in self._backing()
+
+
+class _SchemasProxy(Mapping[str, _BaseSchemaProxy]):
+    """Proxy para o dict de bases. ``SCHEMAS["Processos"]`` devolve um
+    ``_BaseSchemaProxy("Processos")`` que resolve dinamicamente."""
+
+    def __getitem__(self, key: str) -> _BaseSchemaProxy:
+        if key not in _KNOWN_BASES:
+            raise KeyError(key)
+        return _BaseSchemaProxy(key)
+
+    def __iter__(self) -> Any:
+        return iter(_KNOWN_BASES)
+
+    def __len__(self) -> int:
+        return len(_KNOWN_BASES)
+
+    def __contains__(self, key: object) -> bool:
+        return key in _KNOWN_BASES
+
+
+SCHEMAS: _SchemasProxy = _SchemasProxy()
+
+
+def __getattr__(name: str) -> Any:
+    """Fase 1 — schema dinâmico: re-export lazy de OptionSpec.
+
+    Resolve em runtime para evitar ciclo de import com schema_registry
+    (que importa PropSpec deste módulo no top-level).
+    """
+    if name == "OptionSpec":
+        from notion_bulk_edit.schema_registry import OptionSpec
+        return OptionSpec
+    raise AttributeError(
+        f"module 'notion_bulk_edit.schemas' has no attribute {name!r}",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Helpers públicos (mantêm a API legada — agora consultam o proxy)
+# ---------------------------------------------------------------------------
 
 
 def get_prop(base: str, key: str) -> Optional[PropSpec]:

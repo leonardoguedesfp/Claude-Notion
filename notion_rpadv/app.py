@@ -148,6 +148,27 @@ class MainWindow(QMainWindow):
             # status bar isn't built yet.
             pass
 
+        # Fase 1 — schema dinâmico: inicializa o singleton SchemaRegistry
+        # (custo ínfimo; só lê meta_schemas em audit.db). Refresh real via
+        # API só acontece quando USE_DYNAMIC_SCHEMA está ativo.
+        from notion_bulk_edit import config as bulk_config
+        from notion_bulk_edit.schema_registry import (
+            boot_refresh_all,
+            init_schema_registry,
+        )
+        self._schema_registry = init_schema_registry(self._audit_conn)
+        if bulk_config.USE_DYNAMIC_SCHEMA:
+            try:
+                from notion_bulk_edit.notion_api import NotionClient
+                boot_refresh_all(
+                    NotionClient(self._token),
+                    self._schema_registry,
+                    DATA_SOURCES,
+                )
+            except Exception:  # noqa: BLE001
+                # Erro de boot não crasha o app; cache existente continua valendo.
+                pass
+
         # Services
         self._facade = NotionFacade(
             self._token, self._conn, audit_conn=self._audit_conn,
