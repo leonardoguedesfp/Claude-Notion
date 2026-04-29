@@ -77,6 +77,12 @@ class Toast(QFrame):
     ) -> None:
         super().__init__(parent)
         self._kind = kind if kind in _KIND_STYLE else "info"
+        # P2-003 (Lote 2): error toasts NAO auto-dismissam — usuario
+        # precisa clicar × para fechar. Antes, qualquer kind dismissava
+        # em 4s, e se o usuario estava em outra tela quando o erro
+        # aparecia, perdia a mensagem. info/success/warning seguem com
+        # auto-dismiss de 4s (timer.start condicional em slide_in).
+        self._auto_dismiss: bool = self._kind != "error"
         bg, fg, accent, icon = _KIND_STYLE[self._kind]
 
         self.setObjectName("Toast")
@@ -177,7 +183,9 @@ class Toast(QFrame):
         self._anim.setEndValue(final_pos)
         self._anim.start()
 
-        self._timer.start()
+        # P2-003 (Lote 2): error → sem auto-dismiss; outros kinds → 4s.
+        if self._auto_dismiss:
+            self._timer.start()
 
     def move_to(self, pos: QPoint) -> None:
         """BUG-N15: reposition without re-animating or resetting the dismiss timer."""

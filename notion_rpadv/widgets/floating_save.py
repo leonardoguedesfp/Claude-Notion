@@ -184,12 +184,9 @@ class FloatingSaveBar(QFrame):
         if self.parent() is None:
             return None
         ph = self.parent().height()  # type: ignore[union-attr]
-        hidden_y = ph
         visible_y = ph - _BAR_HEIGHT
-        start_y = visible_y if show else hidden_y
-        end_y = hidden_y if show else visible_y  # wait — reversed
-
-        # Correct: when showing, go from below → visible_y
+        # Show: slide UP de baixo da viewport (ph) → posição visível.
+        # Hide: slide DOWN de visível → fora da tela (ph).
         start_y = ph if show else visible_y
         end_y = visible_y if show else ph
 
