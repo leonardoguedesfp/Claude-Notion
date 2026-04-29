@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (
 )
 
 from notion_bulk_edit.schemas import PropSpec
-from notion_rpadv.theme.notion_colors import chip_colors_for, hex_to_color_name
+from notion_rpadv.theme.tokens import resolve_chip_color
 
 
 # Estilo de chip pequeno (compatível com PropDelegate paint).
@@ -48,9 +48,15 @@ class MultiSelectEditor(QWidget):
         self,
         spec: PropSpec,
         parent: QWidget | None = None,
+        *,
+        base_label: str = "",
+        prop_key: str = "",
     ) -> None:
         super().__init__(parent)
         self._spec = spec
+        # Round 3b-2: base+prop_key pra consultar override map.
+        self._base_label = base_label
+        self._prop_key = prop_key
         # Validação na fonte: nunca aceitar valor fora do spec.
         self._allowed: set[str] = set(spec.opcoes or ())
         self._selected: set[str] = set()
@@ -149,21 +155,16 @@ class MultiSelectEditor(QWidget):
             if w is not None:
                 w.deleteLater()
 
-        cor_map: dict[str, str] = self._spec.cor_por_valor or {}
-
         for opcao in self.values():
-            # Round simplificação chip palette (Lote 1): paleta vem de
-            # notion_colors.chip_colors_for, mesmo source que o
-            # PropDelegate paint. cor_map tem hex (Fase 3); reverte
-            # para nome e busca par (bg_light, fg_dark).
-            hex_color = cor_map.get(opcao, "")
-            color_name = hex_to_color_name(hex_color)
-            bg_hex, fg_hex = chip_colors_for(color_name)
+            # Round 3b-2: cor vem do override map (paleta brand). QSS aceita
+            # rgba() em background-color, então usamos pal.bg direto sem
+            # parse — diferente de delegates.py que pinta via QPainter.
+            pal = resolve_chip_color(self._base_label, self._prop_key, opcao)
             chip = QLabel(opcao)
             chip.setStyleSheet(
                 f"QLabel {{"
-                f" background-color: {bg_hex};"
-                f" color: {fg_hex};"
+                f" background-color: {pal.bg};"
+                f" color: {pal.fg};"
                 f" border-radius: {_CHIP_RADIUS}px;"
                 f" padding: {_CHIP_PADDING_V}px {_CHIP_PADDING_H}px;"
                 f" font-size: 11px; }}"

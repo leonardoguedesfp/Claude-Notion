@@ -5,6 +5,7 @@ Nunca use hex hardcoded fora deste módulo.
 """
 from __future__ import annotations
 
+import re as _re
 from dataclasses import dataclass
 from typing import Final
 
@@ -265,3 +266,75 @@ def chip_palette(color: str) -> ChipPalette:
         "amber":  p.chip_amber,
     }
     return mapping.get(color, p.chip_default)
+
+
+# ---------------------------------------------------------------------------
+# Round 3b-2: override-driven chip color resolution
+# ---------------------------------------------------------------------------
+
+_RGBA_RE = _re.compile(
+    r"rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?:\s*,\s*([\d.]+))?\s*\)",
+    _re.IGNORECASE,
+)
+
+
+def parse_color(s: str) -> tuple[int, int, int, int]:
+    """Parse ``"#RRGGBB"`` ou ``"rgba(R,G,B,A)"`` em tupla ``(r, g, b, a)``
+    com cada componente em ``[0, 255]``.
+
+    Útil pra construir ``QColor`` a partir das strings da paleta brand
+    (que mistura formatos: ``LIGHT.chip_*.bg`` é rgba, ``LIGHT.chip_*.fg`` é
+    hex sólido). Mantido sem import de Qt — pure Python — pra não acoplar
+    o módulo de tokens à Qt.
+    """
+    s = s.strip()
+    if s.startswith("#") and len(s) == 7:
+        r = int(s[1:3], 16)
+        g = int(s[3:5], 16)
+        b = int(s[5:7], 16)
+        return r, g, b, 255
+    m = _RGBA_RE.match(s)
+    if m:
+        r = int(m.group(1))
+        g = int(m.group(2))
+        b = int(m.group(3))
+        a_str = m.group(4)
+        a = int(round(float(a_str) * 255)) if a_str else 255
+        return r, g, b, a
+    raise ValueError(f"Cor inválida: {s!r}")
+
+
+def resolve_chip_color(base: str, prop_key: str, value: str) -> ChipPalette:
+    """Resolve a cor de chip pra um valor de propriedade via override map.
+
+    Consulta ``colors_overrides.OVERRIDES`` por ``(base, prop_key, value)``.
+    Sem entrada → ``chip_default`` (cinza neutro). Com entrada → pega o
+    nome da família e retorna o ``ChipPalette`` correspondente em ``LIGHT``.
+
+    A cor que o Notion configurou pra opção é IGNORADA — fonte da verdade
+    visual é o override map (paleta brand do escritório).
+    """
+    # Import adiado pra evitar ciclo (colors_overrides usa só constants).
+    from notion_rpadv.theme.colors_overrides import OVERRIDES
+    family = OVERRIDES.get((base, prop_key, value))
+    if family is None:
+        return LIGHT.chip_default
+    return chip_palette(family)
+
+
+def resolve_person_avatar_color(initials: str) -> tuple[str, str]:
+    """Resolve cores do avatar de PersonChip a partir das iniciais.
+
+    Retorna ``(bg_hex, fg_hex)`` — ambos sólidos, prontos pra ``QColor``.
+    O avatar é círculo preenchido (não chip translúcido), então usamos
+    ``ChipPalette.fg`` como bg sólido (cor escura saturada) + cream como
+    fg do texto (iniciais em branco-creme legíveis sobre todas as 7
+    famílias usáveis).
+
+    Iniciais desconhecidas caem em ``"blue"`` (família histórica do
+    avatar — bg ``#0C324D`` matches o navy original).
+    """
+    from notion_rpadv.theme.colors_overrides import PERSON_CHIP_COLORS
+    family = PERSON_CHIP_COLORS.get(initials.upper(), "blue")
+    pal = chip_palette(family)
+    return pal.fg, "#EDEAE4"

@@ -17,6 +17,7 @@ from notion_rpadv.theme.tokens import (
     FW_MEDIUM,
     FW_BOLD,
     SP_2,
+    resolve_person_avatar_color,
 )
 
 _AVATAR_SIZE: int = 28        # diameter of the circle
@@ -76,8 +77,8 @@ class PersonChip(QWidget):
 
     Usage::
 
-        chip = PersonChip("JD", name="João Dias")
-        chip = PersonChip("MF", name="", color="#395A5A")  # avatar only
+        chip = PersonChip("JD", name="João Dias")               # cor auto
+        chip = PersonChip("MF", name="", color="#395A5A")       # cor manual
 
     Parameters
     ----------
@@ -87,28 +88,36 @@ class PersonChip(QWidget):
         Optional full name shown to the right of the avatar. Pass ``""`` to
         display the avatar only.
     color:
-        Background hex colour for the avatar circle (navy by default).
+        Background hex colour for the avatar circle. Quando ``None`` (default),
+        resolve via ``resolve_person_avatar_color(initials)`` — cada usuário
+        ganha cor estável da paleta brand conforme PERSON_CHIP_COLORS em
+        ``colors_overrides.py``.
 
     Round 3a: kwarg ``dark`` removido — paleta única LIGHT.
+    Round 3b-2: cor default agora vem do override map (cor por usuário).
     """
 
     def __init__(
         self,
         initials: str,
         name: str = "",
-        color: str = "#104063",
+        color: str | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
 
-        fg_color = "#EDEAE4"  # cream — readable on both navy and petrol
+        if color is None:
+            bg_color, fg_color = resolve_person_avatar_color(initials)
+        else:
+            bg_color = color
+            fg_color = "#EDEAE4"  # cream — readable on all brand families
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(SP_2)
 
         self._avatar = _AvatarCircle(
-            initials, bg_color=color, fg_color=fg_color, parent=self
+            initials, bg_color=bg_color, fg_color=fg_color, parent=self
         )
         layout.addWidget(self._avatar)
 

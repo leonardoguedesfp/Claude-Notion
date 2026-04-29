@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
 
 from notion_bulk_edit.config import NOTION_USERS
 from notion_bulk_edit.schemas import PropSpec, get_prop
-from notion_rpadv.theme.notion_colors import chip_colors_for, hex_to_color_name
+from notion_rpadv.theme.tokens import parse_color, resolve_chip_color
 from notion_rpadv.widgets.multi_select_editor import MultiSelectEditor
 
 # Types that cannot be edited via a delegate.
@@ -42,33 +42,45 @@ _PEOPLE_OPTIONS: list[tuple[str, str]] = [
     (uid, info.get("name", uid)) for uid, info in NOTION_USERS.items()
 ]
 
-# Round simplificação chip palette (Lote 1): paleta vem agora de
-# notion_rpadv.theme.notion_colors.chip_colors_for — fundo claro tonal +
-# texto escuro saturado da mesma família. Substituiu o binário preto/
-# branco do _contrasting_text_color que ficava agressivo em fundos
-# coloridos claros.
+# Round 3b-2: paleta de chips agora vem de
+# notion_rpadv.theme.tokens.resolve_chip_color (override map em
+# colors_overrides.py + paleta brand). Antes usava
+# notion_colors.chip_colors_for que mimetizava cores do Notion web —
+# substituído porque a paleta brand do escritório vence sobre Notion.
 _CHIP_PADDING_H = 6
 _CHIP_PADDING_V = 2
 _CHIP_RADIUS = 10
 _CHIP_GAP = 4
 
 
-def _get_spec_from_index(index: QModelIndex) -> PropSpec | None:
-    """Retrieve the PropSpec for the column represented by *index*."""
+def _get_spec_meta_from_index(
+    index: QModelIndex,
+) -> tuple[PropSpec | None, str, str]:
+    """Retrieve PropSpec + (base_label, prop_key) for the column of *index*.
+
+    Round 3b-2: callers que pintam chips precisam de base+key pra consultar
+    o override map. Antes só ``_get_spec_from_index`` existia (devolvia só
+    o spec).
+    """
     model = index.model()
     # Support proxy models.
     while hasattr(model, "sourceModel"):
         model = model.sourceModel()  # type: ignore[union-attr]
-    base: str | None = getattr(model, "_base", None)
+    base: str = getattr(model, "_base", "") or ""
     cols: list[str] | None = getattr(model, "_cols", None)
-    if base is None or cols is None:
-        return None
+    if not base or cols is None:
+        return None, "", ""
     col_idx = index.column()
-    # When coming through a proxy, the column may already be mapped.
     if col_idx < 0 or col_idx >= len(cols):
-        return None
+        return None, base, ""
     key = cols[col_idx]
-    return get_prop(base, key)
+    return get_prop(base, key), base, key
+
+
+def _get_spec_from_index(index: QModelIndex) -> PropSpec | None:
+    """Retrieve the PropSpec for the column represented by *index*."""
+    spec, _base, _key = _get_spec_meta_from_index(index)
+    return spec
 
 
 class PropDelegate(QStyledItemDelegate):
@@ -129,7 +141,11 @@ class PropDelegate(QStyledItemDelegate):
             # spec.opcoes. Antes era QLineEdit livre, que aceitava typo do
             # usuário e silenciosamente criava opção fantasma no schema
             # do Notion.
-            return MultiSelectEditor(spec, parent)
+            # Round 3b-2: passa base+key pro editor consultar override map.
+            _spec, base_label, prop_key = _get_spec_meta_from_index(index)
+            return MultiSelectEditor(
+                spec, parent, base_label=base_label, prop_key=prop_key,
+            )
 
         if tipo == "date":
             de = QDateEdit(parent)
@@ -336,9 +352,16 @@ class PropDelegate(QStyledItemDelegate):
             fm = painter.fontMetrics()
 
             # Accent-tinted chip — DELTA "chip cor --accent (chip-rel)".
+            # Round 3b-2 hotfix: app_accent_soft é rgba string ("rgba(16,64,99,0.08)").
+            # QColor("rgba(...)") cai em inválido e renderiza PRETO. Antes do fix,
+            # chips de relação (coluna Clientes, Processo pai etc.) apareciam com
+            # fundo preto sobre cream e texto navy quase ilegível. parse_color
+            # devolve componentes int explícitos pra QColor(r, g, b, a).
             from notion_rpadv.theme.tokens import LIGHT
-            chip_bg = QColor(LIGHT.app_accent_soft)
-            chip_fg = QColor(LIGHT.app_accent)
+            bg_r, bg_g, bg_b, bg_a = parse_color(LIGHT.app_accent_soft)
+            fg_r, fg_g, fg_b, _ = parse_color(LIGHT.app_accent)
+            chip_bg = QColor(bg_r, bg_g, bg_b, bg_a)
+            chip_fg = QColor(fg_r, fg_g, fg_b)
 
             for name in names:
                 if x >= rect.right() - _CHIP_PADDING_H:
@@ -413,7 +436,10 @@ class PropDelegate(QStyledItemDelegate):
             x = rect.x() + _CHIP_PADDING_H
             y = rect.y() + (rect.height() - 20) // 2  # vertically centred
 
-            cor_map: dict[str, str] = spec.cor_por_valor or {}
+            # Round 3b-2: cor agora vem do override map (paleta brand do
+            # escritório), não mais do hex que o Notion configurou. Precisa
+            # de base+key pra consultar.
+            _spec_again, base_label, prop_key = _get_spec_meta_from_index(index)
 
             font = QApplication.font()
             font.setPointSize(8)
@@ -424,15 +450,13 @@ class PropDelegate(QStyledItemDelegate):
                 if x >= rect.right() - _CHIP_PADDING_H:
                     break  # no more space
 
-                # Round simplificação chip palette (Lote 1): cor_por_valor
-                # armazena hex (vinda de NOTION_COLOR_TO_HEX em
-                # _dict_to_propspec). Fazemos lookup reverso hex → name e
-                # depois name → (bg_light, fg_dark) via paleta dedicada.
-                hex_color = cor_map.get(chip_text, "")
-                color_name = hex_to_color_name(hex_color)
-                bg_hex, fg_hex = chip_colors_for(color_name)
-                bg = QColor(bg_hex)
-                fg = QColor(fg_hex)
+                # Round 3b-2: lookup direto no override map. Brand vence Notion.
+                # Sem entry → ChipPalette default (cinza neutro), sem crash.
+                pal = resolve_chip_color(base_label, prop_key, chip_text)
+                bg_r, bg_g, bg_b, bg_a = parse_color(pal.bg)
+                fg_r, fg_g, fg_b, _fg_a = parse_color(pal.fg)
+                bg = QColor(bg_r, bg_g, bg_b, bg_a)
+                fg = QColor(fg_r, fg_g, fg_b)
 
                 text_w = fm.horizontalAdvance(chip_text)
                 chip_w = text_w + _CHIP_PADDING_H * 2
