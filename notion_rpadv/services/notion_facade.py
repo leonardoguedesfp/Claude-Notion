@@ -312,6 +312,11 @@ class NotionFacade(QObject):
         worker.auth_invalidated.connect(self.auth_invalidated)
         worker.finished.connect(thread.quit)
         worker.error.connect(thread.quit)
+        # Auditoria 2026-04-29: deleteLater do worker (mesmo padrão do
+        # P2-004/Lote 2 em sync.py). Sem isso, o QObject worker sobrevive
+        # ao GC do Python (parent=None pós moveToThread) — leak por commit.
+        worker.finished.connect(worker.deleteLater)
+        worker.error.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
 
         self._commit_thread = thread
@@ -351,6 +356,8 @@ class NotionFacade(QObject):
         # BUG-OP-11: re-broadcast revert auth failures.
         worker.auth_invalidated.connect(self.auth_invalidated)
         worker.finished.connect(thread.quit)
+        # Auditoria 2026-04-29: deleteLater do worker (idem CommitWorker).
+        worker.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
 
         self._revert_thread = thread

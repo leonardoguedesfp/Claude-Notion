@@ -241,6 +241,13 @@ class MainWindow(QMainWindow):
             user=self._user_dict,
             sync_manager=self._sync_manager,
         )
+        # Auditoria 2026-04-29: signal sync_requested estava emitida (clicar
+        # "Sincronizar tudo" no Dashboard fazia self.sync_requested.emit) mas
+        # ninguém escutava — botão era no-op silencioso. Conectar pra _sync_all.
+        try:
+            dashboard.sync_requested.connect(self._sync_all)
+        except (TypeError, AttributeError):
+            pass
         self._add_page(_PAGE_DASHBOARD, dashboard)
 
         # Table pages
