@@ -37,6 +37,7 @@ from notion_rpadv.theme.tokens import (
     SP_4,
     SP_6,
     SP_8,
+    parse_color,
 )
 
 _BASES = list(DATA_SOURCES.keys())
@@ -383,11 +384,19 @@ class _Step2Widget(QWidget):
         for ri, row in enumerate(rows):
             state = self._row_states.get(ri, "ok")
             bg_color = _BG.get(state, "transparent")
+            # Round 3b-2 hotfix: bg_color para err/warn é rgba string
+            # (app_danger_bg / app_warning_bg). QColor("rgba(...)") cai em
+            # inválido (preto). Pré-converte via parse_color uma vez por
+            # linha pra QBrush funcionar corretamente.
+            bg_qcolor: QColor | None = None
+            if bg_color != "transparent":
+                r, g, b, a = parse_color(bg_color)
+                bg_qcolor = QColor(r, g, b, a)
             for ci, cell in enumerate(row):
                 item = QTableWidgetItem(str(cell) if cell is not None else "")
                 item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                if bg_color != "transparent":
-                    item.setBackground(QColor(bg_color))
+                if bg_qcolor is not None:
+                    item.setBackground(bg_qcolor)
                 self._table.setItem(ri, ci, item)
 
             # Validation chip in last column
@@ -395,8 +404,8 @@ class _Step2Widget(QWidget):
             chip_item = QTableWidgetItem(chip_text)
             chip_item.setFlags(chip_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             chip_item.setForeground(QColor(chip_color))
-            if bg_color != "transparent":
-                chip_item.setBackground(QColor(bg_color))
+            if bg_qcolor is not None:
+                chip_item.setBackground(bg_qcolor)
             self._table.setItem(ri, len(headers), chip_item)
 
         self._table.resizeColumnsToContents()
