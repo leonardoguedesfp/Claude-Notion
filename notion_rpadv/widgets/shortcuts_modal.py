@@ -36,29 +36,34 @@ from notion_rpadv.theme.tokens import (
 
 # Maps action key → human-readable Portuguese label
 # P1-001 (Lote 1): "new_record" removido até existir implementação real.
+# P3-004 (Lote 2): "open_columns_picker" e "toggle_sidebar" adicionados.
 _ACTION_LABELS: dict[str, str] = {
-    "search":        "Abrir paleta de comandos",
-    "save":          "Salvar alterações",
-    "discard":       "Descartar / Fechar",
-    "refresh":       "Atualizar dados",
-    "toggle_theme":  "Alternar tema claro / escuro",
-    "nav_processos": "Ir para Processos",
-    "nav_clientes":  "Ir para Clientes",
-    "nav_tarefas":   "Ir para Tarefas",
-    "nav_catalogo":  "Ir para Catálogo",
+    "search":              "Abrir paleta de comandos",
+    "save":                "Salvar alterações",
+    "discard":             "Descartar / Fechar",
+    "refresh":             "Atualizar dados",
+    "toggle_theme":        "Alternar tema claro / escuro",
+    "nav_processos":       "Ir para Processos",
+    "nav_clientes":        "Ir para Clientes",
+    "nav_tarefas":         "Ir para Tarefas",
+    "nav_catalogo":        "Ir para Catálogo",
+    "open_columns_picker": "Picker de colunas",
+    "toggle_sidebar":      "Mostrar / ocultar sidebar",
 }
 
 # Maps action key → section name (for grouping)
 _ACTION_SECTIONS: dict[str, str] = {
-    "search":        "Geral",
-    "save":          "Geral",
-    "discard":       "Geral",
-    "refresh":       "Geral",
-    "toggle_theme":  "Aparência",
-    "nav_processos": "Navegação",
-    "nav_clientes":  "Navegação",
-    "nav_tarefas":   "Navegação",
-    "nav_catalogo":  "Navegação",
+    "search":              "Geral",
+    "save":                "Geral",
+    "discard":             "Geral",
+    "refresh":             "Geral",
+    "toggle_theme":        "Aparência",
+    "nav_processos":       "Navegação",
+    "nav_clientes":        "Navegação",
+    "nav_tarefas":         "Navegação",
+    "nav_catalogo":        "Navegação",
+    "open_columns_picker": "Visualização",
+    "toggle_sidebar":      "Visualização",
 }
 
 

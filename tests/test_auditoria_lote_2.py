@@ -106,3 +106,74 @@ def test_toast_info_slide_in_starts_timer() -> None:
     )
     toast._timer.stop()
     toast.deleteLater()
+
+
+# ---------------------------------------------------------------------------
+# C4 — P3-004: atalhos Ctrl+Shift+K (picker) e Ctrl+B (sidebar)
+# ---------------------------------------------------------------------------
+
+
+def test_default_shortcuts_include_picker_and_sidebar() -> None:
+    """DEFAULT_SHORTCUTS contém os 2 novos atalhos do Lote 2."""
+    from notion_rpadv.services.shortcuts_store import DEFAULT_SHORTCUTS
+
+    assert DEFAULT_SHORTCUTS.get("open_columns_picker") == "Ctrl+Shift+K", (
+        "Esperado Ctrl+Shift+K para open_columns_picker (Ctrl+K já estava "
+        "em uso por 'search' / command palette)."
+    )
+    assert DEFAULT_SHORTCUTS.get("toggle_sidebar") == "Ctrl+B"
+
+
+def test_default_shortcuts_picker_does_not_clobber_search() -> None:
+    """Garantir que 'search' (Ctrl+K) continua sendo o atalho de paleta —
+    o picker NÃO deve usar Ctrl+K puro (decisão divergente do briefing
+    para evitar conflito)."""
+    from notion_rpadv.services.shortcuts_store import DEFAULT_SHORTCUTS
+
+    assert DEFAULT_SHORTCUTS.get("search") == "Ctrl+K"
+    assert DEFAULT_SHORTCUTS.get("open_columns_picker") != "Ctrl+K"
+
+
+@requires_pyside6
+def test_toggle_sidebar_handler_flips_visibility() -> None:
+    """MainWindow._toggle_sidebar inverte sidebar.isVisible()."""
+    import sys
+    from PySide6.QtWidgets import QApplication, QWidget
+    QApplication.instance() or QApplication(sys.argv)
+
+    # Stub mínimo de "MainWindow-like" para testar o handler isolado.
+    class _FakeMainWindow:
+        def __init__(self):
+            self._sidebar = QWidget()
+            self._sidebar.setVisible(True)
+
+        # Importa o método como standalone (será bound).
+        from notion_rpadv.app import MainWindow
+        _toggle_sidebar = MainWindow._toggle_sidebar
+
+    fake = _FakeMainWindow()
+    assert fake._sidebar.isVisible() is True
+    fake._toggle_sidebar()
+    assert fake._sidebar.isVisible() is False
+    fake._toggle_sidebar()
+    assert fake._sidebar.isVisible() is True
+
+
+def test_shortcut_labels_include_new_actions() -> None:
+    """Configurações e ShortcutsModal expõem labels para os 2 atalhos."""
+    from notion_rpadv.pages.configuracoes import _SHORTCUT_LABELS
+    from notion_rpadv.widgets.shortcuts_modal import (
+        _ACTION_LABELS, _ACTION_SECTIONS,
+    )
+
+    for key in ("open_columns_picker", "toggle_sidebar"):
+        assert key in _SHORTCUT_LABELS, (
+            f"{key!r} ausente em configuracoes._SHORTCUT_LABELS — "
+            "tabela de atalhos da página Configurações não vai mostrar."
+        )
+        assert key in _ACTION_LABELS, (
+            f"{key!r} ausente em shortcuts_modal._ACTION_LABELS."
+        )
+        assert key in _ACTION_SECTIONS, (
+            f"{key!r} ausente em shortcuts_modal._ACTION_SECTIONS."
+        )

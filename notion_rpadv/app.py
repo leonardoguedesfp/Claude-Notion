@@ -772,6 +772,9 @@ class MainWindow(QMainWindow):
             "discard":       self._discard_current_page,
             # P1-001 (Lote 1): "new_record" (Ctrl+N) removido até existir
             # implementação real de criação inline.
+            # P3-004 (Lote 2): atalhos para picker de colunas e sidebar.
+            "open_columns_picker": self._open_columns_picker_current_page,
+            "toggle_sidebar":      self._toggle_sidebar,
         }
         # ShortcutRegistry.__init__ already pulls user overrides from
         # shortcuts.json so the QShortcuts created by register_all() reflect
@@ -819,6 +822,19 @@ class MainWindow(QMainWindow):
     # P1-001 (Lote 1): _new_record_current_page removido junto com o
     # entry point de Ctrl+N. Reintroduzir quando criação inline for
     # implementada de verdade.
+
+    def _open_columns_picker_current_page(self) -> None:
+        """P3-004 (Lote 2): Ctrl+Shift+K abre o picker de colunas (Fase 4)
+        na página ativa. Páginas que não são tabelas (Dashboard, Logs,
+        Configurações, Importar) não têm picker — atalho é no-op."""
+        current = self._stack.currentWidget()
+        if hasattr(current, "_open_columns_picker"):
+            current._open_columns_picker()  # type: ignore[union-attr]
+
+    def _toggle_sidebar(self) -> None:
+        """P3-004 (Lote 2): Ctrl+B esconde/mostra a sidebar."""
+        if hasattr(self, "_sidebar"):
+            self._sidebar.setVisible(not self._sidebar.isVisible())
 
     # ------------------------------------------------------------------
     # Toast helper

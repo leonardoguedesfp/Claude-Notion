@@ -55,16 +55,19 @@ from notion_rpadv.theme.tokens import (
 
 # Human-readable shortcut labels (shared with ShortcutsModal)
 # P1-001 (Lote 1): "new_record" removido até existir implementação real.
+# P3-004 (Lote 2): "open_columns_picker" e "toggle_sidebar" adicionados.
 _SHORTCUT_LABELS: dict[str, str] = {
-    "search":       "Paleta de comandos",
-    "save":         "Salvar alterações",
-    "discard":      "Descartar",
-    "refresh":      "Atualizar",
-    "toggle_theme": "Alternar tema",
-    "nav_processos":"Ir para Processos",
-    "nav_clientes": "Ir para Clientes",
-    "nav_tarefas":  "Ir para Tarefas",
-    "nav_catalogo": "Ir para Catálogo",
+    "search":              "Paleta de comandos",
+    "save":                "Salvar alterações",
+    "discard":             "Descartar",
+    "refresh":             "Atualizar",
+    "toggle_theme":        "Alternar tema",
+    "nav_processos":       "Ir para Processos",
+    "nav_clientes":        "Ir para Clientes",
+    "nav_tarefas":         "Ir para Tarefas",
+    "nav_catalogo":        "Ir para Catálogo",
+    "open_columns_picker": "Picker de colunas",
+    "toggle_sidebar":      "Mostrar / ocultar sidebar",
 }
 
 

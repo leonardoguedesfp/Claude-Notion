@@ -18,6 +18,11 @@ DEFAULT_SHORTCUTS: dict[str, str] = {
     "nav_clientes": "Ctrl+2",
     "nav_tarefas": "Ctrl+3",
     "nav_catalogo": "Ctrl+4",
+    # P3-004 (Lote 2): atalhos novos. Ctrl+Shift+K (não Ctrl+K como o
+    # briefing original sugeriu, porque colidia com "search"). Mantém
+    # família Ctrl+K e preserva command palette.
+    "open_columns_picker": "Ctrl+Shift+K",
+    "toggle_sidebar": "Ctrl+B",
 }
 
 
