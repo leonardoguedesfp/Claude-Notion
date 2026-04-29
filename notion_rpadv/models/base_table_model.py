@@ -51,7 +51,12 @@ def _looks_like_template_row(record: dict, title_key: str) -> bool:
 def _count_processos_for_cliente(conn: sqlite3.Connection, cliente_page_id: str) -> int:
     """BUG-V2-09: count rows in the local Processos cache whose 'cliente'
     relation references *cliente_page_id*. Returns 0 if the cache has no
-    Processos data yet."""
+    Processos data yet.
+
+    P2-001 (Lote 2): este helper continua disponivel mas em hot path
+    foi substituido por ``_build_processos_count_cache`` + lookup O(1).
+    Mantido para uso pontual / testes / fallback se cache vazio.
+    """
     if not cliente_page_id:
         return 0
     try:
@@ -64,6 +69,37 @@ def _count_processos_for_cliente(conn: sqlite3.Connection, cliente_page_id: str)
         if isinstance(rel, list) and cliente_page_id in (str(x) for x in rel):
             count += 1
     return count
+
+
+def _build_processos_count_cache(
+    conn: sqlite3.Connection,
+) -> dict[str, int]:
+    """P2-001 (Lote 2): faz UMA varredura de Processos e retorna dict
+    {cliente_page_id: count}. Substitui o scan O(N) por celula em
+    `_count_processos_for_cliente` por lookup O(1) via cache.
+
+    Schema dinamico (Fase 0+): a relation pode estar em ``cliente`` (legado)
+    ou ``clientes`` (slug do schema dinamico apos slugify "Clientes").
+    Este helper aceita os dois para tolerar caches mistos durante
+    migracao — em pratica so um dos dois esta populado por linha.
+    """
+    counts: dict[str, int] = {}
+    try:
+        processos = cache_db.get_all_records(conn, "Processos")
+    except Exception:  # noqa: BLE001
+        return counts
+    for proc in processos:
+        # Coletar IDs unicos da linha (set) antes de incrementar — se
+        # ambos os slugs estiverem populados com mesmo ID (extremamente
+        # raro), evita dupla contagem.
+        client_ids: set[str] = set()
+        for key in ("clientes", "cliente"):
+            rel = proc.get(key)
+            if isinstance(rel, list):
+                client_ids.update(str(x) for x in rel)
+        for cli_id in client_ids:
+            counts[cli_id] = counts.get(cli_id, 0) + 1
+    return counts
 
 
 def _resolve_relation(conn: sqlite3.Connection, page_ids: list, target_base: str) -> str:
@@ -209,6 +245,13 @@ class BaseTableModel(QAbstractTableModel):
         # com 1100+ linhas o trabalho dobra. Invalidado em reload,
         # setData e clear_dirty.
         self._display_cache: dict[tuple[int, int], str] = {}
+        # P2-001 (Lote 2): cache count de Processos por cliente_uuid.
+        # Sem cache, o fallback `_count_processos_for_cliente` (BUG-V2-09)
+        # fazia scan O(N_processos) por celula quando o rollup do Notion
+        # vinha vazio. Para 1072 clientes × 1108 processos = 1.18M ops
+        # por reload se a coluna `n_processos` estiver visivel.
+        # Populado em reload() apenas para base="Clientes".
+        self._processos_count_cache: dict[str, int] = {}
         self.reload()
 
     # ------------------------------------------------------------------
@@ -244,6 +287,18 @@ class BaseTableModel(QAbstractTableModel):
         if title_key:
             rows = [r for r in rows if not _looks_like_template_row(r, title_key)]
         self._rows = rows
+
+        # P2-001 (Lote 2): repopular cache de count de Processos por
+        # cliente — uma unica varredura O(N_processos) ao inves de N×.
+        # Aplicavel apenas em Clientes; em outras bases o cache fica
+        # vazio (lookup retorna 0, que e o esperado para casos sem
+        # rollup/relation).
+        if self._base == "Clientes":
+            self._processos_count_cache = _build_processos_count_cache(
+                self._conn,
+            )
+        else:
+            self._processos_count_cache = {}
 
         if not preserve_dirty:
             self._dirty.clear()
@@ -350,12 +405,14 @@ class BaseTableModel(QAbstractTableModel):
         # (common for data sources that haven't materialised the rollup yet),
         # compute the count locally by counting Processos rows referencing this
         # client's page_id. Keeps the column populated without re-syncing.
+        # P2-001 (Lote 2): troca o scan O(N_processos) por celula por
+        # lookup O(1) no cache `_processos_count_cache` populado em reload.
         if (
             self._base == "Clientes"
             and key == "n_processos"
             and (raw is None or raw == "" or raw == [])
         ):
-            raw = _count_processos_for_cliente(self._conn, page_id)
+            raw = self._processos_count_cache.get(page_id, 0)
 
         if role == Qt.ItemDataRole.DisplayRole:
             # P2-002 (Lote 2): cache de DisplayRole por (row, col).

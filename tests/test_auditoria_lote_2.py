@@ -298,6 +298,124 @@ def test_model_foreground_role_uses_display_cache() -> None:
     )
 
 
+# ---------------------------------------------------------------------------
+# C7 — P2-001: cache de count de processos por cliente
+# ---------------------------------------------------------------------------
+
+
+@requires_pyside6
+def test_clientes_model_builds_processos_count_cache_on_reload() -> None:
+    """Em base='Clientes', _processos_count_cache é populado em reload
+    a partir de uma única varredura de Processos. Outras bases têm cache
+    vazio."""
+    import sys
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication(sys.argv)
+
+    from notion_rpadv.cache import db as cache_db
+    from notion_rpadv.models.base_table_model import BaseTableModel
+
+    conn = _make_model_conn()
+    # 3 processos: 2 ligados a cliente c1, 1 a cliente c2.
+    cache_db.upsert_record(conn, "Processos", "p-1",
+                           {"page_id": "p-1", "clientes": ["c1"]})
+    cache_db.upsert_record(conn, "Processos", "p-2",
+                           {"page_id": "p-2", "clientes": ["c1"]})
+    cache_db.upsert_record(conn, "Processos", "p-3",
+                           {"page_id": "p-3", "clientes": ["c2"]})
+    # 2 clientes
+    cache_db.upsert_record(conn, "Clientes", "c1",
+                           {"page_id": "c1", "nome": "Alpha"})
+    cache_db.upsert_record(conn, "Clientes", "c2",
+                           {"page_id": "c2", "nome": "Beta"})
+
+    model_clientes = BaseTableModel("Clientes", conn)
+    assert model_clientes._processos_count_cache == {"c1": 2, "c2": 1}
+
+    # Modelo de outra base não deve popular
+    model_processos = BaseTableModel("Processos", conn)
+    assert model_processos._processos_count_cache == {}
+
+
+@requires_pyside6
+def test_clientes_model_count_cache_reflects_legacy_slug() -> None:
+    """O helper aceita tanto 'clientes' (slug Fase 0+) quanto 'cliente'
+    (legado) para tolerância durante migração."""
+    import sys
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication(sys.argv)
+
+    from notion_rpadv.cache import db as cache_db
+    from notion_rpadv.models.base_table_model import _build_processos_count_cache
+
+    conn = _make_model_conn()
+    # Mistura: um processo com slug legado, outro com slug novo.
+    cache_db.upsert_record(conn, "Processos", "p-old",
+                           {"page_id": "p-old", "cliente": ["c1"]})
+    cache_db.upsert_record(conn, "Processos", "p-new",
+                           {"page_id": "p-new", "clientes": ["c1"]})
+
+    counts = _build_processos_count_cache(conn)
+    assert counts == {"c1": 2}, (
+        f"Esperado c1: 2 (1 via 'cliente' legado + 1 via 'clientes' novo); "
+        f"obtido {counts!r}."
+    )
+
+
+@requires_pyside6
+def test_clientes_model_count_cache_no_double_count_mixed_slugs() -> None:
+    """Se a MESMA linha tem 'clientes' e 'cliente' apontando para o
+    MESMO id (raríssimo mas possível), conta uma vez só."""
+    import sys
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication(sys.argv)
+
+    from notion_rpadv.cache import db as cache_db
+    from notion_rpadv.models.base_table_model import _build_processos_count_cache
+
+    conn = _make_model_conn()
+    cache_db.upsert_record(
+        conn, "Processos", "p-mixed",
+        {"page_id": "p-mixed", "clientes": ["c1"], "cliente": ["c1"]},
+    )
+    counts = _build_processos_count_cache(conn)
+    assert counts == {"c1": 1}, (
+        "Mesma linha com slug duplicado para o mesmo cliente deveria "
+        f"contar 1 vez. Obtido {counts!r}."
+    )
+
+
+@requires_pyside6
+def test_clientes_model_count_cache_invalidated_on_reload() -> None:
+    """Quando Processos muda externamente e o model de Clientes faz
+    reload, o cache é repopulado."""
+    import sys
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication(sys.argv)
+
+    from notion_rpadv.cache import db as cache_db
+    from notion_rpadv.models.base_table_model import BaseTableModel
+
+    conn = _make_model_conn()
+    cache_db.upsert_record(conn, "Processos", "p-1",
+                           {"page_id": "p-1", "clientes": ["c1"]})
+    cache_db.upsert_record(conn, "Clientes", "c1",
+                           {"page_id": "c1", "nome": "X"})
+
+    model = BaseTableModel("Clientes", conn)
+    assert model._processos_count_cache == {"c1": 1}
+
+    # Adiciona mais 1 processo de c1 EXTERNAMENTE — cache fica stale.
+    cache_db.upsert_record(conn, "Processos", "p-2",
+                           {"page_id": "p-2", "clientes": ["c1"]})
+    # Cache ainda tem o valor antigo
+    assert model._processos_count_cache == {"c1": 1}
+
+    # reload() repopula
+    model.reload()
+    assert model._processos_count_cache == {"c1": 2}
+
+
 def test_shortcut_labels_include_new_actions() -> None:
     """Configurações e ShortcutsModal expõem labels para os 2 atalhos."""
     from notion_rpadv.pages.configuracoes import _SHORTCUT_LABELS
