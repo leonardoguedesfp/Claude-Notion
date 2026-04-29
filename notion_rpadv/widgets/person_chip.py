@@ -88,8 +88,8 @@ class PersonChip(QWidget):
         display the avatar only.
     color:
         Background hex colour for the avatar circle (navy by default).
-    dark:
-        When ``True`` the foreground text adapts for dark themes.
+
+    Round 3a: kwarg ``dark`` removido — paleta única LIGHT.
     """
 
     def __init__(
@@ -97,12 +97,10 @@ class PersonChip(QWidget):
         initials: str,
         name: str = "",
         color: str = "#104063",
-        dark: bool = False,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
 
-        self._dark = dark
         fg_color = "#EDEAE4"  # cream — readable on both navy and petrol
 
         layout = QHBoxLayout(self)
@@ -116,7 +114,7 @@ class PersonChip(QWidget):
 
         self._name_label: QLabel | None = None
         if name:
-            self._name_label = self._make_name_label(name, dark)
+            self._name_label = self._make_name_label(name)
             layout.addWidget(self._name_label)
 
         self.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
@@ -133,7 +131,7 @@ class PersonChip(QWidget):
     def set_name(self, name: str) -> None:
         """Update the name label text (creates the label if it didn't exist)."""
         if self._name_label is None:
-            self._name_label = self._make_name_label(name, self._dark)
+            self._name_label = self._make_name_label(name)
             self.layout().addWidget(self._name_label)  # type: ignore[union-attr]
         else:
             self._name_label.setText(name)
@@ -148,9 +146,10 @@ class PersonChip(QWidget):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _make_name_label(name: str, dark: bool) -> QLabel:
+    def _make_name_label(name: str) -> QLabel:
+        # Round 3a: paleta única LIGHT — texto sempre #142430.
         label = QLabel(name)
-        text_color = "#EDEAE4" if dark else "#142430"
+        text_color = "#142430"
         label.setStyleSheet(
             f"""
             QLabel {{

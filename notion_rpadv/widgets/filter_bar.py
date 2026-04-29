@@ -13,7 +13,6 @@ from PySide6.QtWidgets import (
 )
 
 from notion_rpadv.theme.tokens import (
-    DARK,
     FONT_BODY,
     FS_SM,
     FS_SM2,
@@ -69,9 +68,7 @@ class _FilterChip(QFrame):
     def hide_chip(self) -> None:
         self.setVisible(False)
 
-    def apply_theme(self, dark: bool) -> None:
-        self._p = DARK if dark else LIGHT
-        self._restyle()
+    # Round 3a: apply_theme removido — paleta única LIGHT.
 
     def _on_close(self) -> None:
         if self._key:
@@ -128,10 +125,10 @@ class FilterBar(QWidget):
     filter_removed: Signal = Signal(str)
     clear_all_clicked: Signal = Signal()
 
-    def __init__(self, dark: bool = False, parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None) -> None:
+        # Round 3a: kwarg dark removido — paleta única LIGHT.
         super().__init__(parent)
-        self._p: Palette = DARK if dark else LIGHT
-        self._dark = dark
+        self._p: Palette = LIGHT
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setFixedHeight(36)
 
@@ -198,12 +195,7 @@ class FilterBar(QWidget):
             else:
                 chip.hide_chip()
 
-    def apply_theme(self, dark: bool) -> None:
-        self._p = DARK if dark else LIGHT
-        self._dark = dark
-        for chip in self._chips:
-            chip.apply_theme(dark)
-        self._restyle()
+    # Round 3a: apply_theme removido — paleta única LIGHT.
 
     # ------------------------------------------------------------------
     # Internal

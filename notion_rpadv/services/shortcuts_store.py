@@ -13,7 +13,8 @@ DEFAULT_SHORTCUTS: dict[str, str] = {
     "save": "Ctrl+S",
     "discard": "Escape",
     "refresh": "F5",
-    "toggle_theme": "Ctrl+Shift+T",
+    # Round 3a: "toggle_theme" (Ctrl+Shift+T) removido junto com o modo
+    # escuro. App roda exclusivamente em modo claro.
     "nav_processos": "Ctrl+1",
     "nav_clientes": "Ctrl+2",
     "nav_tarefas": "Ctrl+3",

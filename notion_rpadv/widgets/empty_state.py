@@ -16,7 +16,6 @@ from PySide6.QtWidgets import (
 )
 
 from notion_rpadv.theme.tokens import (
-    DARK,
     FONT_BODY,
     FONT_DISPLAY,
     FS_MD,
@@ -49,8 +48,6 @@ class EmptyState(QWidget):
         Optional callback for the secondary "Criar primeiro registro" button.
     last_sync_text:
         Short text shown in footer, e.g. "há 1 min · 0 registros · sem erros".
-    dark:
-        Whether to use the dark palette.
     """
 
     def __init__(
@@ -59,15 +56,15 @@ class EmptyState(QWidget):
         on_sync: Callable[[], None] | None = None,
         on_create: Callable[[], None] | None = None,
         last_sync_text: str = "",
-        dark: bool = False,
         parent: QWidget | None = None,
     ) -> None:
+        # Round 3a: kwarg dark removido — paleta única LIGHT.
         super().__init__(parent)
         self._base_name = base_name
         self._on_sync = on_sync
         self._on_create = on_create
         self._last_sync_text = last_sync_text
-        self._p: Palette = DARK if dark else LIGHT
+        self._p: Palette = LIGHT
         self._build_ui()
 
     # ------------------------------------------------------------------

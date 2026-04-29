@@ -12,7 +12,6 @@ from PySide6.QtWidgets import (
 )
 
 from notion_rpadv.theme.tokens import (
-    DARK,
     FS_SM2,
     FW_BOLD,
     LIGHT,
@@ -73,12 +72,11 @@ class WinChrome(QWidget):
     def __init__(
         self,
         title: str = "Notion RPADV",
-        dark: bool = False,
         parent: QWidget | None = None,
     ) -> None:
+        # Round 3a: kwarg dark removido — paleta única LIGHT.
         super().__init__(parent)
-        self._dark = dark
-        p = DARK if dark else LIGHT
+        p = LIGHT
         self._drag_pos: QPoint | None = None
 
         self.setObjectName("WinChrome")

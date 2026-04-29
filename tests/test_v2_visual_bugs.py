@@ -181,7 +181,7 @@ def test_processos_header_columns_min_width():
     facade = NotionFacade("dummy-token", conn)
     page = ProcessosPage(
         conn=conn, token="dummy-token", user="leonardo",
-        facade=facade, dark=False,
+        facade=facade,
     )
 
     header = page._table.horizontalHeader()
@@ -224,7 +224,7 @@ def test_importar_step1_has_button_labels():
 
     from notion_rpadv.pages.importar import ImportarPage
     conn = _make_cache()
-    page = ImportarPage(conn=conn, token="x", user="leonardo", dark=False)
+    page = ImportarPage(conn=conn, token="x", user="leonardo")
 
     labels = {b.text().strip() for b in page.findChildren(QPushButton) if b.text().strip()}
     assert any("Gerar template" in s for s in labels), labels
@@ -242,7 +242,7 @@ def test_logs_atualizar_button_has_label():
     from notion_rpadv.services.notion_facade import NotionFacade
     conn = _make_cache()
     facade = NotionFacade("dummy-token", conn)
-    page = LogsPage(conn=conn, token="x", user="leonardo", facade=facade, dark=False)
+    page = LogsPage(conn=conn, token="x", user="leonardo", facade=facade)
 
     texts = [b.text() for b in page.findChildren(QPushButton)]
     assert any("Atualizar" in t for t in texts), texts
@@ -268,8 +268,8 @@ def test_importar_logs_pages_set_theme_aware_object_name():
 
     conn = _make_cache()
     facade = NotionFacade("dummy-token", conn)
-    importar = ImportarPage(conn=conn, token="x", user="leonardo", dark=False)
-    logs = LogsPage(conn=conn, token="x", user="leonardo", facade=facade, dark=False)
+    importar = ImportarPage(conn=conn, token="x", user="leonardo")
+    logs = LogsPage(conn=conn, token="x", user="leonardo", facade=facade)
 
     assert importar.objectName() == "ImportarPage"
     assert logs.objectName() == "LogsPage"
@@ -295,7 +295,7 @@ def test_dashboard_sync_panel_is_idempotent_after_refresh():
     from notion_rpadv.pages.dashboard import DashboardPage
 
     conn = _make_cache()
-    page = DashboardPage(conn=conn, user={"name": "Test"}, dark=False)
+    page = DashboardPage(conn=conn, user={"name": "Test"})
 
     # Refresh many times — must NOT accumulate widgets.
     for _ in range(5):
@@ -335,7 +335,7 @@ def test_dashboard_sync_panel_no_duplicate_timestamps():
     for base in ("Processos", "Clientes", "Tarefas", "Catalogo"):
         cache_db.set_last_sync(conn, base, now)
 
-    page = DashboardPage(conn=conn, user={"name": "Test"}, dark=False)
+    page = DashboardPage(conn=conn, user={"name": "Test"})
     for _ in range(4):
         page.refresh()
 
@@ -373,7 +373,7 @@ def test_dashboard_sync_panel_has_five_columns_per_row():
     from notion_bulk_edit.config import DATA_SOURCES
 
     conn = _make_cache()
-    page = DashboardPage(conn=conn, user={"name": "Test"}, dark=False)
+    page = DashboardPage(conn=conn, user={"name": "Test"})
 
     assert set(page._sync_rows.keys()) == set(DATA_SOURCES.keys())
     for base, srow in page._sync_rows.items():
@@ -416,7 +416,7 @@ def test_dashboard_global_progress_strip_toggles_on_sync_signals():
 
     sm = _FakeSyncManager()
     conn = _make_cache()
-    page = DashboardPage(conn=conn, user={"name": "Test"}, dark=False, sync_manager=sm)
+    page = DashboardPage(conn=conn, user={"name": "Test"}, sync_manager=sm)
 
     # Initial state: strip hidden, no active syncs, intent flag False.
     assert page._global_progress_visible is False
@@ -445,27 +445,9 @@ def test_dashboard_global_progress_strip_toggles_on_sync_signals():
     assert page._global_progress.isHidden() is True
 
 
-@requires_pyside6
-def test_main_window_propagates_apply_theme_to_status_bar():
-    """N5: toggling theme on MainWindow flips AppStatusBar's palette."""
-    from PySide6.QtWidgets import QApplication
-    import sys
-    QApplication.instance() or QApplication(sys.argv)
-
-    from notion_rpadv.app import MainWindow
-    from notion_rpadv.theme.tokens import LIGHT, DARK
-
-    win = MainWindow(user_id="leonardo", token="dummy", theme_pref="light")
-    try:
-        # Light: status bar background pinned via stylesheet uses LIGHT.app_panel.
-        assert LIGHT.app_panel.lower() in win._status_bar.styleSheet().lower()
-        # Toggle to dark
-        win._on_theme_changed("dark")
-        assert win._dark is True
-        assert DARK.app_panel.lower() in win._status_bar.styleSheet().lower()
-    finally:
-        win.close()
-        win.deleteLater()
+# Round 3a: test_main_window_propagates_apply_theme_to_status_bar removido —
+# state machine de tema (apply_theme / _on_theme_changed / _dark) saiu junto
+# com o modo escuro. Status bar agora usa paleta única LIGHT.
 
 
 @requires_pyside6
@@ -576,8 +558,8 @@ def test_configuracoes_shortcut_capture_replaces_qinputdialog():
 
     conn = _make_cache()
     page = ConfiguracoesPage(
-        current_theme="light", bindings={"save": "Ctrl+S"},
-        sync_manager=None, conn=conn, dark=False,
+        bindings={"save": "Ctrl+S"},
+        sync_manager=None, conn=conn,
     )
     captures = page.findChildren(_ShortcutCapture)
     assert len(captures) >= 1, "no _ShortcutCapture widgets created"
@@ -604,8 +586,8 @@ def test_configuracoes_users_table_marks_current_user():
     from notion_rpadv.pages.configuracoes import ConfiguracoesPage
     conn = _make_cache()
     page = ConfiguracoesPage(
-        current_theme="light", bindings=None, sync_manager=None,
-        conn=conn, current_user_id="leonardo", dark=False,
+        bindings=None, sync_manager=None,
+        conn=conn, current_user_id="leonardo",
     )
     you_chips = [
         lbl for lbl in page.findChildren(QLabel) if lbl.text() == "Você"
@@ -675,7 +657,7 @@ def test_dashboard_urgent_tasks_panel_is_idempotent():
     from notion_rpadv.pages.dashboard import DashboardPage
 
     conn = _make_cache()  # zero tarefas → empty state inside the panel
-    page = DashboardPage(conn=conn, user={"name": "Test"}, dark=False)
+    page = DashboardPage(conn=conn, user={"name": "Test"})
     baseline = sum(
         1 for lbl in page.findChildren(QLabel)
         if "Nenhuma tarefa urgente" in lbl.text()
@@ -711,7 +693,7 @@ def test_config_sync_timestamps_consistent_with_dashboard():
         cache_db.set_last_sync(conn, base, ts)
 
     config = ConfiguracoesPage(
-        current_theme="light", bindings=None, sync_manager=None, conn=conn, dark=False
+        bindings=None, sync_manager=None, conn=conn,
     )
 
     # Every base label should reflect a real timestamp, not "Nunca".
@@ -741,51 +723,10 @@ def test_status_bar_last_sync_label_has_minimum_width():
 
 
 # ---------------------------------------------------------------------------
-# §0.3 / BUG-N1 — Tema "Auto" persists the choice and resolves via the OS
-# ---------------------------------------------------------------------------
-
-@requires_pyside6
-def test_theme_auto_picker_emits_auto_signal():
-    """§0.3: selecting the "Auto" radio emits theme_changed("auto").
-    Previously the parent collapsed it back to "light" silently."""
-    from PySide6.QtWidgets import QApplication
-    import sys
-    QApplication.instance() or QApplication(sys.argv)
-
-    from notion_rpadv.pages.configuracoes import ConfiguracoesPage
-    conn = _make_cache()
-    page = ConfiguracoesPage(
-        current_theme="light", bindings=None, sync_manager=None, conn=conn, dark=False
-    )
-    received: list[str] = []
-    page.theme_changed.connect(received.append)
-    page._auto_radio.setChecked(True)
-    assert "auto" in received, received
-
-
-@requires_pyside6
-def test_main_window_resolves_auto_from_system():
-    """§0.3: when theme_pref="auto", _resolve_dark() defers to the OS.
-    We assert it returns a bool — exact value depends on the test runner's
-    environment, but the call must succeed and not silently flip to False
-    just because the input was "auto" (the old bug)."""
-    from PySide6.QtWidgets import QApplication
-    import sys
-    QApplication.instance() or QApplication(sys.argv)
-
-    from notion_rpadv.app import MainWindow
-
-    # Build a minimal MainWindow without going through the full UI path —
-    # we just want to confirm _resolve_dark() agrees with the system call.
-    # MainWindow.__init__ requires a token; we pass a dummy. This will hit
-    # cache_db etc; if it gets too heavy in the future we can refactor.
-    win = MainWindow(user_id="leonardo", token="dummy", theme_pref="auto")
-    try:
-        assert isinstance(win._resolve_dark(), bool)
-        assert win._theme_pref == "auto"
-    finally:
-        win.close()
-        win.deleteLater()
+# Round 3a: testes de tema "Auto" / _resolve_dark removidos — modo escuro
+# descontinuado. App roda exclusivamente em paleta LIGHT, sem state
+# machine theme_pref, sem listener de QStyleHints.colorScheme, sem signal
+# theme_changed.
 
 
 # ---------------------------------------------------------------------------
@@ -807,8 +748,7 @@ def test_base_table_page_shows_empty_state_when_cache_empty():
     conn = _make_cache()  # zero Processos
     facade = NotionFacade("dummy-token", conn)
     page = ProcessosPage(
-        conn=conn, token="dummy-token", user="leonardo", facade=facade, dark=False
-    )
+        conn=conn, token="dummy-token", user="leonardo", facade=facade    )
 
     assert page._content_stack.currentWidget() is page._empty_state
     assert isinstance(page._empty_state, EmptyState)
@@ -836,8 +776,7 @@ def test_base_table_page_shows_table_when_cache_has_rows():
     )
     facade = NotionFacade("dummy-token", conn)
     page = ProcessosPage(
-        conn=conn, token="dummy-token", user="leonardo", facade=facade, dark=False
-    )
+        conn=conn, token="dummy-token", user="leonardo", facade=facade    )
 
     assert page._content_stack.currentWidget() is page._table
     assert page._search_edit.isEnabled() is True

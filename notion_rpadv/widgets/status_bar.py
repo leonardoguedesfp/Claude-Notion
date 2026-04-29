@@ -15,7 +15,6 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QTimer
 
 from notion_rpadv.theme.tokens import (
-    DARK,
     LIGHT,
     FONT_BODY,
     FONT_MONO,
@@ -114,10 +113,10 @@ class AppStatusBar(QStatusBar):
     :meth:`apply_theme` when the active palette changes.
     """
 
-    def __init__(self, parent: QWidget | None = None, dark: bool = False) -> None:
+    def __init__(self, parent: QWidget | None = None) -> None:
+        # Round 3a: kwarg dark removido — paleta única LIGHT.
         super().__init__(parent)
-        self._p: Palette = DARK if dark else LIGHT
-        self._dark: bool = dark
+        self._p: Palette = LIGHT
         self.setSizeGripEnabled(False)
 
         # --- Left: sync status indicator ---
@@ -176,12 +175,7 @@ class AppStatusBar(QStatusBar):
     # Public API
     # ------------------------------------------------------------------
 
-    def apply_theme(self, dark: bool) -> None:
-        """N5: switch palette and re-paint every cached inline style."""
-        self._dark = dark
-        self._p = DARK if dark else LIGHT
-        self._pending.apply_theme(self._p)
-        self._restyle()
+    # Round 3a: apply_theme removido — paleta única LIGHT.
 
     def set_sync_status(self, text: str) -> None:
         """Update the left-side sync text (e.g. 'Sincronizando…', 'Erro')."""
