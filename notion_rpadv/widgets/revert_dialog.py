@@ -27,6 +27,7 @@ from notion_rpadv.theme.tokens import (
     FS_SM2,
     FW_BOLD,
     FW_MEDIUM,
+    LIGHT,
     RADIUS_MD,
     RADIUS_XL,
     SP_2,
@@ -117,7 +118,9 @@ class RevertDialog(QDialog):
         title_font.setPixelSize(20)
         title_font.setWeight(QFont.Weight(FW_BOLD))
         title.setFont(title_font)
-        title.setStyleSheet("color: #0A0F14; background: transparent; border: none;")
+        title.setStyleSheet(
+            f"color: {LIGHT.app_fg_strong}; background: transparent; border: none;"
+        )
         layout.addWidget(title)
 
         # Divider
@@ -188,12 +191,12 @@ class RevertDialog(QDialog):
         new_val = self._fmt_value(entry.get("new_value"))
 
         old_item = QTableWidgetItem(old_val)
-        old_item.setForeground(QColor("#9A3B3B"))
+        old_item.setForeground(QColor(LIGHT.app_danger))
         old_item.setFlags(old_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
         diff_table.setItem(0, 0, old_item)
 
         new_item = QTableWidgetItem(new_val)
-        new_item.setForeground(QColor("#3F6E55"))
+        new_item.setForeground(QColor(LIGHT.app_success))
         new_item.setFlags(new_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
         diff_table.setItem(0, 1, new_item)
 

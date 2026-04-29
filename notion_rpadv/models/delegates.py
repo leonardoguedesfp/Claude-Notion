@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
 
 from notion_bulk_edit.config import NOTION_USERS
 from notion_bulk_edit.schemas import PropSpec, get_prop
-from notion_rpadv.theme.tokens import parse_color, resolve_chip_color
+from notion_rpadv.theme.tokens import LIGHT, parse_color, resolve_chip_color
 from notion_rpadv.widgets.multi_select_editor import MultiSelectEditor
 
 # Types that cannot be edited via a delegate.
@@ -326,7 +326,7 @@ class PropDelegate(QStyledItemDelegate):
                 if text == "—":
                     painter.save()
                     painter.setClipRect(option.rect)
-                    painter.setPen(QPen(QColor("#9CA3AF")))
+                    painter.setPen(QPen(QColor(LIGHT.app_fg_subtle)))
                     painter.drawText(
                         option.rect.adjusted(8, 0, -4, 0),
                         Qt.AlignmentFlag.AlignVCenter
@@ -357,7 +357,6 @@ class PropDelegate(QStyledItemDelegate):
             # chips de relação (coluna Clientes, Processo pai etc.) apareciam com
             # fundo preto sobre cream e texto navy quase ilegível. parse_color
             # devolve componentes int explícitos pra QColor(r, g, b, a).
-            from notion_rpadv.theme.tokens import LIGHT
             bg_r, bg_g, bg_b, bg_a = parse_color(LIGHT.app_accent_soft)
             fg_r, fg_g, fg_b, _ = parse_color(LIGHT.app_accent)
             chip_bg = QColor(bg_r, bg_g, bg_b, bg_a)
@@ -530,7 +529,6 @@ class SucessorDelegate(QStyledItemDelegate):
         if not text or text == "—":
             return
 
-        from notion_rpadv.theme.tokens import LIGHT
         accent_fg = QColor(LIGHT.app_accent)
         rect = option.rect
 

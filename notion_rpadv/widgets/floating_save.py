@@ -19,6 +19,7 @@ from notion_rpadv.theme.tokens import (
     FS_SM2,
     FW_BOLD,
     FW_MEDIUM,
+    LIGHT,
     SP_2,
     SP_3,
     SP_4,
@@ -98,10 +99,12 @@ class FloatingSaveBar(QFrame):
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
 
         # §4.3 navy background — rounded pill floating above content
+        # Auditoria: app_sidebar é a única superfície dark da paleta brand
+        # (mesmo hex #0C324D); reuso aqui pra dispensar hex hardcoded.
         self.setStyleSheet(
             f"""
             QFrame#FloatingSaveBar {{
-                background-color: #0C324D;
+                background-color: {LIGHT.app_sidebar};
                 border: none;
                 border-radius: {RADIUS_XL}px;
             }}

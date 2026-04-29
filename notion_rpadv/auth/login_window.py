@@ -125,7 +125,7 @@ class _ArtPanel(QWidget):
     def paintEvent(self, event: object) -> None:  # type: ignore[override]
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-        painter.fillRect(self.rect(), QColor("#0C324D"))
+        painter.fillRect(self.rect(), QColor(LIGHT.app_sidebar))
 
         if not self._deco.isNull():
             target_h = int(self.height() * 1.30)

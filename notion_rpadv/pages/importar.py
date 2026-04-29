@@ -655,7 +655,14 @@ class ImportarPage(QWidget):
         # BUG-V2-03: pin the page background to the theme token so the page
         # cannot accidentally render dark when the rest of the app is light
         # (or vice-versa) regardless of which global QSS is active.
+        # Auditoria 2026-04-29: WA_StyledBackground é obrigatório em
+        # QWidget plain — sem ele o stylesheet processa a palette mas o
+        # paintEvent não pinta o bg, e a página vaza pra cor default do
+        # Qt (cinza-azulado escuro em Windows dark mode). O bug existia
+        # desde Round 3a; o dump de auditoria mostrou palette.window cream
+        # mas WA_StyledBg=False — falso negativo confirmado por smoke real.
         self.setObjectName("ImportarPage")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setStyleSheet(
             f"QWidget#ImportarPage {{ background-color: {p.app_bg}; }}"
         )

@@ -241,6 +241,13 @@ class MainWindow(QMainWindow):
             user=self._user_dict,
             sync_manager=self._sync_manager,
         )
+        # Auditoria 2026-04-29: signal sync_requested estava emitida (clicar
+        # "Sincronizar tudo" no Dashboard fazia self.sync_requested.emit) mas
+        # ninguém escutava — botão era no-op silencioso. Conectar pra _sync_all.
+        try:
+            dashboard.sync_requested.connect(self._sync_all)
+        except (TypeError, AttributeError):
+            pass
         self._add_page(_PAGE_DASHBOARD, dashboard)
 
         # Table pages
@@ -257,6 +264,18 @@ class MainWindow(QMainWindow):
                 page.relation_clicked.connect(self._on_relation_clicked)
             except (TypeError, AttributeError):
                 pass
+            # Auditoria 2026-04-29: surface dirty conflicts via toast.
+            # BUG-OP-06 deixou os signals declarados sem listener — usuário
+            # perdia edições silenciosamente quando o sync detectava drift.
+            model = getattr(page, "_model", None)
+            if model is not None:
+                try:
+                    model.dirty_dropped.connect(self._on_dirty_dropped)
+                    model.dirty_conflict_detected.connect(
+                        self._on_dirty_conflict_detected,
+                    )
+                except (TypeError, AttributeError):
+                    pass
             self._add_page(page_id, page)
 
         # Utility pages
@@ -322,6 +341,34 @@ class MainWindow(QMainWindow):
     # todos removidos. App roda exclusivamente em modo claro (LIGHT).
     # Aplicação da paleta acontece uma vez no __init__ via
     # ``self.setStyleSheet(build_qss(LIGHT))``.
+
+    # Auditoria 2026-04-29: BUG-OP-06 surface — handlers que faltavam.
+    # Antes, dirty_dropped e dirty_conflict_detected eram emitidos por
+    # BaseTableModel.reload(preserve_dirty=True) mas ninguém escutava em
+    # produção (só os testes), e o usuário perdia edições pendentes
+    # silenciosamente quando o sync detectava deletion ou conflict remoto.
+
+    def _on_dirty_dropped(self, page_id: str, key: str) -> None:
+        """Edição pendente foi descartada porque a linha sumiu no Notion."""
+        self._push_toast(
+            f"Edição pendente perdida: o registro foi removido no Notion "
+            f"(coluna {key}).",
+            "warning",
+        )
+
+    def _on_dirty_conflict_detected(
+        self,
+        page_id: str,
+        key: str,
+        local_value: object,
+        remote_value: object,
+    ) -> None:
+        """Sync detectou que o valor remoto mudou enquanto havia edição local."""
+        self._push_toast(
+            f"Conflito em {key}: valor mudou no Notion enquanto você editava. "
+            f"Salve para sobrescrever ou descarte para manter o remoto.",
+            "warning",
+        )
 
     def _on_relation_clicked(self, target_base: str, page_id: str) -> None:
         """§3.2: navigate to the table page that owns *target_base* and
