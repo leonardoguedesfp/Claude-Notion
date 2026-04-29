@@ -209,6 +209,13 @@ class SyncManager(QObject):
         worker.auth_invalidated.connect(self.auth_invalidated)
         worker.finished.connect(thread.quit)
         worker.error.connect(thread.quit)
+        # P2-004 (Lote 2): worker e thread agora ambos recebem
+        # deleteLater. Antes, só thread.deleteLater era conectado — o
+        # QObject worker sobrevivia ao GC do Python (parent=None pos
+        # moveToThread), criando leak pequeno mas crescente em sessoes
+        # longas (~1 worker por sync_base).
+        worker.finished.connect(worker.deleteLater)
+        worker.error.connect(worker.deleteLater)
         # When thread finishes, start the next queued one
         thread.finished.connect(self._start_next)
         thread.finished.connect(thread.deleteLater)
