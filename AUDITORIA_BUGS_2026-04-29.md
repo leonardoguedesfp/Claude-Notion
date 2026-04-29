@@ -4,30 +4,29 @@ Branch: `chore/auditoria-completa-app` (criada de `main` em `3330f43`).
 
 ## Sumário executivo
 
-- **Bugs fixados:** 6 (em 3 commits funcionais + 2 commits de instrumentação).
-- **Bugs catalogados como ALTO (não fixados):** 0 explicitamente; 2 áreas de débito técnico documentadas como observação.
-- **Tempo total:** ~3h (sob o budget de 8h).
+- **Bugs fixados:** 7 (1 do bug visual da Etapa 1 + 6 da varredura ampla).
+- **Bugs catalogados como ALTO (não fixados):** 0 explicitamente; 3 áreas de débito técnico documentadas como observação.
+- **Tempo total:** ~4h (sob o budget de 8h).
 - **Pytest:** 308 → 308 (mantido; nenhum teste removido).
 - **Ruff:** clean ao longo da sessão.
 
-A auditoria começou pela Etapa 1 (bugs visuais Importar/Logs) com instrumentação de dump de QPalette/stylesheet, **confirmou** que a causa raiz já estava resolvida pelo hotfix `QColor(rgba)` do Round 3b (commit `39ae925`), e seguiu pra varredura ampla das categorias B (funcional), C (lógico) e D (estrutural).
+A auditoria começou pela Etapa 1 (bugs visuais Importar/Logs) com instrumentação de dump de QPalette/stylesheet. **Análise inicial deu falso negativo** — concluiu que o bug já estava resolvido, mas smoke visual real do usuário confirmou que persistia. Reinvestigação encontrou a causa raiz: `WA_StyledBackground` não auto-setado em plain QWidget com stylesheet (BUG-007).
 
 ---
 
 ## Etapa 1 — Bugs visuais Importar/Logs
 
-### Conclusão
+### Conclusão (corrigida — primeira análise estática deu falso negativo)
 
-**Sem fix adicional necessário.** O bug visual original (fundo escuro nessas páginas) foi resolvido pelo hotfix `fix QColor(string_rgba) bug` que entrou no commit `39ae925` do Round 3b. A instrumentação capturou um JSON dump da árvore de QWidgets de todas as 6 páginas (Dashboard, Importar, Logs, Processos, Clientes, Configurações) e a comparação confirmou:
+A análise inicial do dump JSON afirmou que o bug já estava resolvido pelo hotfix do Round 3b (`39ae925`). **Errado** — smoke visual real (display Qt em runtime) confirmou que o bug persiste. O dump capturou apenas a `palette.window` (resolvida como cream) e desconsiderou que **`WA_StyledBackground` estava `False`** em ImportarPage e LogsPage, atributo obrigatório pra Qt efetivamente pintar o bg do stylesheet em `QWidget` plain.
 
-- ImportarPage e LogsPage têm `palette.window = #ffedeae4` (cream) — correto.
-- Não há divergência de Window/Base entre páginas com bug e páginas controle.
-- Os "dark widgets" detectados nas árvores são todos **intencionais e brand-aligned**: Reverter buttons em Logs com `app_danger_bg` (rgba 0.10), heading com `fg_strong`, primary buttons navy. Nenhum elemento com bg dark "fora do design".
+Causa raiz real: ver BUG-007 abaixo. Fix aplicado.
 
 ### Commits desta etapa
 
 - `eafb82d` `chore(debug): instrumentação temporária para diagnóstico Importar/Logs`
 - `d121d93` `chore(debug): remove instrumentação temporária após análise do dump`
+- (fix do BUG visual no commit do BUG-007)
 
 ---
 
@@ -83,6 +82,16 @@ A auditoria começou pela Etapa 1 (bugs visuais Importar/Logs) com instrumentaç
   - `QColor("rgba(...)")` em `delegates.py:354` (chip-rel preto sobre cream)
   - `QColor("rgba(...)")` em `importar.py:390,399` (linhas erro/warning pretas)
 - A regression test `test_no_qcolor_with_rgba_token_in_prod_code` em `tests/test_chip_colors.py` previne reincidência.
+
+### BUG-007 — Importar/Logs renderizam dark por falta de WA_StyledBackground
+- **Categoria:** Visual (A)
+- **Arquivos:** `pages/importar.py:658`, `pages/logs.py:110`
+- **Risco:** BAIXO (1 linha por arquivo)
+- **Causa raiz:** Ambas as páginas chamavam `setObjectName("X") + setStyleSheet("QWidget#X { background-color: cream }")` em um `QWidget` plain. Em PySide6, **plain QWidget não recebe auto-set de `WA_StyledBackground`** quando se aplica stylesheet com regra de bg. Sem esse atributo, o Qt processa a palette (palette.window vira cream — daí o falso negativo do dump) mas o `paintEvent` default NÃO pinta o bg. A página então vaza pra cor default do Qt — em Windows com dark mode no OS isso renderiza como cinza-azulado escuro com texto cinza claro. As 4 páginas de tabela (Processos/Clientes/Tarefas/Catalogo), Dashboard e Configurações **não tinham o bug** porque NÃO setam stylesheet próprio: ficam transparentes via global QSS `QWidget { background: transparent }` e mostram através do `QMainWindow { background: app_bg }` (cream) — caminho que pinta corretamente porque QMainWindow é um dos widgets que Qt auto-styled-background.
+- **Por que o dump deu falso negativo:** A instrumentação inicial capturou `palette.window = #ffedeae4` (cream) e `WA_StyledBackground = False`, mas a análise focou só na palette. Sem WA_StyledBackground, palette é metadata sem efeito de paint. Lição: em diagnóstico de bugs visuais Qt, conferir os 3: palette + stylesheet + WA_StyledBackground.
+- **Fix aplicado:** `self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)` antes do `setStyleSheet` em ambas as páginas. Comportamento agora idêntico aos QFrame/QLabel/QPushButton da paleta.
+- **Por que o smoke do Round 3b confirmou "Logs: light"**: o usuário comparou ANTES (QColor(rgba)→preto puro nos chips) com DEPOIS (chips em navy, células bem pintadas). A melhoria foi grande mas a página continuava com bg cinza-azulado dark mode — só ficou menos contrastante e o usuário pode ter percebido como "light" relativo ao preto absoluto anterior. Smoke desta auditoria — comparando contra Processos cream — revelou a divergência.
+- **Commit:** (próximo commit, mesmo desta atualização do doc)
 
 ---
 

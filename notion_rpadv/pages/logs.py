@@ -107,7 +107,13 @@ class LogsPage(QWidget):
         p = self._p
         # BUG-V2-03: pin the page background to the theme token so this page
         # tracks the active theme regardless of which global QSS is loaded.
+        # Auditoria 2026-04-29: WA_StyledBackground é obrigatório em
+        # QWidget plain — sem ele o stylesheet processa a palette mas o
+        # paintEvent não pinta o bg, e a página vaza pra cor default do
+        # Qt (cinza-azulado escuro em Windows dark mode). Mesmo bug
+        # corrigido em ImportarPage no mesmo round.
         self.setObjectName("LogsPage")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setStyleSheet(
             f"QWidget#LogsPage {{ background-color: {p.app_bg}; }}"
         )
