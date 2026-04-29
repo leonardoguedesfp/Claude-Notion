@@ -39,7 +39,6 @@ from notion_rpadv.theme.tokens import (
     FW_BOLD,
     FW_MEDIUM,
     LIGHT,
-    DARK,
     Palette,
     RADIUS_MD,
     SP_1,
@@ -195,7 +194,6 @@ class BaseTablePage(QWidget):
         user: str,
         facade: NotionFacade,
         sync_manager: SyncManager | None = None,
-        dark: bool = False,
         parent: QWidget | None = None,
         audit_conn: sqlite3.Connection | None = None,
     ) -> None:
@@ -209,9 +207,9 @@ class BaseTablePage(QWidget):
         self._token = token
         self._user = user
         self._facade = facade
-        self._dark = dark
 
-        palette: Palette = DARK if dark else LIGHT
+        # Round 3a: paleta única LIGHT.
+        palette: Palette = LIGHT
 
         # Model layer
         # Fase 4: passa user_id para o model resolver prefs em
@@ -267,7 +265,8 @@ class BaseTablePage(QWidget):
         # ---- Filter bar (§3.9) ----
         # Hidden until the user activates at least one column filter; shows
         # one chip per active filter + a Limpar todos link.
-        self._filter_bar = FilterBar(dark=self._dark, parent=self)
+        # Round 3a: kwarg dark removido.
+        self._filter_bar = FilterBar(parent=self)
         self._filter_bar.filter_removed.connect(self._on_filter_chip_removed)
         self._filter_bar.clear_all_clicked.connect(self._on_clear_all_filters)
         root.addWidget(self._filter_bar)
@@ -334,10 +333,10 @@ class BaseTablePage(QWidget):
         # P1-001 (Lote 1): on_create removido — EmptyState não exibe mais o
         # botão "Criar primeiro registro" enquanto criação inline não for
         # implementada de verdade. O usuário cria no Notion e sincroniza.
+        # Round 3a: kwarg dark removido.
         self._empty_state = EmptyState(
             base_name=self._base,
             on_sync=self.sync_now,
-            dark=self._dark,
             parent=self._content_stack,
         )
         self._content_stack.addWidget(self._empty_state)
@@ -545,30 +544,11 @@ class BaseTablePage(QWidget):
         """
         self._model.reload(preserve_dirty=preserve_dirty)
 
-    def apply_theme(self, dark: bool) -> None:
-        """N5: rebuild palette-derived inline styles after a theme toggle.
-
-        Most of the table chrome flows through the global QSS (button object
-        names, QHeaderView::section, QTableView selectors), so we only need
-        to refresh the inline overrides set in ``_build_toolbar`` and
-        ``_build_ui``. Subclasses with extra inline styles can override and
-        call super().
-        """
-        if dark == self._dark:
-            return
-        self._dark = dark
-        new_p: Palette = DARK if dark else LIGHT
-        self._restyle_for_palette(new_p)
-        # The empty state caches its own palette — refresh it too.
-        if hasattr(self, "_empty_state"):
-            es_apply = getattr(self._empty_state, "apply_theme", None)
-            if callable(es_apply):
-                es_apply(dark)
-        # Floating save bar caches its own styling.
-        if hasattr(self, "_save_bar"):
-            sb_apply = getattr(self._save_bar, "apply_theme", None)
-            if callable(sb_apply):
-                sb_apply(dark)
+    # Round 3a: apply_theme(dark) removido. App roda exclusivamente em
+    # paleta única LIGHT — a infra de propagar mudança de tema deixou de
+    # ser necessária. _restyle_for_palette mantido como helper interno
+    # caso algum widget precise reaplicar (não é chamado dinamicamente
+    # mais).
 
     def _restyle_for_palette(self, p: Palette) -> None:
         """Re-apply the inline stylesheets that depend on the palette."""
@@ -900,7 +880,8 @@ class BaseTablePage(QWidget):
     # ------------------------------------------------------------------
 
     def _open_filter_menu(self) -> None:
-        p = DARK if self._dark else LIGHT
+        # Round 3a: paleta única LIGHT.
+        p = LIGHT
         menu = QMenu(self)
         menu.setStyleSheet(
             f"""
@@ -1023,7 +1004,8 @@ class BaseTablePage(QWidget):
         → divider → "Restaurar padrão". Coluna do título aparece
         desabilitada.
         """
-        p: Palette = DARK if self._dark else LIGHT
+        # Round 3a: paleta única LIGHT.
+        p: Palette = LIGHT
         menu = QMenu(self)
         menu.setStyleSheet(self._qmenu_stylesheet(p))
 
@@ -1170,7 +1152,8 @@ class BaseTablePage(QWidget):
         if slug == _TITLE_KEY_BY_BASE.get(self._base, ""):
             return
 
-        p: Palette = DARK if self._dark else LIGHT
+        # Round 3a: paleta única LIGHT.
+        p: Palette = LIGHT
         menu = QMenu(self)
         menu.setStyleSheet(self._qmenu_stylesheet(p))
 

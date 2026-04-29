@@ -37,12 +37,12 @@ from notion_rpadv.theme.tokens import (
 # Maps action key → human-readable Portuguese label
 # P1-001 (Lote 1): "new_record" removido até existir implementação real.
 # P3-004 (Lote 2): "open_columns_picker" e "toggle_sidebar" adicionados.
+# Round 3a: "toggle_theme" removido — modo escuro descontinuado.
 _ACTION_LABELS: dict[str, str] = {
     "search":              "Abrir paleta de comandos",
     "save":                "Salvar alterações",
     "discard":             "Descartar / Fechar",
     "refresh":             "Atualizar dados",
-    "toggle_theme":        "Alternar tema claro / escuro",
     "nav_processos":       "Ir para Processos",
     "nav_clientes":        "Ir para Clientes",
     "nav_tarefas":         "Ir para Tarefas",
@@ -57,7 +57,6 @@ _ACTION_SECTIONS: dict[str, str] = {
     "save":                "Geral",
     "discard":             "Geral",
     "refresh":             "Geral",
-    "toggle_theme":        "Aparência",
     "nav_processos":       "Navegação",
     "nav_clientes":        "Navegação",
     "nav_tarefas":         "Navegação",

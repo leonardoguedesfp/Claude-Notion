@@ -22,7 +22,6 @@ from PySide6.QtWidgets import (
 from notion_rpadv.services.log_service import get_log_entries
 from notion_rpadv.services.notion_facade import NotionFacade
 from notion_rpadv.theme.tokens import (
-    DARK,
     FONT_BODY,
     FONT_DISPLAY,
     FONT_MONO,
@@ -64,10 +63,10 @@ class LogsPage(QWidget):
         token: str,
         user: str,
         facade: NotionFacade,
-        dark: bool = False,
         parent: QWidget | None = None,
         audit_conn: sqlite3.Connection | None = None,
     ) -> None:
+        # Round 3a: kwarg dark removido — paleta única LIGHT.
         super().__init__(parent)
         self._conn = conn
         # BUG-OP-09: edit_log lives in audit.db. Fall back to cache conn so
@@ -76,8 +75,7 @@ class LogsPage(QWidget):
         self._token = token
         self._user = user
         self._facade = facade
-        self._dark = dark
-        self._p: Palette = DARK if dark else LIGHT
+        self._p: Palette = LIGHT
 
         self._entries: list[dict[str, Any]] = []
 
@@ -103,29 +101,7 @@ class LogsPage(QWidget):
     # ------------------------------------------------------------------
     # UI construction
     # ------------------------------------------------------------------
-
-    def apply_theme(self, dark: bool) -> None:
-        """N5: switch palette and refresh the inline-styled page chrome."""
-        if dark == self._dark:
-            return
-        self._dark = dark
-        self._p = DARK if dark else LIGHT
-        self.setStyleSheet(
-            f"QWidget#LogsPage {{ background-color: {self._p.app_bg}; }}"
-        )
-        if hasattr(self, "_heading"):
-            self._heading.setStyleSheet(
-                f"color: {self._p.app_fg_strong}; background: transparent; border: none;"
-            )
-        if hasattr(self, "_sub_lbl"):
-            self._sub_lbl.setStyleSheet(
-                f"color: {self._p.app_fg_muted}; font-size: {FS_SM2}px; "
-                f"background: transparent; border: none;"
-            )
-        # Repopulate the table so per-row inline styles (badge / button) pick
-        # up the palette. ``refresh()`` reloads from SQLite which triggers
-        # ``_populate_table`` — the natural place where row colours are set.
-        self.refresh()
+    # Round 3a: apply_theme removido — paleta única LIGHT.
 
     def _build_ui(self) -> None:
         p = self._p

@@ -181,76 +181,10 @@ LIGHT: Final[Palette] = Palette(
 )
 
 
-# ---------------------------------------------------------------------------
-# Dark palette
-# ---------------------------------------------------------------------------
-
-DARK: Final[Palette] = Palette(
-    # Brand primitives (same across themes)
-    navy_base="#104063",
-    navy_dark="#0C324D",
-    navy_light="#F5F7F9",
-    petrol_base="#395A5A",
-    cream="#EDEAE4",
-
-    # §0.2 Surfaces — V2 spec: bg #142430, panels #1A2D3D, sidebar #0A1F2D
-    app_bg="#142430",
-    app_panel="#1A2D3D",
-    app_elevated="#243444",
-    app_sidebar="#0A1F2D",
-    app_sidebar_fg="rgba(232,228,221,0.95)",
-    app_sidebar_fg_muted="rgba(232,228,221,0.55)",
-    app_sidebar_hover="rgba(232,228,221,0.07)",
-    app_sidebar_active="rgba(90,146,186,0.20)",
-
-    # §0.2 Text — cream base #E8E4DD
-    app_fg="rgba(232,228,221,0.95)",
-    app_fg_muted="rgba(232,228,221,0.72)",
-    app_fg_subtle="rgba(232,228,221,0.48)",
-    app_fg_strong="#E8E4DD",
-
-    # Borders
-    app_border="rgba(232,228,221,0.10)",
-    app_border_strong="rgba(232,228,221,0.20)",
-    app_divider="rgba(232,228,221,0.06)",
-
-    # §0.2 Accent — brighter blue for darker surfaces
-    app_accent="#5A92BA",
-    app_accent_hover="#6DA4C8",
-    app_accent_soft="rgba(90,146,186,0.16)",
-    app_accent_fg="#FFFFFF",
-    app_focus_ring="rgba(90,146,186,0.45)",
-
-    # Table rows
-    app_row_hover="rgba(90,146,186,0.08)",
-    app_row_selected="rgba(90,146,186,0.14)",
-
-    # Status
-    app_success="#6FA487",
-    app_success_bg="rgba(111,164,135,0.12)",
-    app_warning="#D9B26B",
-    app_warning_bg="rgba(217,178,107,0.12)",
-    app_danger="#D17777",
-    app_danger_bg="rgba(209,119,119,0.12)",
-    app_info="#6A9FBC",
-    app_info_bg="rgba(106,159,188,0.12)",
-
-    # §4.4 Dirty cell — V2 dark: warmer yellow with higher opacity
-    app_cell_dirty="rgba(255,217,90,0.18)",
-    app_cell_dirty_border="#D9B26B",
-
-    # Chips — desaturated for dark surfaces (§0.2)
-    chip_default=ChipPalette(bg="rgba(232,228,221,0.09)",  fg="rgba(232,228,221,0.88)"),
-    chip_blue=ChipPalette(   bg="rgba(90,146,186,0.18)",   fg="#A8C8DF"),
-    chip_purple=ChipPalette( bg="rgba(136,110,196,0.18)",  fg="#C0AAEE"),
-    chip_green=ChipPalette(  bg="rgba(111,164,135,0.16)",  fg="#A0D4B8"),
-    chip_orange=ChipPalette( bg="rgba(217,138,79,0.18)",   fg="#E0A870"),
-    chip_red=ChipPalette(    bg="rgba(209,119,119,0.18)",  fg="#E8A0A0"),
-    chip_yellow=ChipPalette( bg="rgba(217,178,107,0.18)",  fg="#E0C880"),
-    chip_gray=ChipPalette(   bg="rgba(160,156,152,0.16)",  fg="#C8C4C0"),
-    chip_petrol=ChipPalette( bg="rgba(89,140,140,0.18)",   fg="#88C0C0"),
-    chip_amber=ChipPalette(  bg="rgba(217,138,79,0.18)",   fg="#E0A870"),
-)
+# Round 3a: paleta DARK removida. App roda exclusivamente em modo claro
+# (LIGHT) independente do tema do sistema operacional. Histórico do
+# stylesheet escuro foi removido junto com qss_dark.py e o aparato de
+# state machine em app.py (theme_pref / _resolve_dark / etc).
 
 
 # ---------------------------------------------------------------------------
@@ -308,13 +242,16 @@ RADIUS_XL: Final = 8
 # Helpers
 # ---------------------------------------------------------------------------
 
-def chip_palette(color: str, dark: bool = False) -> ChipPalette:
+def chip_palette(color: str) -> ChipPalette:
     """Return the bg/fg ChipPalette for a given semantic colour name.
 
     Recognised names: blue, purple, green, orange, red, yellow, gray,
     petrol, amber.  Unknown names fall back to chip_default.
+
+    Round 3a: parâmetro ``dark`` removido junto com a paleta DARK — sempre
+    usa LIGHT.
     """
-    p: Palette = DARK if dark else LIGHT
+    p: Palette = LIGHT
     mapping: dict[str, ChipPalette] = {
         "blue":   p.chip_blue,
         "purple": p.chip_purple,

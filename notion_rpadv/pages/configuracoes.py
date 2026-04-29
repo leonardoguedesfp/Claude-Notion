@@ -7,7 +7,6 @@ from typing import Any, Callable
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QFont, QKeySequence
 from PySide6.QtWidgets import (
-    QButtonGroup,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -15,7 +14,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
-    QRadioButton,
     QScrollArea,
     QStackedWidget,
     QVBoxLayout,
@@ -33,7 +31,6 @@ from notion_bulk_edit.config import (
 )
 from notion_rpadv.services.shortcuts_store import DEFAULT_SHORTCUTS, save_user_shortcuts
 from notion_rpadv.theme.tokens import (
-    DARK,
     FONT_BODY,
     FONT_DISPLAY,
     FS_LG,
@@ -130,10 +127,7 @@ class _ShortcutCapture(QWidget):
             return
         super().keyPressEvent(event)  # type: ignore[arg-type]
 
-    def apply_theme(self, dark: bool) -> None:
-        from notion_rpadv.theme.tokens import DARK as _DARK, LIGHT as _LIGHT
-        self._p = _DARK if dark else _LIGHT
-        self._restyle()
+    # Round 3a: apply_theme removido — paleta única LIGHT.
 
     # ------------------------------------------------------------------
     # Internal
@@ -245,26 +239,26 @@ class _SectionCard(QFrame):
 # ---------------------------------------------------------------------------
 
 class ConfiguracoesPage(QWidget):
-    """Settings page with 6 grouped sections."""
+    """Settings page with grouped sections.
 
-    theme_changed: Signal = Signal(str)    # "light" | "dark" | "auto"
+    Round 3a: signal ``theme_changed`` removida e seção de tema descartada
+    da UI. App roda exclusivamente em modo claro.
+    """
+
     token_changed: Signal = Signal(str)
     shortcut_changed: Signal = Signal(str, str)  # action, new_sequence
 
     def __init__(
         self,
-        current_theme: str = "light",
         bindings: dict[str, str] | None = None,
         sync_manager: Any = None,  # BUG-19: injected SyncManager
         conn: sqlite3.Connection | None = None,
         current_user_id: str = "",  # §7.3
-        dark: bool = False,
         parent: QWidget | None = None,
     ) -> None:
+        # Round 3a: kwargs current_theme + dark removidos.
         super().__init__(parent)
-        self._dark = dark
-        self._p: Palette = DARK if dark else LIGHT
-        self._current_theme = current_theme
+        self._p: Palette = LIGHT
         self._bindings = dict(bindings or DEFAULT_SHORTCUTS)
         self._sync_labels: dict[str, QLabel] = {}
         self._sync_manager = sync_manager
@@ -288,18 +282,7 @@ class ConfiguracoesPage(QWidget):
             except (TypeError, AttributeError):
                 pass
 
-    def apply_theme(self, dark: bool) -> None:
-        """N5: switch palette. The page is mostly _SectionCard frames whose
-        backgrounds are fixed via the global QSS, so all we need to flip is
-        the page heading colour."""
-        if dark == self._dark:
-            return
-        self._dark = dark
-        self._p = DARK if dark else LIGHT
-        if hasattr(self, "_heading"):
-            self._heading.setStyleSheet(
-                f"color: {self._p.app_fg_strong}; background: transparent; border: none;"
-            )
+    # Round 3a: apply_theme removido — paleta única LIGHT.
 
     # ------------------------------------------------------------------
     # UI construction
@@ -429,48 +412,10 @@ class ConfiguracoesPage(QWidget):
             layout.addLayout(row)
 
     def _build_aparencia(self, layout: QVBoxLayout, p: Palette) -> None:
-        lbl = self._field_label("Tema", p)
-        layout.addWidget(lbl)
-
-        theme_row = QHBoxLayout()
-        theme_row.setSpacing(SP_4)
-
-        self._auto_radio = QRadioButton("Auto (sistema)")
-        self._light_radio = QRadioButton("Claro")
-        self._dark_radio = QRadioButton("Escuro")
-
-        for rb in (self._auto_radio, self._light_radio, self._dark_radio):
-            rb.setStyleSheet(
-                f"color: {p.app_fg}; font-size: {FS_MD}px; background: transparent;"
-            )
-
-        group = QButtonGroup(self)
-        group.addButton(self._auto_radio)
-        group.addButton(self._light_radio)
-        group.addButton(self._dark_radio)
-
-        if self._current_theme == "auto":
-            self._auto_radio.setChecked(True)
-        elif self._dark:
-            self._dark_radio.setChecked(True)
-        else:
-            self._light_radio.setChecked(True)
-
-        self._auto_radio.toggled.connect(
-            lambda checked: self.theme_changed.emit("auto") if checked else None
-        )
-        self._light_radio.toggled.connect(
-            lambda checked: self.theme_changed.emit("light") if checked else None
-        )
-        self._dark_radio.toggled.connect(
-            lambda checked: self.theme_changed.emit("dark") if checked else None
-        )
-
-        theme_row.addWidget(self._auto_radio)
-        theme_row.addWidget(self._light_radio)
-        theme_row.addWidget(self._dark_radio)
-        theme_row.addStretch()
-        layout.addLayout(theme_row)
+        # Round 3a: widget de Tema (3 radios Auto/Claro/Escuro + signal
+        # theme_changed) removido. App roda exclusivamente em modo
+        # claro. Mantida a seção "Aparência" porque o controle de
+        # Densidade ainda mora aqui.
 
         # §7.4 Density segmented control
         density_lbl = self._field_label("Densidade", p)

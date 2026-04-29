@@ -74,7 +74,7 @@ def test_dashboard_critical_includes_today() -> None:
         cache_db.upsert_record(conn, "Tarefas", t["page_id"], t)
     conn.commit()
 
-    page = DashboardPage(conn=conn, user={"name": "Test"}, dark=False)
+    page = DashboardPage(conn=conn, user={"name": "Test"})
     page._load_stats()
 
     # Esperado: 2 críticas (hoje, +2 dias). +10 dias e 2099 ficam fora.
@@ -108,7 +108,7 @@ def test_dashboard_days_remaining_called_once_per_task() -> None:
         )
     conn.commit()
 
-    page = DashboardPage(conn=conn, user={"name": "Test"}, dark=False)
+    page = DashboardPage(conn=conn, user={"name": "Test"})
 
     # Conta chamadas a _days_remaining (método estático).
     original = DashboardPage._days_remaining

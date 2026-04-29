@@ -4,8 +4,7 @@ from __future__ import annotations
 import sqlite3
 from typing import Any
 
-from PySide6.QtCore import QSettings, Qt, QTimer
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QMainWindow,
@@ -33,7 +32,7 @@ from notion_rpadv.services.notion_facade import NotionFacade
 from notion_rpadv.services.shortcuts import ShortcutRegistry
 from notion_rpadv.services.shortcuts_store import load_user_shortcuts
 from notion_rpadv.theme.qss_light import build_qss
-from notion_rpadv.theme.tokens import DARK, LIGHT
+from notion_rpadv.theme.tokens import LIGHT
 from notion_rpadv.widgets.command_palette import CommandPalette
 from notion_rpadv.widgets.shortcuts_modal import ShortcutsModal
 from notion_rpadv.widgets.sidebar import Sidebar
@@ -55,34 +54,11 @@ _PAGE_IMPORTAR   = "importar"
 _PAGE_LOGS       = "logs"
 _PAGE_CONFIG     = "config"
 
-# §0.3: theme preference (separate from the resolved boolean) and persistence
-_THEME_LIGHT: str = "light"
-_THEME_DARK: str = "dark"
-_THEME_AUTO: str = "auto"
-_VALID_THEMES: frozenset[str] = frozenset({_THEME_LIGHT, _THEME_DARK, _THEME_AUTO})
-
-_SETTINGS_ORG: str = "RPADV"
-_SETTINGS_APP: str = "NotionApp"
-_KEY_THEME_PREF: str = "theme_preference"
-
-
-def _system_prefers_dark() -> bool:
-    """§0.3: resolve the OS colour scheme through Qt's StyleHints.
-
-    Qt 6.5+ exposes ``Qt.ColorScheme.Dark`` via ``QGuiApplication.styleHints()``.
-    Falls back to ``False`` (light) when the platform doesn't report a scheme.
-    """
-    hints = QGuiApplication.styleHints()
-    if hints is None:
-        return False
-    scheme = getattr(hints, "colorScheme", None)
-    if scheme is None:
-        return False
-    try:
-        value = scheme()
-    except Exception:  # noqa: BLE001
-        return False
-    return value == Qt.ColorScheme.Dark
+# Round 3a: state machine de tema removida. App roda exclusivamente em
+# modo claro (LIGHT) independente do tema do sistema operacional.
+# Constantes _THEME_*, _VALID_THEMES, _KEY_THEME_PREF, _SETTINGS_*,
+# helper _system_prefers_dark e listeners de QStyleHints.colorScheme
+# foram apagados junto com a paleta DARK e qss_dark.py.
 
 
 # Command palette nav_ prefix → page id mapping
@@ -105,22 +81,12 @@ class MainWindow(QMainWindow):
         self,
         user_id: str,
         token: str,
-        dark: bool = False,
-        theme_pref: str = _THEME_LIGHT,
     ) -> None:
         super().__init__()
         self._user_id = user_id
         self._token = token
-        # §0.3: keep BOTH the user's choice ("light"/"dark"/"auto") and the
-        # resolved boolean. _dark is what every widget reads; _theme_pref is
-        # what we persist and what drives the system listener.
-        self._theme_pref: str = theme_pref if theme_pref in _VALID_THEMES else _THEME_LIGHT
-        self._dark: bool = self._resolve_dark()
-        # Best-effort backward-compat: if the caller forced dark=True, respect
-        # it as long as no auto/light preference was passed explicitly.
-        if dark and theme_pref == _THEME_LIGHT:
-            self._dark = True
-            self._theme_pref = _THEME_DARK
+        # Round 3a: app roda exclusivamente em modo claro. State machine
+        # antigo (theme_pref / _dark / auto-resolve via OS) removida.
 
         # Resolve user dict
         self._user_dict: dict[str, str] = USUARIOS_LOCAIS.get(
@@ -189,19 +155,14 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(1100, 680)
 
         self._build_ui()
-        self._apply_theme()
+        # Round 3a: aplicação direta da paleta LIGHT no startup. Antes era
+        # ``self._apply_theme()`` que escolhia entre qss_light/qss_dark.
+        self.setStyleSheet(build_qss(LIGHT))
         self._connect_signals()
         self._setup_shortcuts()
 
-        # §0.3: when the user picked "Auto", follow the OS theme. Listen on
-        # QStyleHints.colorSchemeChanged so swapping the system theme at
-        # runtime is reflected in the app without a restart.
-        hints = QGuiApplication.styleHints()
-        if hints is not None and hasattr(hints, "colorSchemeChanged"):
-            try:
-                hints.colorSchemeChanged.connect(self._on_system_color_scheme_changed)
-            except (TypeError, AttributeError):
-                pass
+        # Round 3a: listener de QStyleHints.colorSchemeChanged removido
+        # — app não reage mais ao tema do sistema operacional.
 
         # Auto-sync stale bases on startup (slight delay so UI is visible first)
         QTimer.singleShot(500, self._auto_sync_if_stale)
@@ -219,7 +180,7 @@ class MainWindow(QMainWindow):
         root.setSpacing(0)
 
         # ---- Sidebar ----
-        self._sidebar = Sidebar(user=self._user_dict, dark=self._dark, parent=central)
+        self._sidebar = Sidebar(user=self._user_dict, parent=central)
         self._sidebar.page_changed.connect(self._navigate)
         root.addWidget(self._sidebar)
 
@@ -231,14 +192,15 @@ class MainWindow(QMainWindow):
         self._build_pages()
 
         # ---- Status bar ----
-        # N5: status bar honours the active palette via apply_theme().
-        self._status_bar = AppStatusBar(self, dark=self._dark)
+        # Round 3a: kwarg dark removido — paleta única LIGHT.
+        self._status_bar = AppStatusBar(self)
         self.setStatusBar(self._status_bar)
 
         # ---- Overlays (parented to central so they float over content) ----
         self._toast = ToastManager(central)
-        self._command_palette = CommandPalette(dark=self._dark, parent=self)  # §8.1
+        self._command_palette = CommandPalette(parent=self)  # §8.1
         self._command_palette.action_selected.connect(self._on_command_action)
+        # Round 3a: action "toggle_theme" removida do command palette.
         self._command_palette.set_actions([
             {"id": "nav_dashboard",  "label": "Dashboard",               "section": "Navegação"},
             {"id": "nav_processos",  "label": "Ir para Processos",       "section": "Navegação"},
@@ -249,7 +211,6 @@ class MainWindow(QMainWindow):
             {"id": "nav_logs",       "label": "Ver Logs de Edição",      "section": "Ações"},
             {"id": "nav_config",     "label": "Configurações",           "section": "Ações"},
             {"id": "sync_all",       "label": "Sincronizar tudo",        "section": "Ações"},
-            {"id": "toggle_theme",   "label": "Alternar tema",           "section": "Interface"},
             {"id": "show_shortcuts", "label": "Ver atalhos de teclado",  "section": "Interface"},
         ])
 
@@ -258,6 +219,8 @@ class MainWindow(QMainWindow):
 
     def _build_pages(self) -> None:
         """Instantiate and register every page."""
+        # Round 3a: kwarg "dark" removido de base_kwargs e dos construtores
+        # individuais. Pages são paleta única LIGHT.
         base_kwargs: dict[str, Any] = {
             "conn":         self._conn,
             # BUG-OP-09: pages need audit_conn for any cell that hits
@@ -268,7 +231,6 @@ class MainWindow(QMainWindow):
             "facade":       self._facade,
             # BUG-21: inject shared SyncManager so pages don't create duplicates
             "sync_manager": self._sync_manager,
-            "dark":         self._dark,
         }
 
         # Dashboard
@@ -277,7 +239,6 @@ class MainWindow(QMainWindow):
         dashboard = DashboardPage(
             conn=self._conn,
             user=self._user_dict,
-            dark=self._dark,
             sync_manager=self._sync_manager,
         )
         self._add_page(_PAGE_DASHBOARD, dashboard)
@@ -300,7 +261,7 @@ class MainWindow(QMainWindow):
 
         # Utility pages
         importar = ImportarPage(
-            conn=self._conn, token=self._token, user=self._user_id, dark=self._dark
+            conn=self._conn, token=self._token, user=self._user_id,
         )
         importar.import_done.connect(self._on_import_done)
         self._add_page(_PAGE_IMPORTAR, importar)
@@ -309,7 +270,7 @@ class MainWindow(QMainWindow):
             # BUG-OP-09: LogsPage reads edit_log from audit.db.
             logs = LogsPage(
                 conn=self._conn, token=self._token, user=self._user_id,
-                facade=self._facade, dark=self._dark,
+                facade=self._facade,
                 audit_conn=self._audit_conn,
             )
             logs.toast_requested.connect(self._push_toast)
@@ -317,21 +278,18 @@ class MainWindow(QMainWindow):
 
         # BUG-19: pass sync_manager to ConfiguracoesPage
         # BUG-V7: pass conn so ConfiguracoesPage can show real sync timestamps
-        # §0.3: forward the actual preference (which may be "auto") so the
-        # picker reflects what the user chose, not just the resolved boolean.
         # §7.3: pass current_user_id so the Users table highlights "Você".
         # BUG-OP-07: seed the picker with the user's current bindings (defaults
         # overlaid with any saved overrides from shortcuts.json) so the UI
         # reflects what's actually active in the live ShortcutRegistry.
+        # Round 3a: current_theme + dark removidos.
         config = ConfiguracoesPage(
-            current_theme=self._theme_pref,
             bindings=load_user_shortcuts(),
             sync_manager=self._sync_manager,
             conn=self._conn,
             current_user_id=self._user_id,
-            dark=self._dark,
         )
-        config.theme_changed.connect(self._on_theme_changed)
+        # Round 3a: signal theme_changed removida.
         config.token_changed.connect(self._on_token_changed)
         self._add_page(_PAGE_CONFIG, config)
 
@@ -357,96 +315,13 @@ class MainWindow(QMainWindow):
             widget.refresh()  # type: ignore[union-attr]
 
     # ------------------------------------------------------------------
-    # Theme
+    # Theme: removido no Round 3a
     # ------------------------------------------------------------------
-
-    def _resolve_dark(self) -> bool:
-        """§0.3: turn the user's preference into a concrete dark-mode boolean.
-
-        - ``light`` / ``dark`` → fixed
-        - ``auto``             → mirror the OS color scheme
-        """
-        if self._theme_pref == _THEME_DARK:
-            return True
-        if self._theme_pref == _THEME_AUTO:
-            return _system_prefers_dark()
-        return False
-
-    def _apply_theme(self) -> None:
-        p = DARK if self._dark else LIGHT
-        # BUG-10: use qss_dark for dark theme instead of always qss_light
-        if self._dark:
-            from notion_rpadv.theme.qss_dark import build_qss as build_qss_dark
-            qss = build_qss_dark(p)
-        else:
-            qss = build_qss(p)
-        self.setStyleSheet(qss)
-        # N5: propagate the theme change to widgets/pages whose inline styles
-        # cache a Palette. The global QSS above handles object-name styled
-        # widgets; this hook covers everything that paints from self._p.
-        self._propagate_theme()
-
-    def _propagate_theme(self) -> None:
-        """N5: ask every theme-aware child to re-paint with the new palette."""
-        targets: list[Any] = [
-            getattr(self, "_status_bar", None),
-            getattr(self, "_sidebar", None),
-            getattr(self, "_command_palette", None),
-            getattr(self, "_toast", None),
-        ]
-        # Pages registered in the stack
-        if hasattr(self, "_pages"):
-            targets.extend(self._pages.values())
-        for w in targets:
-            if w is None:
-                continue
-            apply = getattr(w, "apply_theme", None)
-            if callable(apply):
-                try:
-                    apply(self._dark)
-                except Exception:  # noqa: BLE001
-                    # A misbehaving page must not cripple the toggle.
-                    pass
-
-    def _persist_theme_pref(self) -> None:
-        """§0.3: remember the user's choice across launches."""
-        try:
-            QSettings(_SETTINGS_ORG, _SETTINGS_APP).setValue(
-                _KEY_THEME_PREF, self._theme_pref
-            )
-        except Exception:  # noqa: BLE001
-            pass
-
-    def _toggle_theme(self) -> None:
-        # §0.3: toggle flips between concrete light/dark — auto stays a
-        # deliberate, separate choice users only get from the picker.
-        self._theme_pref = _THEME_LIGHT if self._dark else _THEME_DARK
-        self._dark = self._theme_pref == _THEME_DARK
-        self._apply_theme()
-        self._persist_theme_pref()
-        self._push_toast(
-            f"Tema {'escuro' if self._dark else 'claro'} ativado", "info"
-        )
-
-    def _on_theme_changed(self, theme: str) -> None:
-        # §0.3 / BUG-N1: previously this collapsed "auto" → False (always
-        # light). Now it stores the preference and resolves dark via the OS.
-        if theme not in _VALID_THEMES:
-            return
-        self._theme_pref = theme
-        self._dark = self._resolve_dark()
-        self._apply_theme()
-        self._persist_theme_pref()
-
-    def _on_system_color_scheme_changed(self, _scheme: object = None) -> None:
-        """§0.3: react to OS theme changes when the user picked Auto."""
-        if self._theme_pref != _THEME_AUTO:
-            return
-        new_dark = _system_prefers_dark()
-        if new_dark == self._dark:
-            return
-        self._dark = new_dark
-        self._apply_theme()
+    # _resolve_dark, _apply_theme, _propagate_theme, _persist_theme_pref,
+    # _toggle_theme, _on_theme_changed, _on_system_color_scheme_changed:
+    # todos removidos. App roda exclusivamente em modo claro (LIGHT).
+    # Aplicação da paleta acontece uma vez no __init__ via
+    # ``self.setStyleSheet(build_qss(LIGHT))``.
 
     def _on_relation_clicked(self, target_base: str, page_id: str) -> None:
         """§3.2: navigate to the table page that owns *target_base* and
@@ -583,16 +458,14 @@ class MainWindow(QMainWindow):
             self._navigate(_NAV_COMMANDS[action_id])
         elif action_id == "sync_all":
             self._sync_all()
-        elif action_id == "toggle_theme":
-            self._toggle_theme()
         elif action_id == "show_shortcuts":
             self._show_shortcuts_modal()
-        # P1-001 (Lote 1): action "new_record" removida do command palette
-        # junto com os outros entry points. Toast de "em desenvolvimento"
-        # era um placeholder ainda confuso para o usuário.
+        # P1-001 (Lote 1): action "new_record" removida do command palette.
+        # Round 3a: action "toggle_theme" removida (modo escuro descontinuado).
 
     def _show_shortcuts_modal(self) -> None:
-        modal = ShortcutsModal(dark=self._dark, parent=self)
+        # Round 3a: kwarg dark removido — paleta única.
+        modal = ShortcutsModal(parent=self)
         modal.exec()
 
     # ------------------------------------------------------------------
@@ -759,9 +632,9 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _setup_shortcuts(self) -> None:
+        # Round 3a: "toggle_theme" removido — modo escuro descontinuado.
         handlers = {
             "search":        self._open_command_palette,
-            "toggle_theme":  self._toggle_theme,
             "nav_processos": lambda: self._navigate(_PAGE_PROCESSOS),
             "nav_clientes":  lambda: self._navigate(_PAGE_CLIENTES),
             "nav_tarefas":   lambda: self._navigate(_PAGE_TAREFAS),

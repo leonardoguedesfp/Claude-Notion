@@ -22,7 +22,6 @@ from PySide6.QtWidgets import (
 from notion_bulk_edit.config import DATA_SOURCES
 from notion_rpadv.cache import db as cache_db
 from notion_rpadv.theme.tokens import (
-    DARK,
     FONT_BODY,
     FONT_DISPLAY,
     FS_MD,
@@ -99,16 +98,14 @@ class StatCard(QFrame):
         label: str,
         value: str | int,
         color: str = "accent",
-        dark: bool = False,
         label_zero: str | None = None,
         parent: QWidget | None = None,
     ) -> None:
+        # Round 3a: kwarg dark removido — paleta única LIGHT.
         super().__init__(parent)
-        p: Palette = DARK if dark else LIGHT
+        p: Palette = LIGHT
         self._p = p
         self._label_zero = label_zero
-        # N5: remember the semantic colour key so apply_theme can re-resolve
-        # the accent against the new palette without losing the choice.
         self._color_key: str = color
         self._is_zero: bool = False
 
@@ -184,57 +181,8 @@ class StatCard(QFrame):
             )
             self._cap_lbl.setText(self._cap_label_default)
 
-    def apply_theme(self, dark: bool) -> None:
-        """N5: refresh palette-derived colours on theme toggle."""
-        new_p: Palette = DARK if dark else LIGHT
-        if new_p is self._p:
-            return
-        self._p = new_p
-        # Recompute the accent for the current colour name, since DARK and
-        # LIGHT use different shades for status colours.
-        accent_map = {
-            "accent":  new_p.app_accent,
-            "success": new_p.app_success,
-            "warning": new_p.app_warning,
-            "danger":  new_p.app_danger,
-        }
-        # Best-effort: derive the colour name back from current accent.
-        for name, c in accent_map.items():
-            # Map identity is what we have — pick by ordering precedence.
-            del name, c  # noqa: F841 — placeholder for future colour-key plumbing
-        self._accent = accent_map.get(self._color_key, new_p.app_accent)
-        # Restyle everything that depends on the palette.
-        self.setStyleSheet(
-            f"""
-            QFrame {{
-                background-color: {new_p.app_panel};
-                border: 1px solid {new_p.app_border};
-                border-radius: {RADIUS_XL}px;
-                border-left: 4px solid {self._accent};
-            }}
-            """
-        )
-        self._cap_lbl.setStyleSheet(
-            f"""
-            QLabel {{
-                color: {new_p.app_fg_muted};
-                font-family: "{FONT_BODY}", "Segoe UI", Arial, sans-serif;
-                font-size: {FS_SM2}px;
-                font-weight: {FW_MEDIUM};
-                background: transparent;
-                border: none;
-            }}
-            """
-        )
-        # Re-apply the value-label style — calm-zero vs accent-coloured.
-        if self._label_zero and self._is_zero:
-            self._val_lbl.setStyleSheet(
-                f"color: {new_p.app_fg_subtle}; background: transparent; border: none;"
-            )
-        else:
-            self._val_lbl.setStyleSheet(
-                f"color: {self._accent}; background: transparent; border: none;"
-            )
+    # Round 3a: apply_theme removido — paleta única LIGHT, sem
+    # propagação dinâmica de tema.
 
 
 # ---------------------------------------------------------------------------
@@ -421,10 +369,7 @@ class _SyncRow(QFrame):
     # ------------------------------------------------------------------
     # Styling
     # ------------------------------------------------------------------
-
-    def apply_theme(self, dark: bool) -> None:
-        self._p = DARK if dark else LIGHT
-        self._restyle()
+    # Round 3a: apply_theme removido — paleta única LIGHT.
 
     def _restyle(self) -> None:
         p = self._p
@@ -553,48 +498,7 @@ class _TaskRow(QFrame):
         self._badge.setFixedSize(52, 22)
         layout.addWidget(self._badge)
 
-    def apply_theme(self, dark: bool) -> None:
-        """N5: switch palette on theme toggle. Title/processo/days are
-        re-derived on the next ``update_row()`` call from cached state."""
-        new_p: Palette = DARK if dark else LIGHT
-        if new_p is self._p:
-            return
-        self._p = new_p
-        self.setStyleSheet(
-            f"""
-            QFrame {{
-                background-color: {new_p.app_panel};
-                border: 1px solid {new_p.app_border};
-                border-radius: {RADIUS_MD}px;
-            }}
-            """
-        )
-        self._title_lbl.setStyleSheet(
-            f"""
-            QLabel {{
-                color: {new_p.app_fg_strong};
-                font-family: "{FONT_BODY}", "Segoe UI", Arial, sans-serif;
-                font-size: {FS_MD}px;
-                font-weight: {FW_MEDIUM};
-                background: transparent;
-                border: none;
-            }}
-            """
-        )
-        self._proc_lbl.setStyleSheet(
-            f"""
-            QLabel {{
-                color: {new_p.app_fg_muted};
-                font-family: "{FONT_BODY}", "Segoe UI", Arial, sans-serif;
-                font-size: {FS_SM2}px;
-                background: transparent;
-                border: none;
-            }}
-            """
-        )
-        # Re-apply the badge style by walking the cached badge text/days.
-        # Since update_row() parses days_left to text, we re-derive from
-        # the badge's current text (e.g. "VENCIDO", "3d") when possible.
+    # Round 3a: apply_theme removido — paleta única LIGHT.
 
     def update_row(self, title: str, processo: str, days_left: int) -> None:
         """Repoint this row at a new (title, processo, days_left) tuple."""
@@ -654,15 +558,14 @@ class DashboardPage(QWidget):
         self,
         conn: sqlite3.Connection,
         user: dict[str, str],
-        dark: bool = False,
         sync_manager: Any = None,
         parent: QWidget | None = None,
     ) -> None:
+        # Round 3a: kwarg dark removido — paleta única LIGHT.
         super().__init__(parent)
         self._conn = conn
         self._user = user
-        self._dark = dark
-        self._p: Palette = DARK if dark else LIGHT
+        self._p: Palette = LIGHT
         self._sync_manager = sync_manager
         # §2.3: bases that are currently syncing — used to show/hide the
         # global progress strip in the toolbar.
@@ -704,34 +607,7 @@ class DashboardPage(QWidget):
         self._load_urgent_tasks()
         self._load_sync_status()
 
-    def apply_theme(self, dark: bool) -> None:
-        """N5: propagate the theme switch to every palette-aware child."""
-        if dark == self._dark:
-            return
-        self._dark = dark
-        self._p = DARK if dark else LIGHT
-        # Cards
-        for card in (
-            getattr(self, "_card_processos", None),
-            getattr(self, "_card_tarefas", None),
-            getattr(self, "_card_criticos", None),
-            getattr(self, "_card_clientes", None),
-        ):
-            if card is not None and hasattr(card, "apply_theme"):
-                card.apply_theme(dark)
-        # Urgent task rows
-        for row in getattr(self, "_urgent_rows", []):
-            if hasattr(row, "apply_theme"):
-                row.apply_theme(dark)
-        # Sync rows
-        for srow in getattr(self, "_sync_rows", {}).values():
-            if hasattr(srow, "apply_theme"):
-                srow.apply_theme(dark)
-        # Global progress strip — re-style.
-        self._restyle_global_progress()
-        # Re-run refresh: persistent labels just get text/colour updates,
-        # which is the cheapest way to flush the new palette through.
-        self.refresh()
+    # Round 3a: apply_theme removido — paleta única LIGHT.
 
     # ------------------------------------------------------------------
     # §2.3 Live sync signals
@@ -867,11 +743,12 @@ class DashboardPage(QWidget):
         # ---- Stat cards row ----
         cards_row = QHBoxLayout()
         cards_row.setSpacing(SP_4)
-        self._card_processos = StatCard("Processos Ativos", "—", "accent", self._dark)
+        # Round 3a: kwarg dark removido — StatCard usa paleta única LIGHT.
+        self._card_processos = StatCard("Processos Ativos", "—", "accent")
         # §2.2 calm-zero: neutral style when count is 0
-        self._card_tarefas   = StatCard("Tarefas Hoje", "—", "warning", self._dark, label_zero="Sem tarefas hoje")
-        self._card_criticos  = StatCard("Prazo Crítico", "—", "danger", self._dark, label_zero="Nenhum prazo crítico")
-        self._card_clientes  = StatCard("Clientes", "—", "success", self._dark)
+        self._card_tarefas   = StatCard("Tarefas Hoje", "—", "warning", label_zero="Sem tarefas hoje")
+        self._card_criticos  = StatCard("Prazo Crítico", "—", "danger", label_zero="Nenhum prazo crítico")
+        self._card_clientes  = StatCard("Clientes", "—", "success")
         for card in (
             self._card_processos,
             self._card_tarefas,

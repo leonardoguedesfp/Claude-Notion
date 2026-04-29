@@ -21,10 +21,10 @@ class ClientesPage(BaseTablePage):
         user: str,
         facade: NotionFacade,
         sync_manager: SyncManager | None = None,
-        dark: bool = False,
         parent: QWidget | None = None,
         audit_conn: sqlite3.Connection | None = None,
     ) -> None:
+        # Round 3a: kwarg dark removido — paleta única LIGHT.
         super().__init__(
             base="Clientes",
             conn=conn,
@@ -32,7 +32,6 @@ class ClientesPage(BaseTablePage):
             user=user,
             facade=facade,
             sync_manager=sync_manager,
-            dark=dark,
             parent=parent,
             audit_conn=audit_conn,
         )

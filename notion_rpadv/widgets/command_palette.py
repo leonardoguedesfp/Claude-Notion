@@ -97,12 +97,12 @@ class CommandPalette(QDialog):
 
     action_selected: Signal = Signal(str)
 
-    def __init__(self, dark: bool = False, parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None) -> None:
+        # Round 3a: kwarg dark removido — paleta única LIGHT.
         super().__init__(parent)
         self.setWindowFlag(Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setModal(True)
-        self._dark = dark  # §8.1 backdrop differs per theme
 
         self._actions: list[dict[str, str]] = []
         self._filtered: list[dict[str, str]] = []
@@ -236,11 +236,8 @@ class CommandPalette(QDialog):
 
     def paintEvent(self, event: QPaintEvent) -> None:  # type: ignore[override]
         painter = QPainter(self)
-        # §8.1 light: rgba(20,36,48,0.30) · dark: rgba(0,0,0,0.55)
-        if self._dark:
-            painter.fillRect(self.rect(), QColor(0, 0, 0, 140))
-        else:
-            painter.fillRect(self.rect(), QColor(20, 36, 48, 77))
+        # Round 3a: paleta única LIGHT — backdrop sempre rgba(20,36,48,0.30).
+        painter.fillRect(self.rect(), QColor(20, 36, 48, 77))
         painter.end()
 
     # ------------------------------------------------------------------

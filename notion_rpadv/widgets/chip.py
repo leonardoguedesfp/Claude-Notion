@@ -20,10 +20,12 @@ class Chip(QLabel):
 
     Usage::
 
-        chip = Chip("Ativo", color="green", dark=False)
+        chip = Chip("Ativo", color="green")
 
     The widget sizes itself to its text content but caps the visible text with
     an ellipsis when placed inside a constrained layout.
+
+    Round 3a: kwarg ``dark`` removido — paleta única LIGHT.
     """
 
     _PADDING_H: int = SP_2  # 8 px horizontal padding each side
@@ -33,13 +35,11 @@ class Chip(QLabel):
         self,
         text: str,
         color: str = "default",
-        dark: bool = False,
         parent: QLabel | None = None,
     ) -> None:
         super().__init__(parent)
 
         self._color = color
-        self._dark = dark
         self._full_text = text
 
         self.setObjectName(f"Chip_{color}")
@@ -62,11 +62,9 @@ class Chip(QLabel):
         self._full_text = text
         self._apply_text()
 
-    def set_color(self, color: str, dark: bool | None = None) -> None:
-        """Change the semantic colour key (and optionally the dark flag)."""
+    def set_color(self, color: str) -> None:
+        """Change the semantic colour key."""
         self._color = color
-        if dark is not None:
-            self._dark = dark
         self.setObjectName(f"Chip_{color}")
         self._apply_style()
 
@@ -75,7 +73,7 @@ class Chip(QLabel):
     # ------------------------------------------------------------------
 
     def _apply_style(self) -> None:
-        palette = chip_palette(self._color, self._dark)
+        palette = chip_palette(self._color)
         self.setStyleSheet(
             f"""
             QLabel {{

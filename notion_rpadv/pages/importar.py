@@ -23,7 +23,6 @@ from PySide6.QtWidgets import (
 
 from notion_bulk_edit.config import DATA_SOURCES
 from notion_rpadv.theme.tokens import (
-    DARK,
     FONT_DISPLAY,
     FS_MD,
     FS_SM,
@@ -625,15 +624,14 @@ class ImportarPage(QWidget):
         conn: sqlite3.Connection,
         token: str,
         user: str,
-        dark: bool = False,
         parent: QWidget | None = None,
     ) -> None:
+        # Round 3a: kwarg dark removido — paleta única LIGHT.
         super().__init__(parent)
         self._conn = conn
         self._token = token
         self._user = user
-        self._dark = dark
-        self._p: Palette = DARK if dark else LIGHT
+        self._p: Palette = LIGHT
         self._current_step: int = 0
 
         self._build_ui()
@@ -641,23 +639,7 @@ class ImportarPage(QWidget):
     # ------------------------------------------------------------------
     # UI construction
     # ------------------------------------------------------------------
-
-    def apply_theme(self, dark: bool) -> None:
-        """N5: re-pin the page background and heading colour for the new
-        theme. Inline button/step styles are still palette-locked at build
-        time — for now they remain on the LIGHT palette but the global QSS
-        keeps them legible via QPushButton#BtnSecondary."""
-        if dark == self._dark:
-            return
-        self._dark = dark
-        self._p = DARK if dark else LIGHT
-        self.setStyleSheet(
-            f"QWidget#ImportarPage {{ background-color: {self._p.app_bg}; }}"
-        )
-        if hasattr(self, "_heading"):
-            self._heading.setStyleSheet(
-                f"color: {self._p.app_fg_strong}; background: transparent; border: none;"
-            )
+    # Round 3a: apply_theme removido — paleta única LIGHT.
 
     def _build_ui(self) -> None:
         p = self._p
