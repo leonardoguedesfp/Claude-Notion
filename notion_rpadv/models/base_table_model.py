@@ -201,6 +201,14 @@ class BaseTableModel(QAbstractTableModel):
         # editing each cell, used by reload(preserve_dirty=True) to detect
         # whether a sync-induced remote change conflicts with the local edit.
         self._dirty_original: dict[tuple[str, str], Any] = {}
+        # P2-002 (Lote 2): cache de DisplayRole por (row, col).
+        # Qt chama data() varias vezes por paint (DisplayRole,
+        # ForegroundRole — que recursa em DisplayRole, FontRole, etc.).
+        # Para colunas relation/date/multi_select o lookup e caro
+        # (resolve relation, format BR date). Sem cache, em uma tabela
+        # com 1100+ linhas o trabalho dobra. Invalidado em reload,
+        # setData e clear_dirty.
+        self._display_cache: dict[tuple[int, int], str] = {}
         self.reload()
 
     # ------------------------------------------------------------------
@@ -219,6 +227,10 @@ class BaseTableModel(QAbstractTableModel):
         self.beginResetModel()
         saved_dirty = dict(self._dirty) if preserve_dirty else {}
         saved_originals = dict(self._dirty_original) if preserve_dirty else {}
+
+        # P2-002 (Lote 2): invalidar cache de DisplayRole — rows e cols
+        # podem ter mudado, qualquer (row, col) prévio é stale.
+        self._display_cache.clear()
 
         # Fase 4: recalcula _cols a partir das prefs atuais. O picker salva
         # em meta_user_columns e chama reload() — sem este recalc, a tabela
@@ -346,12 +358,25 @@ class BaseTableModel(QAbstractTableModel):
             raw = _count_processos_for_cliente(self._conn, page_id)
 
         if role == Qt.ItemDataRole.DisplayRole:
+            # P2-002 (Lote 2): cache de DisplayRole por (row, col).
+            # Qt chama data() varias vezes por paint, e ForegroundRole
+            # recursa em DisplayRole — sem cache, _resolve_relation /
+            # format_br_date / format_brl rodam 2x+ por celula. Cache
+            # invalidado em reload, setData, clear_dirty, discard_dirty.
+            cache_key = (row_idx, col_idx)
+            cached = self._display_cache.get(cache_key)
+            if cached is not None:
+                return cached
             if spec is not None:
                 # BUG-V3: for relation columns, resolve page_ids to readable names
                 if spec.tipo == "relation" and spec.target_base and isinstance(raw, list):
-                    return _resolve_relation(self._conn, raw, spec.target_base)
-                return _display_value(spec, raw)
-            return str(raw) if raw is not None else ""
+                    result = _resolve_relation(self._conn, raw, spec.target_base)
+                else:
+                    result = _display_value(spec, raw)
+            else:
+                result = str(raw) if raw is not None else ""
+            self._display_cache[cache_key] = result
+            return result
 
         if role == Qt.ItemDataRole.EditRole:
             return raw
@@ -427,6 +452,10 @@ class BaseTableModel(QAbstractTableModel):
             if dirty_key not in self._dirty_original:
                 self._dirty_original[dirty_key] = original
             self._dirty[dirty_key] = value
+
+        # P2-002 (Lote 2): invalidar cache de DisplayRole para a célula
+        # editada — o valor display vai mudar.
+        self._display_cache.pop((row_idx, col_idx), None)
 
         self.dataChanged.emit(index, index, [role, Qt.ItemDataRole.BackgroundRole])
         # BUG-29: removed unused had_dirty variable
@@ -565,6 +594,11 @@ class BaseTableModel(QAbstractTableModel):
             # BUG-OP-06: snapshots are tied to the live dirty set.
             self._dirty_original.pop((page_id, key), None)
 
+        # P2-002 (Lote 2): cells fizeram commit do dirty para o backing
+        # row — display value pode mudar. Invalidar cache global é mais
+        # simples e seguro que rastrear (page_id, key) → (row, col).
+        self._display_cache.clear()
+
         self.dataChanged.emit(
             self.index(0, 0),
             self.index(len(self._rows) - 1, len(self._cols) - 1),
@@ -579,6 +613,8 @@ class BaseTableModel(QAbstractTableModel):
         self._dirty.clear()
         # BUG-OP-06: discard drops both the dirty values and their snapshots.
         self._dirty_original.clear()
+        # P2-002 (Lote 2): valores dirty saíram, display volta ao backing.
+        self._display_cache.clear()
         self.dataChanged.emit(
             self.index(0, 0),
             self.index(len(self._rows) - 1, len(self._cols) - 1),

@@ -7,7 +7,10 @@ Cobre 8 componentes (7 esforço S + 1 esforço M):
   via profiler, smoke confia na mudança semântica).
 - C3: P2-003 — error toasts com dismiss manual (auto_dismiss flag).
 - C4: P3-004 — atalhos Ctrl+K (picker) e Ctrl+B (sidebar toggle).
-- C5: P3-002 — _count_processos_for_cliente helper inerte removido.
+- C5: P3-002 — ABORTADO. Auditoria classificou
+  ``_count_processos_for_cliente`` como inerte, mas há caller ativo em
+  ``base_table_model.py:346`` (fallback BUG-V2-09 para rollup vazio
+  do Notion). Removeria funcionalidade. Backlog desatualizado.
 - C6: P2-002 — cache de DisplayRole no model.
 - C7: P2-001 — cache de count de processos por cliente (se atacado).
 - C8: P3-003 — flash visual em scroll (não atacado se não reproduzido).
@@ -157,6 +160,142 @@ def test_toggle_sidebar_handler_flips_visibility() -> None:
     assert fake._sidebar.isVisible() is False
     fake._toggle_sidebar()
     assert fake._sidebar.isVisible() is True
+
+
+# ---------------------------------------------------------------------------
+# C6 — P2-002: cache de DisplayRole no model
+# ---------------------------------------------------------------------------
+
+
+def _make_model_conn():
+    """In-memory cache+audit."""
+    import sqlite3
+    from notion_rpadv.cache import db as cache_db
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    cache_db.init_db(conn)
+    return conn
+
+
+@requires_pyside6
+def test_model_display_cache_populates_on_first_data_call() -> None:
+    """A primeira chamada de data(DisplayRole) popula o cache. Chamadas
+    subsequentes para a mesma célula vêm do cache."""
+    import sys
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication(sys.argv)
+
+    from notion_rpadv.cache import db as cache_db
+    from notion_rpadv.models.base_table_model import BaseTableModel
+
+    conn = _make_model_conn()
+    cache_db.upsert_record(
+        conn, "Clientes", "c-1",
+        {"page_id": "c-1", "nome": "Joao Teste"},
+    )
+    model = BaseTableModel("Clientes", conn)
+    # Cache vazio inicialmente
+    assert model._display_cache == {}
+
+    # Primeira chamada popula
+    idx = model.index(0, 0)
+    val1 = model.data(idx, Qt.ItemDataRole.DisplayRole)
+    assert (0, 0) in model._display_cache
+    assert model._display_cache[(0, 0)] == val1
+
+    # Segunda chamada vem do cache (mesmo valor, sem recomputar)
+    val2 = model.data(idx, Qt.ItemDataRole.DisplayRole)
+    assert val2 == val1
+
+
+@requires_pyside6
+def test_model_display_cache_invalidated_on_reload() -> None:
+    """``model.reload()`` limpa o cache — rows e cols podem ter mudado."""
+    import sys
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication(sys.argv)
+
+    from notion_rpadv.cache import db as cache_db
+    from notion_rpadv.models.base_table_model import BaseTableModel
+
+    conn = _make_model_conn()
+    cache_db.upsert_record(
+        conn, "Clientes", "c-1",
+        {"page_id": "c-1", "nome": "Original"},
+    )
+    model = BaseTableModel("Clientes", conn)
+    model.data(model.index(0, 0), Qt.ItemDataRole.DisplayRole)
+    assert model._display_cache != {}
+
+    # Reload limpa
+    model.reload()
+    assert model._display_cache == {}
+
+
+@requires_pyside6
+def test_model_display_cache_invalidated_on_setdata() -> None:
+    """``setData`` em uma célula invalida o cache só dessa célula."""
+    import sys
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication(sys.argv)
+
+    from notion_rpadv.cache import db as cache_db
+    from notion_rpadv.models.base_table_model import BaseTableModel
+
+    conn = _make_model_conn()
+    cache_db.upsert_record(
+        conn, "Clientes", "c-1",
+        {"page_id": "c-1", "nome": "X", "e_mail": "a@b.com"},
+    )
+    model = BaseTableModel("Clientes", conn)
+    cols = model.cols()
+
+    # Popula cache em duas colunas
+    for col_idx in range(min(2, len(cols))):
+        model.data(model.index(0, col_idx), Qt.ItemDataRole.DisplayRole)
+    populated = dict(model._display_cache)
+    assert len(populated) >= 1
+
+    # setData numa célula
+    model.setData(model.index(0, 0), "Novo", Qt.ItemDataRole.EditRole)
+    # Célula (0,0) saiu do cache
+    assert (0, 0) not in model._display_cache
+    # Outras células permanecem (se havia mais de uma)
+    if (0, 1) in populated:
+        assert (0, 1) in model._display_cache
+
+
+@requires_pyside6
+def test_model_foreground_role_uses_display_cache() -> None:
+    """ForegroundRole chama data(DisplayRole) recursivamente — esse
+    caminho também aproveita o cache."""
+    import sys
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication(sys.argv)
+
+    from notion_rpadv.cache import db as cache_db
+    from notion_rpadv.models.base_table_model import BaseTableModel
+
+    conn = _make_model_conn()
+    cache_db.upsert_record(
+        conn, "Clientes", "c-1",
+        {"page_id": "c-1", "nome": "X"},
+    )
+    model = BaseTableModel("Clientes", conn)
+    idx = model.index(0, 0)
+    # Limpar cache pra começar do zero
+    model._display_cache.clear()
+
+    # Pedir ForegroundRole — ele faz self.data(idx, DisplayRole)
+    # internamente, o que popula o cache.
+    model.data(idx, Qt.ItemDataRole.ForegroundRole)
+    assert (0, 0) in model._display_cache, (
+        "ForegroundRole chama data(DisplayRole) e deveria popular cache."
+    )
 
 
 def test_shortcut_labels_include_new_actions() -> None:
