@@ -1,6 +1,7 @@
 """Main application class (QMainWindow)."""
 from __future__ import annotations
 
+import os
 import sqlite3
 from typing import Any
 
@@ -313,6 +314,15 @@ class MainWindow(QMainWindow):
             widget.refresh()  # type: ignore[union-attr]
         elif page_id == _PAGE_LOGS and hasattr(widget, "refresh"):
             widget.refresh()  # type: ignore[union-attr]
+
+        # Auditoria 2026-04-29: instrumentação temporária — env-gated.
+        # Removido após análise do dump (Etapa 1 do round Auditoria).
+        if os.getenv("NOTION_DEBUG_DUMP") == "1":
+            from notion_rpadv._debug_dump import dump_widget_tree
+            # Defer pra depois do layout settle.
+            QTimer.singleShot(
+                100, lambda w=widget, p=page_id: dump_widget_tree(w, p),
+            )
 
     # ------------------------------------------------------------------
     # Theme: removido no Round 3a
