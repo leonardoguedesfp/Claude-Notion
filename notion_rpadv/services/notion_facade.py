@@ -1,6 +1,7 @@
 """High-level service layer: applies pending edits from cache to Notion API."""
 from __future__ import annotations
 
+import logging
 import sqlite3
 from typing import Any
 
@@ -10,6 +11,8 @@ from notion_bulk_edit.encoders import encode_value
 from notion_bulk_edit.notion_api import NotionAPIError, NotionAuthError, NotionClient
 from notion_bulk_edit.schemas import get_prop
 from notion_rpadv.cache import db as cache_db
+
+logger = logging.getLogger(__name__)
 
 
 class CommitWorker(QObject):
@@ -105,7 +108,23 @@ class CommitWorker(QObject):
             page_id: str = edit.get("page_id", "")
             key: str = edit.get("key", "")
             new_value: Any = edit.get("new_value")
-            edit_id: int = int(edit.get("id", 0))
+            # P1-004 (Lote 1): tolerar edit["id"] None / "" / não-numérico.
+            # Antes, ``int(edit.get("id", 0))`` estourava TypeError em None
+            # e ValueError em string inválida, derrubando o batch INTEIRO.
+            # ``or 0`` cobre None/"" via short-circuit; try/except cobre
+            # strings não-numéricas. ``edit_id == 0`` já era tratado no
+            # path Phase 2 (linha do ``if edit_id:``), então um id ruim
+            # apenas significa "não escreve no audit log" — outros edits
+            # do batch continuam.
+            try:
+                edit_id: int = int(edit.get("id") or 0)
+            except (TypeError, ValueError):
+                logger.warning(
+                    "CommitWorker: edit com id inválido %r, "
+                    "tratando como 0 (sem audit log).",
+                    edit.get("id"),
+                )
+                edit_id = 0
 
             def _record(ok: bool, error: str | None) -> None:
                 results.append({

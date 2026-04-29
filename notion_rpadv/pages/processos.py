@@ -6,13 +6,22 @@ import sqlite3
 from PySide6.QtWidgets import QWidget
 
 from notion_rpadv.cache.sync import SyncManager
-from notion_rpadv.models.delegates import CnjDelegate
 from notion_rpadv.pages.base_table_page import BaseTablePage
 from notion_rpadv.services.notion_facade import NotionFacade
 
 
 class ProcessosPage(BaseTablePage):
-    """Table page for the Processos base."""
+    """Table page for the Processos base.
+
+    Round simplificação CnjDelegate (Lote 1): a coluna ``numero_do_processo``
+    não tem mais delegate específico. O CnjDelegate antigo desenhava
+    layout two-line (↳ parent_cnj em cima do own_cnj) quando a linha
+    tinha ``processo_pai`` resolvido — informação que já é visível pela
+    coluna "Processo pai" (relation, oculta por default no picker da
+    Fase 4). PropDelegate (default) renderiza o CNJ próprio em font
+    default. Hierarquia processual é vista pela coluna Processo pai
+    (que ainda fica clicável via double-click → navega para o pai).
+    """
 
     def __init__(
         self,
@@ -36,12 +45,3 @@ class ProcessosPage(BaseTablePage):
             parent=parent,
             audit_conn=audit_conn,
         )
-        # §3.8: install the CNJ-specific delegate on the CNJ column so rows
-        # with a `processo_pai` render the parent CNJ inline (↳ ABOVE own).
-        # Fase 3: schema dinâmico é fonte única; slug do título é
-        # "numero_do_processo" (parser slugifica "Número do processo").
-        # Fase 4: lê cols do model (respeita user prefs em meta_user_columns).
-        cols = self._model.cols()
-        if "numero_do_processo" in cols:
-            cnj_col = cols.index("numero_do_processo")
-            self._table.setItemDelegateForColumn(cnj_col, CnjDelegate(self._table))

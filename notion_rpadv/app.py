@@ -587,8 +587,9 @@ class MainWindow(QMainWindow):
             self._toggle_theme()
         elif action_id == "show_shortcuts":
             self._show_shortcuts_modal()
-        elif action_id == "new_record":
-            self._push_toast("Novo registro: em desenvolvimento.", "info")
+        # P1-001 (Lote 1): action "new_record" removida do command palette
+        # junto com os outros entry points. Toast de "em desenvolvimento"
+        # era um placeholder ainda confuso para o usuário.
 
     def _show_shortcuts_modal(self) -> None:
         modal = ShortcutsModal(dark=self._dark, parent=self)
@@ -769,7 +770,8 @@ class MainWindow(QMainWindow):
             # BUG-17: Ctrl+S → save, Escape → discard on active page
             "save":          self._save_current_page,
             "discard":       self._discard_current_page,
-            "new_record":    self._new_record_current_page,
+            # P1-001 (Lote 1): "new_record" (Ctrl+N) removido até existir
+            # implementação real de criação inline.
         }
         # ShortcutRegistry.__init__ already pulls user overrides from
         # shortcuts.json so the QShortcuts created by register_all() reflect
@@ -814,11 +816,9 @@ class MainWindow(QMainWindow):
         if hasattr(current, "_on_discard"):
             current._on_discard()  # type: ignore[union-attr]
 
-    def _new_record_current_page(self) -> None:
-        """BUG-17: Ctrl+N delegates to the active page's new-record handler."""
-        current = self._stack.currentWidget()
-        if hasattr(current, "_on_new"):
-            current._on_new()  # type: ignore[union-attr]
+    # P1-001 (Lote 1): _new_record_current_page removido junto com o
+    # entry point de Ctrl+N. Reintroduzir quando criação inline for
+    # implementada de verdade.
 
     # ------------------------------------------------------------------
     # Toast helper

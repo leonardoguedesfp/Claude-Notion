@@ -1073,11 +1073,15 @@ class DashboardPage(QWidget):
             1 for r in tarefas
             if str(r.get("prazo", "") or "").startswith(today_str)
         )
-        criticos = sum(
-            1 for r in tarefas
-            if self._days_remaining(str(r.get("prazo_fatal", "") or "")) is not None
-            and (self._days_remaining(str(r.get("prazo_fatal", "") or "")) or 999) <= 3
-        )
+        # P1-005 + P2-008 (Lote 1): chamar _days_remaining UMA vez por tarefa
+        # e comparar via cheque explícito de None — antes o `(... or 999) <= 3`
+        # ignorava silenciosamente tarefas com prazo == hoje porque `0 or 999`
+        # avalia para 999 em Python.
+        criticos = 0
+        for r in tarefas:
+            dr = self._days_remaining(str(r.get("prazo_fatal", "") or ""))
+            if dr is not None and dr <= 3:
+                criticos += 1
 
         # BUG-V1: use update_value() which targets the stored _val_lbl attribute
         self._card_processos.update_value(str(active_proc))
