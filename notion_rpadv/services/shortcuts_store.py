@@ -18,10 +18,14 @@ DEFAULT_SHORTCUTS: dict[str, str] = {
     "nav_clientes": "Ctrl+2",
     "nav_tarefas": "Ctrl+3",
     "nav_catalogo": "Ctrl+4",
-    # P3-004 (Lote 2): atalhos novos. Ctrl+Shift+K (não Ctrl+K como o
-    # briefing original sugeriu, porque colidia com "search"). Mantém
-    # família Ctrl+K e preserva command palette.
-    "open_columns_picker": "Ctrl+Shift+K",
+    # P3-004 (Lote 2): atalhos novos. Alt+K para o picker de colunas —
+    # Ctrl+K era o desejo original mas estava em uso por "search"
+    # (command palette). Ctrl+Shift+K (primeira tentativa) colidia com
+    # o Notion desktop ("Pesquisa por Atalho") que fica aberto em
+    # paralelo no fluxo do escritório. Alt+K e familia Alt+letra
+    # raramente colidem com outros apps porque são reservados para
+    # mnemonicos de menu.
+    "open_columns_picker": "Alt+K",
     "toggle_sidebar": "Ctrl+B",
 }
 

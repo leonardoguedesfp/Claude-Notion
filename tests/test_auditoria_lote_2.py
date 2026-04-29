@@ -112,7 +112,9 @@ def test_toast_info_slide_in_starts_timer() -> None:
 
 
 # ---------------------------------------------------------------------------
-# C4 — P3-004: atalhos Ctrl+Shift+K (picker) e Ctrl+B (sidebar)
+# C4 — P3-004: atalhos Alt+K (picker) e Ctrl+B (sidebar)
+# Hotfix Round 2: Ctrl+Shift+K → Alt+K. Notion desktop intercepta
+# Ctrl+Shift+K e o Notion fica aberto em paralelo no fluxo do escritório.
 # ---------------------------------------------------------------------------
 
 
@@ -120,9 +122,9 @@ def test_default_shortcuts_include_picker_and_sidebar() -> None:
     """DEFAULT_SHORTCUTS contém os 2 novos atalhos do Lote 2."""
     from notion_rpadv.services.shortcuts_store import DEFAULT_SHORTCUTS
 
-    assert DEFAULT_SHORTCUTS.get("open_columns_picker") == "Ctrl+Shift+K", (
-        "Esperado Ctrl+Shift+K para open_columns_picker (Ctrl+K já estava "
-        "em uso por 'search' / command palette)."
+    assert DEFAULT_SHORTCUTS.get("open_columns_picker") == "Alt+K", (
+        "Esperado Alt+K para open_columns_picker — Ctrl+K e Ctrl+Shift+K "
+        "já em uso por 'search' (paleta) e Notion desktop respectivamente."
     )
     assert DEFAULT_SHORTCUTS.get("toggle_sidebar") == "Ctrl+B"
 

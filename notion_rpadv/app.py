@@ -824,9 +824,11 @@ class MainWindow(QMainWindow):
     # implementada de verdade.
 
     def _open_columns_picker_current_page(self) -> None:
-        """P3-004 (Lote 2): Ctrl+Shift+K abre o picker de colunas (Fase 4)
-        na página ativa. Páginas que não são tabelas (Dashboard, Logs,
-        Configurações, Importar) não têm picker — atalho é no-op."""
+        """P3-004 (Lote 2): Alt+K abre o picker de colunas (Fase 4) na
+        página ativa. Páginas que não são tabelas (Dashboard, Logs,
+        Configurações, Importar) não têm picker — atalho é no-op.
+        (Atalho mudou de Ctrl+Shift+K → Alt+K via hotfix do Round 2 por
+        colisão com Notion desktop.)"""
         current = self._stack.currentWidget()
         if hasattr(current, "_open_columns_picker"):
             current._open_columns_picker()  # type: ignore[union-attr]
