@@ -330,12 +330,12 @@ class ConfiguracoesPage(QWidget):
         self._build_sincronizacao(sec2.content_layout(), p)
         layout.addWidget(sec2)
 
-        # ---- Section 3: Aparência ----
-        sec3 = _SectionCard("Aparência", p)
-        self._build_aparencia(sec3.content_layout(), p)
-        layout.addWidget(sec3)
-
         # ---- Section 4: Usuários ----
+        # Auditoria 2026-04-29: Section 3 (Aparência > Densidade) removida.
+        # Os handlers _on_compact/_on_comfortable só re-estilizavam os botões
+        # mas não alteravam densidade real do app — placeholder enganoso desde
+        # o Round 3a. Implementação real fica pra round dedicado se houver
+        # demanda; remover é mais honesto que manter UI morta.
         sec4 = _SectionCard("Usuários", p)
         self._build_usuarios(sec4.content_layout(), p)
         layout.addWidget(sec4)
@@ -411,80 +411,10 @@ class ConfiguracoesPage(QWidget):
 
             layout.addLayout(row)
 
-    def _build_aparencia(self, layout: QVBoxLayout, p: Palette) -> None:
-        # Round 3a: widget de Tema (3 radios Auto/Claro/Escuro + signal
-        # theme_changed) removido. App roda exclusivamente em modo
-        # claro. Mantida a seção "Aparência" porque o controle de
-        # Densidade ainda mora aqui.
-
-        # §7.4 Density segmented control
-        density_lbl = self._field_label("Densidade", p)
-        layout.addWidget(density_lbl)
-
-        density_row = QHBoxLayout()
-        density_row.setSpacing(0)
-
-        seg_style_active = f"""
-            QPushButton {{
-                background-color: {p.app_accent};
-                color: {p.app_accent_fg};
-                font-size: {FS_SM2}px;
-                font-weight: {FW_BOLD};
-                border: 1px solid {p.app_accent};
-                padding: 4px {SP_3}px;
-            }}
-        """
-        seg_style_inactive = f"""
-            QPushButton {{
-                background-color: transparent;
-                color: {p.app_fg};
-                font-size: {FS_SM2}px;
-                font-weight: {FW_MEDIUM};
-                border: 1px solid {p.app_border_strong};
-                padding: 4px {SP_3}px;
-            }}
-            QPushButton:hover {{
-                background-color: {p.app_row_hover};
-            }}
-        """
-
-        compact_btn = QPushButton("Compacto")
-        compact_btn.setFixedHeight(30)
-        compact_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        compact_btn.setStyleSheet(
-            seg_style_active + f"QPushButton {{ border-radius: 0; border-top-left-radius: {RADIUS_MD}px; border-bottom-left-radius: {RADIUS_MD}px; }}"
-        )
-
-        comfortable_btn = QPushButton("Confortável")
-        comfortable_btn.setFixedHeight(30)
-        comfortable_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        comfortable_btn.setStyleSheet(
-            seg_style_inactive + f"QPushButton {{ border-radius: 0; border-top-right-radius: {RADIUS_MD}px; border-bottom-right-radius: {RADIUS_MD}px; border-left: none; }}"
-        )
-
-        def _on_compact() -> None:
-            compact_btn.setStyleSheet(
-                seg_style_active + f"QPushButton {{ border-radius: 0; border-top-left-radius: {RADIUS_MD}px; border-bottom-left-radius: {RADIUS_MD}px; }}"
-            )
-            comfortable_btn.setStyleSheet(
-                seg_style_inactive + f"QPushButton {{ border-radius: 0; border-top-right-radius: {RADIUS_MD}px; border-bottom-right-radius: {RADIUS_MD}px; border-left: none; }}"
-            )
-
-        def _on_comfortable() -> None:
-            comfortable_btn.setStyleSheet(
-                seg_style_active + f"QPushButton {{ border-radius: 0; border-top-right-radius: {RADIUS_MD}px; border-bottom-right-radius: {RADIUS_MD}px; }}"
-            )
-            compact_btn.setStyleSheet(
-                seg_style_inactive + f"QPushButton {{ border-radius: 0; border-top-left-radius: {RADIUS_MD}px; border-bottom-left-radius: {RADIUS_MD}px; }}"
-            )
-
-        compact_btn.clicked.connect(_on_compact)
-        comfortable_btn.clicked.connect(_on_comfortable)
-
-        density_row.addWidget(compact_btn)
-        density_row.addWidget(comfortable_btn)
-        density_row.addStretch()
-        layout.addLayout(density_row)
+    # Auditoria 2026-04-29: _build_aparencia removido junto com a seção
+    # "Aparência" no _build_ui — controle de Densidade tinha handlers inertes
+    # (_on_compact/_on_comfortable) que só re-estilizavam botões mas não
+    # alteravam densidade real do app. Era placeholder enganoso desde Round 3a.
 
     def _build_usuarios(self, layout: QVBoxLayout, p: Palette) -> None:
         grid = QGridLayout()
