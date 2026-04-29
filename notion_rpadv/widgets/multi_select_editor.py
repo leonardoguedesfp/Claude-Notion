@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (
 )
 
 from notion_bulk_edit.schemas import PropSpec
-from notion_rpadv.theme.tokens import resolve_chip_color
+from notion_rpadv.theme.tokens import LIGHT, resolve_chip_color
 
 
 # Estilo de chip pequeno (compatível com PropDelegate paint).
@@ -110,13 +110,15 @@ class MultiSelectEditor(QWidget):
 
     def _open_picker(self) -> None:
         """Abre QMenu com checkboxes para cada opção do spec."""
+        # Auditoria: hex hardcoded substituidos por tokens brand. QSS aceita
+        # rgba() em background-color (diferente de QColor que precisa parse).
         menu = QMenu(self)
         menu.setStyleSheet(
-            "QMenu { background-color: white; color: #142430;"
-            " border: 1px solid #D1D5DB; border-radius: 6px;"
-            " padding: 4px; }"
-            "QMenu::item { padding: 4px 8px; }"
-            "QMenu::item:selected { background-color: #F3F4F6; }"
+            f"QMenu {{ background-color: {LIGHT.app_panel}; color: {LIGHT.app_fg};"
+            f" border: 1px solid {LIGHT.app_border}; border-radius: 6px;"
+            f" padding: 4px; }}"
+            f"QMenu::item {{ padding: 4px 8px; }}"
+            f"QMenu::item:selected {{ background-color: {LIGHT.app_row_hover}; }}"
         )
 
         for opcao in self._spec.opcoes:
@@ -124,8 +126,8 @@ class MultiSelectEditor(QWidget):
             cb = QCheckBox(f"  {opcao}")
             cb.setChecked(opcao in self._selected)
             cb.setStyleSheet(
-                "QCheckBox { color: #142430; padding: 4px 8px;"
-                " background: transparent; }"
+                f"QCheckBox {{ color: {LIGHT.app_fg}; padding: 4px 8px;"
+                f" background: transparent; }}"
             )
             cb.toggled.connect(self._make_toggle_handler(opcao))
             wa.setDefaultWidget(cb)

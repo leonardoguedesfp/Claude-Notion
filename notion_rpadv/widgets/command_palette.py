@@ -27,6 +27,7 @@ from notion_rpadv.theme.tokens import (
     FS_LG,
     FW_BOLD,
     FW_MEDIUM,
+    LIGHT,
     SP_1,
     SP_3,
     SP_4,
@@ -261,7 +262,7 @@ class CommandPalette(QDialog):
         if not actions:
             empty = QListWidgetItem("Nenhuma ação encontrada")
             empty.setFlags(Qt.ItemFlag.NoItemFlags)
-            empty.setForeground(QColor("#9FB3C1"))
+            empty.setForeground(QColor(LIGHT.app_fg_subtle))
             self._list.addItem(empty)
             return
 
@@ -275,7 +276,7 @@ class CommandPalette(QDialog):
             # Section header (non-selectable)
             header = QListWidgetItem(section_name.upper())
             header.setFlags(Qt.ItemFlag.NoItemFlags)
-            header.setForeground(QColor("#9FB3C1"))
+            header.setForeground(QColor(LIGHT.app_fg_subtle))
             header.setSizeHint(QSize(_CARD_WIDTH, _SECTION_HEADER_HEIGHT))
             font = QFont(FONT_BODY)
             font.setPixelSize(FS_SM)
