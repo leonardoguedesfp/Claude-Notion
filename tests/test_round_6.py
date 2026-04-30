@@ -555,13 +555,17 @@ def test_R6_dashboard_format_subtitle_combines_cliente_and_cnj() -> None:
 
 def test_R6_dashboard_card_renders_resolved_client_not_uuid() -> None:
     """Smoke ponta-a-ponta: instancia DashboardPage com cache populado,
-    refresh, confirma que _TaskCard mostra "Maria Silva" no subtítulo
-    em vez do UUID."""
+    refresh, confirma que _UrgentTaskItem mostra "Maria Silva" na linha
+    2 (cliente) e não o UUID-cru.
+
+    Round 6 hotfix: estrutura mudou — cliente fica em ``_cliente_lbl``
+    (linha 2 do item Kanban), CNJ em ``_cnj_lbl`` (linha 3).
+    """
     import sys
     from PySide6.QtWidgets import QApplication
     QApplication.instance() or QApplication(sys.argv)
     from notion_rpadv.cache import db as cache_db
-    from notion_rpadv.pages.dashboard import DashboardPage, _TaskCard
+    from notion_rpadv.pages.dashboard import DashboardPage, _UrgentTaskItem
 
     conn = _full_conn()
     # Cliente cacheada com nome conhecido
@@ -584,62 +588,35 @@ def test_R6_dashboard_card_renders_resolved_client_not_uuid() -> None:
     })
     page = DashboardPage(conn=conn, user={"name": "Test"})
     page.refresh()
-    # Procura todos _TaskCard visíveis e captura subtítulos.
-    visible_subtitles: list[str] = []
-    for card in page.findChildren(_TaskCard):
-        if card.isVisibleTo(page):
-            visible_subtitles.append(card._sub_lbl.text())  # noqa: SLF001
-    # O card da tarefa deve ter subtítulo com nome resolvido + CNJ.
-    assert any(
-        "Maria Silva" in s and "9999-2026" in s for s in visible_subtitles
-    ), f"Subtítulos visíveis: {visible_subtitles}"
-    # E nenhum subtítulo visível pode conter o UUID-cru.
-    assert not any("cli-x" in s for s in visible_subtitles), (
-        f"UUID vazou no display: {visible_subtitles}"
+    # Procura todos _UrgentTaskItem visíveis e captura linhas 2 e 3.
+    visible_clientes: list[str] = []
+    visible_cnjs: list[str] = []
+    for item in page.findChildren(_UrgentTaskItem):
+        if item.isVisibleTo(page):
+            visible_clientes.append(item._cliente_lbl.text())  # noqa: SLF001
+            visible_cnjs.append(item._cnj_lbl.text())  # noqa: SLF001
+    # O item da tarefa deve ter linha 2 com nome resolvido.
+    assert "Maria Silva" in visible_clientes, (
+        f"Linhas-2 visíveis: {visible_clientes}"
     )
-
-
-def test_R6_dashboard_status_tag_does_not_truncate() -> None:
-    """A largura fixa do tag (84px) tem que comportar o texto mais
-    longo dos 3 grupos ("AMANHÃ" = 6 chars + acento) com folga, em
-    bold + uppercase. Se o tag for menor que o texto rendered, Qt
-    elide pra "AM..." e o operador não consegue distinguir os grupos."""
-    import sys
-    from PySide6.QtGui import QFont, QFontMetrics
-    from PySide6.QtWidgets import QApplication
-    QApplication.instance() or QApplication(sys.argv)
-    from notion_rpadv.pages.dashboard import (
-        _GROUP_TAG_TEXT,
-        _TAG_FIXED_HEIGHT,
-        _TAG_FIXED_WIDTH,
-        _TaskCard,
+    assert "9999-2026" in visible_cnjs, (
+        f"Linhas-3 (CNJ) visíveis: {visible_cnjs}"
     )
-    from notion_rpadv.theme.tokens import FONT_BODY, FS_SM, LIGHT
-
-    # Mede o texto mais longo no font do tag.
-    font = QFont(FONT_BODY)
-    font.setPixelSize(FS_SM)
-    font.setBold(True)
-    fm = QFontMetrics(font)
-    longest = max(_GROUP_TAG_TEXT.values(), key=len)
-    text_w = fm.horizontalAdvance(longest)
-    # Tag tem padding 0 6px + folga; precisa ser >= text_w + ~12.
-    assert _TAG_FIXED_WIDTH >= text_w + 12, (
-        f"_TAG_FIXED_WIDTH={_TAG_FIXED_WIDTH} insuficiente "
-        f"pra '{longest}' (text_w={text_w}px)"
+    # E nenhuma linha visível pode conter o UUID-cru.
+    assert not any("cli-x" in c for c in visible_clientes), (
+        f"UUID vazou no cliente: {visible_clientes}"
     )
-    # Smoke: instância real do _TaskCard preserva o tag width.
-    card = _TaskCard(LIGHT)
-    card.update_card("T", "Sub", "amanha")
-    assert card._tag.width() == _TAG_FIXED_WIDTH  # noqa: SLF001
-    assert card._tag.height() == _TAG_FIXED_HEIGHT  # noqa: SLF001
-    assert card._tag.text() == "AMANHÃ"  # noqa: SLF001
 
 
 def test_R6_dashboard_urgent_groups_have_headers_with_count() -> None:
-    """Headers dos 3 grupos sempre presentes, com contagem visível
-    ("VENCIDAS · N", "HOJE · N", "AMANHÃ · N"). Smoke confirma que
-    a contagem reflete o número real de tarefas em cada bucket."""
+    """Headers dos 3 cards sempre presentes, com label uppercase à
+    esquerda e contagem à direita (separados por stretch — não inline).
+    Smoke confirma que a contagem reflete o número real de tarefas em
+    cada bucket.
+
+    Round 6 hotfix: header agora tem 2 labels (`_label_lbl` + `_count_lbl`)
+    em vez de uma única `_header_lbl` com texto inline.
+    """
     import sys
     from PySide6.QtWidgets import QApplication
     QApplication.instance() or QApplication(sys.argv)
@@ -664,12 +641,148 @@ def test_R6_dashboard_urgent_groups_have_headers_with_count() -> None:
     })
     page = DashboardPage(conn=conn, user={"name": "Test"})
     page.refresh()
-    venc = page._urgent_groups["vencida"]  # noqa: SLF001
-    hoje = page._urgent_groups["hoje"]  # noqa: SLF001
-    amanha = page._urgent_groups["amanha"]  # noqa: SLF001
-    assert "2" in venc._header_lbl.text()  # noqa: SLF001
-    assert "VENCIDAS" in venc._header_lbl.text()  # noqa: SLF001
-    assert "1" in hoje._header_lbl.text()  # noqa: SLF001
-    assert "HOJE" in hoje._header_lbl.text()  # noqa: SLF001
-    assert "0" in amanha._header_lbl.text()  # noqa: SLF001
-    assert "AMANHÃ" in amanha._header_lbl.text()  # noqa: SLF001
+    venc = page._urgent_cards["vencida"]  # noqa: SLF001
+    hoje = page._urgent_cards["hoje"]  # noqa: SLF001
+    amanha = page._urgent_cards["amanha"]  # noqa: SLF001
+    assert venc._label_lbl.text() == "VENCIDAS"  # noqa: SLF001
+    assert venc._count_lbl.text() == "2"  # noqa: SLF001
+    assert hoje._label_lbl.text() == "HOJE"  # noqa: SLF001
+    assert hoje._count_lbl.text() == "1"  # noqa: SLF001
+    assert amanha._label_lbl.text() == "AMANHÃ"  # noqa: SLF001
+    assert amanha._count_lbl.text() == "0"  # noqa: SLF001
+
+
+# ---------------------------------------------------------------------------
+# Round 6 hotfix — Kanban 3 colunas (substitui a stack vertical do R6 P2)
+# ---------------------------------------------------------------------------
+
+
+def test_R6_dashboard_uses_3_column_grid_layout() -> None:
+    """Round 6 hotfix: os 3 cards (Vencidas/Hoje/Amanhã) ficam em
+    QHBoxLayout lado a lado, cada um com stretch=1 (1fr 1fr 1fr).
+    Substitui a stack QVBoxLayout do R6 P2."""
+    import sys
+    from PySide6.QtWidgets import QApplication, QHBoxLayout
+    QApplication.instance() or QApplication(sys.argv)
+    from notion_rpadv.pages.dashboard import DashboardPage, _UrgentColumnCard
+
+    conn = _full_conn()
+    page = DashboardPage(conn=conn, user={"name": "Test"})
+    # Container é QHBoxLayout
+    assert isinstance(page._tasks_container, QHBoxLayout)  # noqa: SLF001
+    # Tem 3 _UrgentColumnCard como filhos diretos do layout
+    cards_in_layout = [
+        page._tasks_container.itemAt(i).widget()  # noqa: SLF001
+        for i in range(page._tasks_container.count())  # noqa: SLF001
+    ]
+    cards_in_layout = [
+        c for c in cards_in_layout if isinstance(c, _UrgentColumnCard)
+    ]
+    assert len(cards_in_layout) == 3
+    # Stretch=1 em cada — divide largura por igual.
+    for i in range(3):
+        assert page._tasks_container.stretch(i) == 1  # noqa: SLF001
+
+
+def test_R6_dashboard_card_renders_3_lines_per_task() -> None:
+    """Round 6 hotfix: cada _UrgentTaskItem tem 3 labels distintos
+    (tipo bold, cliente normal, CNJ mono). Validação por população real
+    via cache + refresh."""
+    import sys
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication(sys.argv)
+    from notion_rpadv.cache import db as cache_db
+    from notion_rpadv.pages.dashboard import DashboardPage, _UrgentTaskItem
+
+    conn = _full_conn()
+    cache_db.upsert_record(conn, "Clientes", "cli", {
+        "page_id": "cli", "nome": "Luis Fernando",
+    })
+    cache_db.upsert_record(conn, "Processos", "proc", {
+        "page_id": "proc", "numero_do_processo": "0000867-77.2023.5.10.0003",
+    })
+    cache_db.upsert_record(conn, "Catalogo", "cat", {
+        "page_id": "cat", "nome": "A.02 Emenda à inicial",
+    })
+    today_str = datetime.date.today().isoformat()
+    cache_db.upsert_record(conn, "Tarefas", "tar", {
+        "page_id": "tar",
+        "tarefa": "fallback livre",  # ignorado quando tipo_de_tarefa resolve
+        "tipo_de_tarefa": ["cat"],
+        "prazo_fatal": today_str,
+        "cliente": [["cli"]],
+        "processo": ["proc"],
+        "status": "Pendente",
+    })
+    page = DashboardPage(conn=conn, user={"name": "Test"})
+    page.refresh()
+    visible_items = [
+        i for i in page.findChildren(_UrgentTaskItem)
+        if i.isVisibleTo(page)
+    ]
+    assert len(visible_items) == 1
+    item = visible_items[0]
+    # Linha 1: tipo (Catalog) bold → "A.02 Emenda à inicial"
+    assert item._tipo_lbl.text() == "A.02 Emenda à inicial"  # noqa: SLF001
+    # Linha 2: cliente
+    assert item._cliente_lbl.text() == "Luis Fernando"  # noqa: SLF001
+    # Linha 3: CNJ
+    assert item._cnj_lbl.text() == "0000867-77.2023.5.10.0003"  # noqa: SLF001
+
+
+def test_R6_dashboard_columns_have_uniform_height() -> None:
+    """Round 6 hotfix: os 3 cards usam QSizePolicy.Expanding horizontal
+    + Preferred vertical, em QHBoxLayout com stretch=1. Qt naturalmente
+    iguala as 3 alturas pelo maior sizeHint vertical (a coluna com mais
+    items dita a altura, as outras 2 acompanham com espaço vazio no
+    fundo). O teste valida o size policy + stretch — não tenta medir
+    altura renderizada (depende de show()/processEvents)."""
+    import sys
+    from PySide6.QtWidgets import QApplication, QSizePolicy
+    QApplication.instance() or QApplication(sys.argv)
+    from notion_rpadv.pages.dashboard import DashboardPage
+
+    conn = _full_conn()
+    page = DashboardPage(conn=conn, user={"name": "Test"})
+    for key in ("vencida", "hoje", "amanha"):
+        card = page._urgent_cards[key]  # noqa: SLF001
+        sp = card.sizePolicy()
+        # Horizontal: Expanding pra ocupar a fração do QHBoxLayout.
+        assert sp.horizontalPolicy() == QSizePolicy.Policy.Expanding, (
+            f"{key}: horizontal policy={sp.horizontalPolicy()}"
+        )
+        # Vertical: Preferred — Qt iguala alturas pegando max(sizeHint).
+        assert sp.verticalPolicy() == QSizePolicy.Policy.Preferred, (
+            f"{key}: vertical policy={sp.verticalPolicy()}"
+        )
+    # E todos os 3 entram no QHBoxLayout com mesmo stretch (1fr cada).
+    assert page._tasks_container.stretch(0) == 1  # noqa: SLF001
+    assert page._tasks_container.stretch(1) == 1  # noqa: SLF001
+    assert page._tasks_container.stretch(2) == 1  # noqa: SLF001
+
+
+def test_R6_dashboard_empty_bucket_card_still_visible() -> None:
+    """Round 6 hotfix: card com count==0 ainda aparece (header com
+    "AMANHÃ" + "0", lista vazia). Não esconde — predito UX, comunica
+    "nenhuma tarefa pra amanhã" sem fazer o operador inferir do
+    espaço em branco."""
+    import sys
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication(sys.argv)
+    from notion_rpadv.pages.dashboard import DashboardPage
+
+    conn = _full_conn()  # zero tarefas
+    page = DashboardPage(conn=conn, user={"name": "Test"})
+    page.refresh()
+    for key in ("vencida", "hoje", "amanha"):
+        card = page._urgent_cards[key]  # noqa: SLF001
+        # Card visível
+        assert not card.isHidden(), f"{key}: card oculto inesperado"
+        # Header presente com count=0
+        assert card._count_lbl.text() == "0"  # noqa: SLF001
+        # Nenhum item visível dentro do card
+        from notion_rpadv.pages.dashboard import _UrgentTaskItem
+        for item in card.findChildren(_UrgentTaskItem):
+            assert not item.isVisible() or item.isHidden(), (
+                f"{key}: item visível em card vazio"
+            )

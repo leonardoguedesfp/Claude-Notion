@@ -648,26 +648,25 @@ def test_relation_double_click_emits_navigation_signal():
 @requires_pyside6
 def test_dashboard_urgent_tasks_panel_is_idempotent():
     """BUG-V2-06: urgent-tasks panel uses persistent widget pools (legado
-    _TaskRow → Round 6 _UrgentGroup com sub-pool de _TaskCard), então
+    _TaskRow → R6 P2 _UrgentGroup → R6 hotfix _UrgentColumnCard), então
     repeated refresh() não cresce a contagem além do que _build_ui
-    pre-allocou. Validates the same fix applies to the second panel.
+    pre-allocou.
 
-    Round 6 Parte 2: a partir desta entrega o painel não tem mais
-    label "Nenhuma tarefa urgente" — substituída por 3 headers de
-    grupo (Vencidas/Hoje/Amanhã · 0). Este teste valida idempotência
-    via contagem de _UrgentGroup (deve ser sempre 3)."""
+    Round 6 hotfix: layout virou Kanban 3-colunas — _UrgentColumnCard
+    substitui _UrgentGroup. Este teste valida idempotência via
+    contagem de _UrgentColumnCard (deve ser sempre 3)."""
     from PySide6.QtWidgets import QApplication
     import sys
     QApplication.instance() or QApplication(sys.argv)
 
-    from notion_rpadv.pages.dashboard import DashboardPage, _UrgentGroup
+    from notion_rpadv.pages.dashboard import DashboardPage, _UrgentColumnCard
 
-    conn = _make_cache()  # zero tarefas → grupos com count==0
+    conn = _make_cache()  # zero tarefas → cards com count==0
     page = DashboardPage(conn=conn, user={"name": "Test"})
-    baseline = len(page.findChildren(_UrgentGroup))
+    baseline = len(page.findChildren(_UrgentColumnCard))
     for _ in range(6):
         page.refresh()
-    after = len(page.findChildren(_UrgentGroup))
+    after = len(page.findChildren(_UrgentColumnCard))
     assert baseline == after == 3, (baseline, after)
 
 
