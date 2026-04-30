@@ -99,7 +99,17 @@ def _format_for_excel(
 
     None → None (célula vazia). Listas viram strings comma-separated.
     Datas viram ``datetime.date``. Checkbox vira "Sim" ou None.
+
+    Round 5 item 2: url retorna "link" quando há URL ou "indisponível"
+    quando vazio (placeholder informativo, não None). O caller
+    (_write_base_sheet) aplica o hyperlink real na célula via
+    ``cell.hyperlink``.
     """
+    # Round 5 item 2: url tem placeholder informativo mesmo vazio.
+    if tipo == "url":
+        if isinstance(value, str) and value.strip():
+            return "link", 0
+        return "indisponível", 0
     if value is None:
         return None, 0
 
@@ -128,16 +138,12 @@ def _format_for_excel(
         return str(value), 0
 
     if tipo == "people":
+        from notion_bulk_edit.config import resolve_user_name
         if not isinstance(value, list):
             return str(value), 0
-        names = []
-        for uuid in value:
-            user = notion_users.get(str(uuid))
-            if user is not None:
-                names.append(user.get("name") or str(uuid))
-            else:
-                names.append(str(uuid))
-        return ", ".join(names), 0
+        return ", ".join(
+            resolve_user_name(u, users=notion_users) for u in value if u
+        ), 0
 
     if tipo == "relation":
         if not isinstance(value, list):
@@ -154,6 +160,32 @@ def _format_for_excel(
                 titles.append(title)
         return ", ".join(titles), misses
 
+    # Round 6 Parte 1: rollup-de-relation chega como nested
+    # ``[["uuid1"], ["uuid2"]]`` (cada item do rollup array é um bloco
+    # relation com sua própria lista). Achata + resolve UUIDs via
+    # title_cache (que cobre as bases selecionadas). Fallback pra
+    # UUID-cru quando UUID não está no cache (target_base não
+    # selecionado pra exportação ou registro deletado). NÃO conta
+    # como miss porque rollups frequentemente referenciam páginas
+    # fora do snapshot por design.
+    if tipo == "rollup" and isinstance(value, list):
+        flat: list[str] = []
+        for item in value:
+            if isinstance(item, list):
+                flat.extend(str(x) for x in item if x is not None)
+            elif item is not None:
+                flat.append(str(item))
+        if flat:
+            names = []
+            for uid in flat:
+                t = title_cache.get(uid)
+                if t and t.strip():
+                    names.append(t)
+                else:
+                    names.append(uid)
+            return ", ".join(names), 0
+        # Lista vazia (rollup sem itens) → célula vazia ("").
+        return "", 0
     # Catch-all: number, title/rich_text/url/email/phone, formula, rollup,
     # created/last_edited. Defesa: ``decode_value`` pra rollup com
     # type="array" retorna list (encoders.py:198-204). Sem este branch,
@@ -176,15 +208,30 @@ def _write_base_sheet(
     """Escreve uma aba com os dados de ``base``. Cabeçalho em negrito,
     1 linha por página, TODAS as propriedades do schema (ignora
     visibilidade do picker e filtros). Retorna miss_count de relations.
+
+    Round 5 item 5: ordem das colunas segue o layout-padrão (visíveis
+    primeiro na ordem editorial), depois as omitidas (na ordem da API).
+    Bases não cobertas por DEFAULT_LAYOUTS caem na ordem do schema
+    (comportamento legado preservado).
     """
     from notion_bulk_edit.encoders import decode_value
+    from notion_rpadv.layout_defaults import default_visible_slugs
 
     parsed = schema_registry._schemas.get(base, {})  # noqa: SLF001
     properties = parsed.get("properties", {})
+
+    # Round 5 item 5: ordem editorial primeiro, depois resto do schema.
+    layout_slugs = default_visible_slugs(base)
+    visible_in_schema = [s for s in layout_slugs if s in properties]
+    visible_set = set(visible_in_schema)
+    hidden_in_schema = [s for s in properties if s not in visible_set]
+    ordered_slugs = visible_in_schema + hidden_in_schema
+
     headers: list[str] = []
     types: list[str] = []
-    for _slug, prop_dict in properties.items():
-        headers.append(prop_dict.get("notion_name") or _slug)
+    for slug in ordered_slugs:
+        prop_dict = properties[slug]
+        headers.append(prop_dict.get("notion_name") or slug)
         types.append(prop_dict.get("tipo", "rich_text"))
 
     bold = Font(bold=True)
@@ -210,6 +257,14 @@ def _write_base_sheet(
                     cell_value, _dt.datetime,
                 ):
                     cell.number_format = "yyyy-mm-dd"
+                # Round 5 item 2: url "link" vira hyperlink real apontando
+                # pro URL bruto; "indisponível" fica como texto plano sem
+                # estilo de link (parecido com o tratamento na UI).
+                if tipo == "url" and cell_value == "link" and isinstance(
+                    decoded, str,
+                ):
+                    cell.hyperlink = decoded
+                    cell.font = Font(underline="single", color="0563C1")
         if on_progress is not None and (row_idx - 2) % 50 == 0:
             on_progress(base, PHASE_WRITE, row_idx - 1, total_pages)
     if on_progress is not None:

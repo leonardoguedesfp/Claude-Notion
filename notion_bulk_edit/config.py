@@ -57,6 +57,32 @@ NOTION_USERS: Final[dict[str, dict[str, str]]] = {
     "CARLA_NOTION_ID":    {"name": "Carla",    "initials": "CB", "role": "Estagiária"},
 }
 
+
+def resolve_user_name(
+    uid: str, users: dict[str, dict[str, str]] | None = None,
+) -> str:
+    """Round 5: resolve um UUID de usuário do Notion pra nome via
+    ``NOTION_USERS``.
+
+    Fallback pro próprio UUID quando não reconhecido — placeholders
+    ``MARIANA_NOTION_ID``/``CARLA_NOTION_ID`` (até OBS-A03 ser
+    endereçada), bots integrações, ou usuários de fora do time. UUID
+    vazio retorna string vazia.
+
+    ``users`` é injetável pra testes determinísticos; default é o
+    singleton ``NOTION_USERS`` deste módulo. Substitui o pattern ad-hoc
+    que existia em ``snapshot_exporter._format_for_excel`` (people)
+    e novo no ``base_table_model._display_value``.
+    """
+    if not uid:
+        return ""
+    if users is None:
+        users = NOTION_USERS
+    user = users.get(str(uid))
+    if user is None:
+        return str(uid)
+    return user.get("name") or str(uid)
+
 # Usuários que podem fazer login no app (ids locais)
 USUARIOS_AUTORIZADOS: Final[list[str]] = ["deborah", "leonardo"]
 

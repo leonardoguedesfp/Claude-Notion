@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from PySide6.QtCore import Qt, Signal
@@ -24,6 +24,7 @@ from notion_rpadv.cache import db as cache_db
 from notion_rpadv.theme.tokens import (
     FONT_BODY,
     FONT_DISPLAY,
+    FONT_MONO,
     FS_MD,
     FS_SM,
     FS_SM2,
@@ -66,12 +67,177 @@ _PT_BR_WEEKDAYS: tuple[str, ...] = (
 # silently — the spec says 7-day window, in practice it's rarely >10).
 _MAX_URGENT_TASKS: int = 10
 
+# Round 6 Parte 2: cap por grupo (Vencidas/Hoje/Amanhã). Vencidas tipicamente
+# tem mais entries acumuladas que Hoje/Amanhã.
+_MAX_TASKS_PER_GROUP: int = 8
+
+# Labels + texto da tag por grupo.
+_GROUP_LABELS: dict[str, str] = {
+    "vencida": "Vencidas",
+    "hoje":    "Hoje",
+    "amanha":  "Amanhã",
+}
+_GROUP_TAG_TEXT: dict[str, str] = {
+    "vencida": "VENCIDA",
+    "hoje":    "HOJE",
+    "amanha":  "AMANHÃ",
+}
+
+# Status terminal — tarefa não aparece como urgente (já foi
+# resolvida ou descartada). "Concluída" é o caso explícito do spec
+# do Round 6; "Cancelada"/"Prejudicada" mantidas como urgentes
+# (apesar de inativas) por interpretação literal do spec, que só
+# menciona concluído pra Vencidas.
+_URGENCY_TERMINAL_STATUS: frozenset[str] = frozenset({"Concluída"})
+
 
 def _format_date_pt_br(dt: datetime) -> str:
     """Return e.g. 'segunda-feira, 27 de abril de 2026'."""
     weekday = _PT_BR_WEEKDAYS[dt.weekday()]
     month = _PT_BR_MONTHS[dt.month - 1]
     return f"{weekday}, {dt.day} de {month} de {dt.year}"
+
+
+# ---------------------------------------------------------------------------
+# Round 6 Parte 2 — pure functions pra classificação + resolução de display
+# ---------------------------------------------------------------------------
+
+
+def _parse_prazo_date(prazo_str: str) -> date | None:
+    """Parse ISO date string (com ou sem T separator) pra ``date`` puro.
+    Retorna None pra strings vazias ou inválidas (não levanta)."""
+    if not prazo_str:
+        return None
+    try:
+        return date.fromisoformat(prazo_str)
+    except ValueError:
+        try:
+            return date.fromisoformat(prazo_str.split("T")[0])
+        except (ValueError, IndexError):
+            return None
+
+
+def _classify_task(
+    record: dict[str, Any], today: date, tomorrow: date,
+) -> str | None:
+    """Round 6 Parte 2: classifica uma Tarefa em ``'vencida'``, ``'hoje'``,
+    ``'amanha'`` ou ``None``.
+
+    Tasks com status terminal (``Concluída``) viram None — não aparecem
+    como urgentes. Sem prazo_fatal também viram None.
+    """
+    status = str(record.get("status", "") or "")
+    if status in _URGENCY_TERMINAL_STATUS:
+        return None
+    prazo = _parse_prazo_date(str(record.get("prazo_fatal", "") or ""))
+    if prazo is None:
+        return None
+    if prazo < today:
+        return "vencida"
+    if prazo == today:
+        return "hoje"
+    if prazo == tomorrow:
+        return "amanha"
+    return None
+
+
+def _group_urgent_tasks(
+    tasks: list[dict[str, Any]], today: date,
+) -> dict[str, list[dict[str, Any]]]:
+    """Round 6 Parte 2: separa Tarefas em 3 buckets de urgência. Bases
+    (lista) preservam ordem de inserção em cada bucket — caller pode
+    re-ordenar (ex: por prazo_fatal asc) se desejar."""
+    tomorrow = today + timedelta(days=1)
+    groups: dict[str, list[dict[str, Any]]] = {
+        "vencida": [], "hoje": [], "amanha": [],
+    }
+    for r in tasks:
+        cat = _classify_task(r, today, tomorrow)
+        if cat in groups:
+            groups[cat].append(r)
+    return groups
+
+
+def _resolve_dashboard_cliente(
+    conn: sqlite3.Connection, record: dict[str, Any],
+) -> str:
+    """Round 6 Parte 2: resolve o rollup-de-relation Tarefas.cliente
+    pra nome via cache local de Clientes. Cap em 2 nomes pra display
+    compacto; resto vira "+N"."""
+    from notion_rpadv.models.base_table_model import _flatten_rollup_uuids
+    raw = record.get("cliente")
+    if raw is None:
+        return ""
+    flat = _flatten_rollup_uuids(raw)
+    if not flat:
+        return ""
+    names: list[str] = []
+    for uid in flat[:2]:
+        rec = cache_db.get_record(conn, "Clientes", str(uid))
+        if rec is None:
+            names.append(str(uid))
+        else:
+            title = rec.get("nome")
+            names.append(str(title) if title else str(uid))
+    extra = f" +{len(flat) - 2}" if len(flat) > 2 else ""
+    return ", ".join(names) + extra
+
+
+def _resolve_dashboard_cnj(
+    conn: sqlite3.Connection, record: dict[str, Any],
+) -> str:
+    """Round 6 Parte 2: resolve Tarefas.processo (relation single) pra
+    o número do processo (CNJ) via cache local de Processos. Mostra só
+    o primeiro processo (se houver múltiplos, o resto fica oculto —
+    Tarefas raramente referenciam mais de 1)."""
+    raw = record.get("processo")
+    if not raw or not isinstance(raw, list):
+        return ""
+    pid = str(raw[0]) if raw[0] else ""
+    if not pid:
+        return ""
+    rec = cache_db.get_record(conn, "Processos", pid)
+    if rec is None:
+        return pid
+    return str(rec.get("numero_do_processo") or pid)
+
+
+def _format_dashboard_subtitle(
+    conn: sqlite3.Connection, record: dict[str, Any],
+) -> str:
+    """Round 6 Parte 2: subtítulo do card de Tarefa Urgente:
+    ``'{cliente} · {CNJ}'``, com partes vazias omitidas. Separador é
+    middle-dot (U+00B7) pra ficar visualmente leve.
+
+    Mantida por compatibilidade — o layout Kanban (Round 6 hotfix)
+    quebra cliente e CNJ em linhas separadas e não usa esta função;
+    fica disponível pra outros consumers (snapshots, exports, logs)."""
+    cliente = _resolve_dashboard_cliente(conn, record)
+    cnj = _resolve_dashboard_cnj(conn, record)
+    parts = [p for p in (cliente, cnj) if p]
+    return " · ".join(parts)
+
+
+def _resolve_dashboard_tipo(
+    conn: sqlite3.Connection, record: dict[str, Any],
+) -> str:
+    """Round 6 hotfix: resolve a "linha 1" do item Kanban — preferência
+    pra ``Tarefas.tipo_de_tarefa`` (relation pra Catálogo, ex: "A.02
+    Emenda à inicial"); fallback pra ``Tarefas.tarefa`` (título
+    free-form) quando tipo_de_tarefa não está configurado.
+
+    Catalog title key é ``nome``."""
+    raw = record.get("tipo_de_tarefa")
+    if isinstance(raw, list) and raw:
+        cid = str(raw[0]) if raw[0] else ""
+        if cid:
+            cat_rec = cache_db.get_record(conn, "Catalogo", cid)
+            if cat_rec is not None:
+                title = cat_rec.get("nome")
+                if title:
+                    return str(title)
+    # Fallback: free-form task title
+    return str(record.get("tarefa", "") or "")
 
 
 # ---------------------------------------------------------------------------
@@ -440,109 +606,268 @@ class _SyncRow(QFrame):
         )
 
 
-class _TaskRow(QFrame):
-    """Single row in the urgent tasks list. Reusable: build once, ``update()``
-    it on every refresh instead of creating a new instance — keeps the pool
-    of widgets bounded and the dashboard refresh idempotent."""
+class _UrgentTaskItem(QFrame):
+    """Round 6 hotfix Kanban: item de tarefa em 3 linhas dentro de um
+    card-coluna.
+
+    Tipografia hierárquica:
+    - Linha 1 (forte, ``app_fg_strong``, peso bold, FS_MD): tipo da
+      tarefa — preferência pelo nome do Catálogo (ex: "A.02 Emenda à
+      inicial"), fallback pro título free-form da Tarefa.
+    - Linha 2 (médio, ``app_fg``, FS_SM2): nome do cliente resolvido
+      via cache local.
+    - Linha 3 (pequeno, ``app_fg_muted``, FONT_MONO, FS_SM): número
+      CNJ — fonte tabular pra alinhar dígitos.
+
+    Sem tag de status — a cor do bucket de urgência é comunicada pela
+    borda superior do _UrgentColumnCard pai (substitui o tag interno
+    que existia no Round 6 Parte 2).
+    """
 
     def __init__(self, p: Palette, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._p = p
         self.setStyleSheet(
-            f"""
-            QFrame {{
-                background-color: {p.app_panel};
-                border: 1px solid {p.app_border};
-                border-radius: {RADIUS_MD}px;
-            }}
-            """
+            "QFrame { background: transparent; border: none; }",
         )
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(SP_3, SP_2, SP_3, SP_2)
-        layout.setSpacing(SP_3)
 
-        # Task title — always present.
-        self._title_lbl = QLabel("")
-        self._title_lbl.setStyleSheet(
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, SP_2, 0, SP_2)
+        layout.setSpacing(2)
+
+        # Linha 1: tipo (bold, app_fg_strong)
+        self._tipo_lbl = QLabel("")
+        self._tipo_lbl.setWordWrap(True)
+        self._tipo_lbl.setStyleSheet(
             f"""
             QLabel {{
                 color: {p.app_fg_strong};
                 font-family: "{FONT_BODY}", "Segoe UI", Arial, sans-serif;
                 font-size: {FS_MD}px;
-                font-weight: {FW_MEDIUM};
+                font-weight: {FW_BOLD};
                 background: transparent;
                 border: none;
             }}
-            """
+            """,
         )
-        layout.addWidget(self._title_lbl, stretch=2)
+        layout.addWidget(self._tipo_lbl)
 
-        # Process number — always created; hidden when empty.
-        self._proc_lbl = QLabel("")
-        self._proc_lbl.setStyleSheet(
+        # Linha 2: cliente (médio, app_fg)
+        self._cliente_lbl = QLabel("")
+        self._cliente_lbl.setWordWrap(True)
+        self._cliente_lbl.setStyleSheet(
             f"""
             QLabel {{
-                color: {p.app_fg_muted};
+                color: {p.app_fg};
                 font-family: "{FONT_BODY}", "Segoe UI", Arial, sans-serif;
                 font-size: {FS_SM2}px;
                 background: transparent;
                 border: none;
             }}
-            """
+            """,
         )
-        layout.addWidget(self._proc_lbl, stretch=1)
+        layout.addWidget(self._cliente_lbl)
 
-        # Days badge — fixed position; restyled per update.
-        self._badge = QLabel("")
-        self._badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._badge.setFixedSize(52, 22)
-        layout.addWidget(self._badge)
-
-    # Round 3a: apply_theme removido — paleta única LIGHT.
-
-    def update_row(self, title: str, processo: str, days_left: int) -> None:
-        """Repoint this row at a new (title, processo, days_left) tuple."""
-        p = self._p
-        self._title_lbl.setText(title or "(sem título)")
-        if processo:
-            self._proc_lbl.setText(processo)
-            self._proc_lbl.setVisible(True)
-        else:
-            self._proc_lbl.setText("")
-            self._proc_lbl.setVisible(False)
-
-        if days_left <= 0:
-            badge_text = "VENCIDO"
-            badge_bg = p.app_danger_bg
-            badge_fg = p.app_danger
-        elif days_left <= 2:
-            badge_text = f"{days_left}d"
-            badge_bg = p.app_danger_bg
-            badge_fg = p.app_danger
-        elif days_left <= 5:
-            badge_text = f"{days_left}d"
-            badge_bg = p.app_warning_bg
-            badge_fg = p.app_warning
-        else:
-            badge_text = f"{days_left}d"
-            badge_bg = p.app_success_bg
-            badge_fg = p.app_success
-
-        self._badge.setText(badge_text)
-        self._badge.setStyleSheet(
+        # Linha 3: CNJ (pequeno, mono, app_fg_muted)
+        self._cnj_lbl = QLabel("")
+        self._cnj_lbl.setStyleSheet(
             f"""
             QLabel {{
-                color: {badge_fg};
+                color: {p.app_fg_muted};
+                font-family: "{FONT_MONO}", "Consolas", "Courier New", monospace;
+                font-size: {FS_SM}px;
+                background: transparent;
+                border: none;
+            }}
+            """,
+        )
+        layout.addWidget(self._cnj_lbl)
+
+    def update_item(self, tipo: str, cliente: str, cnj: str) -> None:
+        """Repoint o item pra um novo (tipo, cliente, CNJ). Linhas 2 e
+        3 ocultas individualmente quando vazias — preserva
+        verticalidade compacta."""
+        self._tipo_lbl.setText(tipo or "(sem título)")
+        if cliente:
+            self._cliente_lbl.setText(cliente)
+            self._cliente_lbl.setVisible(True)
+        else:
+            self._cliente_lbl.setText("")
+            self._cliente_lbl.setVisible(False)
+        if cnj:
+            self._cnj_lbl.setText(cnj)
+            self._cnj_lbl.setVisible(True)
+        else:
+            self._cnj_lbl.setText("")
+            self._cnj_lbl.setVisible(False)
+
+
+# Round 6 hotfix: borda superior colorida de 4px que comunica o
+# bucket de urgência (substitui o tag dentro de cada item).
+_COLUMN_TOP_BORDER_PX: int = 4
+
+
+class _UrgentColumnCard(QFrame):
+    """Round 6 hotfix Kanban: card-coluna pra um dos 3 buckets de
+    urgência. Layout vertical: header (label uppercase + contagem,
+    ambos na cor do bucket) + divider + lista de items com dividers
+    sutis entre eles.
+
+    Cor do bucket é comunicada pela ``border-top`` de 4px do card e
+    pela cor do header (label + count). Cards com count==0 mantêm
+    header visível (predito UX); área de items fica vazia.
+
+    Pool persistente de _UrgentTaskItem (cap _MAX_TASKS_PER_GROUP=8)
+    pra que ``refresh()`` repetido não cresça o número de widgets
+    (BUG-V2-06). Substitui ``_UrgentGroup`` do Round 6 Parte 2.
+    """
+
+    def __init__(
+        self, group_key: str, p: Palette, parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._p = p
+        self._group_key = group_key
+
+        if group_key == "vencida":
+            accent = p.app_danger
+        elif group_key == "hoje":
+            accent = p.app_warning
+        else:  # amanha + fallback
+            accent = p.app_info
+        self._accent = accent
+
+        # Border-top colorido (4px) + bordas laterais default. A ordem
+        # do QSS importa: ``border`` define todas as 4, ``border-top``
+        # depois sobrescreve só a topo.
+        self.setStyleSheet(
+            f"""
+            QFrame#UrgentColumnCard {{
+                background-color: {p.app_panel};
+                border: 1px solid {p.app_border};
+                border-top: {_COLUMN_TOP_BORDER_PX}px solid {accent};
+                border-radius: {RADIUS_MD}px;
+            }}
+            """,
+        )
+        # objectName pro seletor #UrgentColumnCard atingir só este frame
+        # (sem afetar QFrame internos como dividers).
+        self.setObjectName("UrgentColumnCard")
+        # Vertical: cresce com o conteúdo; horizontal: divide o espaço
+        # do QHBoxLayout pai (stretch=1 cada). Os 3 cards ficam com
+        # mesma largura E mesma altura (Qt iguala pelo maior sizeHint).
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(SP_3, SP_3, SP_3, SP_3)
+        outer.setSpacing(0)
+
+        # Header row: label uppercase à esquerda, contagem à direita
+        header_row = QHBoxLayout()
+        header_row.setContentsMargins(0, 0, 0, SP_2)
+        header_row.setSpacing(SP_2)
+
+        label_text = _GROUP_LABELS.get(group_key, "").upper()
+        self._label_lbl = QLabel(label_text)
+        self._label_lbl.setStyleSheet(
+            f"""
+            QLabel {{
+                color: {accent};
                 font-family: "{FONT_BODY}", "Segoe UI", Arial, sans-serif;
                 font-size: {FS_SM}px;
                 font-weight: {FW_BOLD};
-                background-color: {badge_bg};
-                border-radius: 11px;
+                letter-spacing: 0.06em;
+                background: transparent;
                 border: none;
-                padding: 0 6px;
             }}
-            """
+            """,
         )
+        header_row.addWidget(self._label_lbl)
+        header_row.addStretch()
+
+        self._count_lbl = QLabel("0")
+        self._count_lbl.setStyleSheet(
+            f"""
+            QLabel {{
+                color: {accent};
+                font-family: "{FONT_BODY}", "Segoe UI", Arial, sans-serif;
+                font-size: {FS_SM}px;
+                font-weight: {FW_BOLD};
+                background: transparent;
+                border: none;
+            }}
+            """,
+        )
+        header_row.addWidget(self._count_lbl)
+        outer.addLayout(header_row)
+
+        # Divider abaixo do header
+        self._header_divider = QFrame()
+        self._header_divider.setFrameShape(QFrame.Shape.HLine)
+        self._header_divider.setFixedHeight(1)
+        self._header_divider.setStyleSheet(
+            f"QFrame {{ background-color: {p.app_border}; border: none; }}",
+        )
+        outer.addWidget(self._header_divider)
+
+        # Pool de items + dividers entre items
+        self._items: list[_UrgentTaskItem] = []
+        self._dividers: list[QFrame] = []
+        for i in range(_MAX_TASKS_PER_GROUP):
+            if i > 0:
+                # Divider entre o item anterior e o atual
+                d = QFrame()
+                d.setFrameShape(QFrame.Shape.HLine)
+                d.setFixedHeight(1)
+                d.setStyleSheet(
+                    f"QFrame {{"
+                    f" background-color: {p.app_border};"
+                    f" border: none;"
+                    f" }}",
+                )
+                d.setVisible(False)
+                outer.addWidget(d)
+                self._dividers.append(d)
+            item = _UrgentTaskItem(p)
+            item.setVisible(False)
+            outer.addWidget(item)
+            self._items.append(item)
+
+        outer.addStretch()
+        # Estado inicial: 0 tarefas (header "0", lista vazia).
+        self.update_card([])
+
+    @property
+    def group_key(self) -> str:
+        return self._group_key
+
+    def update_card(self, formatted_tasks: list[dict[str, str]]) -> None:
+        """Atualiza header + lista de items.
+
+        ``formatted_tasks`` é lista de dicts ``{tipo, cliente, cnj}`` —
+        chamador resolveu via cache local antes de chamar (widget
+        permanece sem dependência de ``conn``).
+        """
+        count = len(formatted_tasks)
+        self._count_lbl.setText(str(count))
+
+        capped = formatted_tasks[: _MAX_TASKS_PER_GROUP]
+        for i, item in enumerate(self._items):
+            if i < len(capped):
+                t = capped[i]
+                item.update_item(
+                    t.get("tipo", ""),
+                    t.get("cliente", ""),
+                    t.get("cnj", ""),
+                )
+                item.setVisible(True)
+            else:
+                item.setVisible(False)
+        # Dividers entre items consecutivos visíveis. Item N tem
+        # divider N-1 acima dele; só fica visível se ambos N-1 e N
+        # estão visíveis.
+        for i, divider in enumerate(self._dividers):
+            divider.setVisible(i + 1 < len(capped))
 
 
 # ---------------------------------------------------------------------------
@@ -759,31 +1084,30 @@ class DashboardPage(QWidget):
         self._content_layout.addLayout(cards_row)
 
         # ---- Urgent tasks ----
-        # BUG-V2-06: same persistent-widget approach as the sync panel.
-        # Pre-allocate a fixed pool of _TaskRow widgets (matching the cap
-        # in _load_urgent_tasks) plus an "empty" placeholder label, then
-        # only toggle visibility / mutate text on each refresh. No widget
-        # churn, no DeferredDelete dependence.
+        # Round 6 hotfix: 3 cards horizontais lado a lado (Kanban).
+        # Cada card é um _UrgentColumnCard com header colorido, divider
+        # e pool de _UrgentTaskItem (3 linhas: tipo/cliente/CNJ).
+        # QHBoxLayout naturalmente faz os 3 cards terem mesma altura
+        # (toma o max sizeHint vertical), satisfazendo o requisito do
+        # spec de "altura uniforme — coluna vazia acompanha a maior".
         self._content_layout.addWidget(_section_heading("Tarefas Urgentes", p))
-        self._tasks_container = QVBoxLayout()
-        self._tasks_container.setSpacing(SP_2)
+        self._tasks_container = QHBoxLayout()
+        self._tasks_container.setSpacing(SP_3)
+        self._tasks_container.setContentsMargins(0, 0, 0, 0)
         self._content_layout.addLayout(self._tasks_container)
 
-        self._urgent_rows: list[_TaskRow] = []
-        for _ in range(_MAX_URGENT_TASKS):
-            row = _TaskRow(p)
-            row.setVisible(False)
-            self._tasks_container.addWidget(row)
-            self._urgent_rows.append(row)
-        self._urgent_empty_lbl = _body_label(
-            "Nenhuma tarefa urgente nos próximos 7 dias.", p, muted=True
-        )
-        self._urgent_empty_lbl.setVisible(False)
-        self._tasks_container.addWidget(self._urgent_empty_lbl)
-        # Sentinel for "could not load tasks" — surfaced from cache errors.
+        self._urgent_cards: dict[str, _UrgentColumnCard] = {}
+        for key in ("vencida", "hoje", "amanha"):
+            card = _UrgentColumnCard(key, p)
+            # stretch=1 nos 3 cards distribui largura igual (1fr 1fr 1fr).
+            self._tasks_container.addWidget(card, stretch=1)
+            self._urgent_cards[key] = card
+
+        # Error label fora do HBoxLayout — fica abaixo das 3 colunas
+        # quando há falha de carga, sem distorcer o grid.
         self._urgent_error_lbl = _body_label("", p, muted=True)
         self._urgent_error_lbl.setVisible(False)
-        self._tasks_container.addWidget(self._urgent_error_lbl)
+        self._content_layout.addWidget(self._urgent_error_lbl)
 
         # ---- Sync status — §2.3: 5-column layout per base ----
         # Columns: name | count | progress bar | timestamp | chip
@@ -990,59 +1314,54 @@ class DashboardPage(QWidget):
             self._last_sync_lbl.setText(text)
 
     def _load_urgent_tasks(self) -> None:
-        # BUG-V2-06: refresh by mutating the persistent _TaskRow pool built
-        # in _build_ui — toggle visibility, never create widgets here.
+        """Round 6 hotfix: agrupa Tarefas em Vencidas/Hoje/Amanhã e
+        popula os 3 cards Kanban com items de 3 linhas
+        (tipo/cliente/CNJ).
+
+        Usa as pure functions ``_group_urgent_tasks`` +
+        ``_resolve_dashboard_tipo`` + ``_resolve_dashboard_cliente`` +
+        ``_resolve_dashboard_cnj`` pra que toda a lógica de
+        classificação + resolução seja testável headless. Refresh
+        idempotente preservado — pools de _UrgentTaskItem dentro de
+        cada _UrgentColumnCard são reaproveitados (BUG-V2-06)."""
         try:
             tarefas = cache_db.get_all_records(self._conn, "Tarefas")
         except Exception:  # noqa: BLE001
             self._show_urgent_error("Erro ao carregar tarefas.")
             return
 
-        urgent: list[tuple[int, dict[str, Any]]] = []
-        for r in tarefas:
-            prazo_str = str(r.get("prazo_fatal", "") or r.get("prazo", "") or "")
-            days = self._days_remaining(prazo_str)
-            if days is not None and days <= 7:
-                urgent.append((days, r))
-        urgent.sort(key=lambda x: x[0])
-
         # Hide the error label whenever we got here without raising.
         self._urgent_error_lbl.setVisible(False)
+        for card in self._urgent_cards.values():
+            card.setVisible(True)
 
-        if not urgent:
-            for row in self._urgent_rows:
-                row.setVisible(False)
-            self._urgent_empty_lbl.setVisible(True)
-            return
-
-        self._urgent_empty_lbl.setVisible(False)
-        capped = urgent[:_MAX_URGENT_TASKS]
-        for i, row in enumerate(self._urgent_rows):
-            if i < len(capped):
-                days, record = capped[i]
-                # Fase 3: fallbacks legados removidos — slugs dinâmicos são
-                # fonte única após convergência do cache. Lê primeiro o slug
-                # de Tarefas (caminho mais comum aqui), depois Processos.
-                title = str(
-                    record.get("tarefa")             # Tarefas
-                    or record.get("numero_do_processo")  # Processos
-                    or "",
-                )
-                processo = str(
-                    record.get("processo")            # Tarefas → relation com Processo
-                    or record.get("numero_do_processo")  # Processos direto
-                    or "",
-                )
-                row.update_row(title, processo, days)
-                row.setVisible(True)
-            else:
-                row.setVisible(False)
+        groups = _group_urgent_tasks(tarefas, date.today())
+        for key, card_widget in self._urgent_cards.items():
+            records = groups.get(key, [])
+            # Ordena por prazo asc dentro do grupo (mais antigo no
+            # topo entre Vencidas; desempate por nome da tarefa).
+            records.sort(key=lambda r: (
+                str(r.get("prazo_fatal", "") or ""),
+                str(r.get("tarefa", "") or ""),
+            ))
+            formatted = [
+                {
+                    "tipo":    _resolve_dashboard_tipo(self._conn, r),
+                    "cliente": _resolve_dashboard_cliente(self._conn, r),
+                    "cnj":     _resolve_dashboard_cnj(self._conn, r),
+                }
+                for r in records
+            ]
+            card_widget.update_card(formatted)
 
     def _show_urgent_error(self, msg: str) -> None:
-        """Surface a one-line error in the urgent-tasks panel."""
-        for row in self._urgent_rows:
-            row.setVisible(False)
-        self._urgent_empty_lbl.setVisible(False)
+        """Surface a one-line error in the urgent-tasks panel.
+
+        Round 6 hotfix: oculta os 3 cards Kanban pra que a mensagem de
+        erro ocupe sozinha a área (em vez de aparecer abaixo de headers
+        com count==0)."""
+        for card in self._urgent_cards.values():
+            card.setVisible(False)
         self._urgent_error_lbl.setText(msg)
         self._urgent_error_lbl.setVisible(True)
 

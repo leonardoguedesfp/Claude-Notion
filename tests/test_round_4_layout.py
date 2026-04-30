@@ -41,22 +41,23 @@ def _load_fixture(base: str) -> dict:
 
 
 def test_R4_default_visible_slugs_clientes_in_spec_order() -> None:
-    """Clientes: 7 slugs na ordem do spec do Round 4."""
+    """Clientes: 7 slugs na ordem do spec (atualizada no Round 5)."""
     from notion_rpadv.layout_defaults import default_visible_slugs
     assert default_visible_slugs("Clientes") == [
-        "nome", "telefone", "processos", "e_mail",
-        "data_de_aposentadoria", "data_de_ingresso_no_bb",
+        "nome", "telefone", "e_mail", "processos",
         "situacao_funcional",
+        "data_de_ingresso_no_bb", "data_de_aposentadoria",
     ]
 
 
 def test_R4_default_visible_slugs_processos_in_spec_order() -> None:
-    """Processos: 7 slugs na ordem do spec."""
+    """Processos: 9 slugs na ordem do spec (Round 5 — Tribunal e Link
+    externo agora visíveis; detalhamento antes de instância)."""
     from notion_rpadv.layout_defaults import default_visible_slugs
     assert default_visible_slugs("Processos") == [
         "numero_do_processo", "clientes", "fase",
-        "tipo_de_processo", "tipo_de_acao", "instancia",
-        "detalhamento_da_acao",
+        "tipo_de_processo", "tipo_de_acao", "detalhamento_da_acao",
+        "instancia", "tribunal", "link_externo",
     ]
 
 
@@ -87,10 +88,11 @@ def test_R4_default_visible_slugs_unknown_base_returns_empty() -> None:
 
 
 def test_R4_default_width_returns_layout_value() -> None:
-    """Slug conhecido retorna width do layout."""
+    """Slug conhecido retorna width do layout (Round 5: primeira coluna
+    bumpada de 280 pra 320 pra não truncar nomes/CNJ típicos)."""
     from notion_rpadv.layout_defaults import default_width
-    assert default_width("Clientes", "nome") == 280
-    assert default_width("Tarefas", "tarefa") == 280
+    assert default_width("Clientes", "nome") == 320
+    assert default_width("Tarefas", "tarefa") == 320
     assert default_width("Tarefas", "responsavel") == 160
     assert default_width("Catalogo", "categoria") == 220
 
@@ -117,6 +119,61 @@ def test_R4_default_layouts_no_duplicate_slugs_per_base() -> None:
     for base, items in DEFAULT_LAYOUTS.items():
         slugs = [s for s, _w in items]
         assert len(slugs) == len(set(slugs)), f"slug duplicado em {base}"
+
+
+# ---------------------------------------------------------------------------
+# Round 5 — assertivas específicas das mudanças de layout
+# ---------------------------------------------------------------------------
+
+
+def test_R5_layout_version_bumped_to_trigger_wipe() -> None:
+    """LAYOUT_VERSION sobe a cada round que muda slugs/ordem/larguras pra
+    disparar a migração one-shot. Round 5 = versão 2."""
+    from notion_rpadv.layout_defaults import LAYOUT_VERSION
+    assert LAYOUT_VERSION == 2
+
+
+def test_R5_first_column_widths_at_least_320_to_not_truncate() -> None:
+    """Round 5: primeira coluna de cada base não pode ser menor que 320
+    pra acomodar nomes/CNJ típicos sem truncar."""
+    from notion_rpadv.layout_defaults import DEFAULT_LAYOUTS
+    for base, items in DEFAULT_LAYOUTS.items():
+        first_slug, first_width = items[0]
+        assert first_width >= 320, (
+            f"{base}.{first_slug}: largura {first_width} < 320 (R5 mín)"
+        )
+
+
+def test_R5_processos_layout_includes_tribunal_and_link_externo() -> None:
+    """Round 5: Tribunal e Link externo agora visíveis no layout-padrão
+    de Processos (antes ocultos)."""
+    from notion_rpadv.layout_defaults import default_visible_slugs
+    cols = default_visible_slugs("Processos")
+    assert "tribunal" in cols
+    assert "link_externo" in cols
+
+
+def test_R5_clientes_email_before_processos_in_layout() -> None:
+    """Round 5: Clientes reordenado — e_mail antes de processos."""
+    from notion_rpadv.layout_defaults import default_visible_slugs
+    cols = default_visible_slugs("Clientes")
+    assert cols.index("e_mail") < cols.index("processos")
+
+
+def test_R5_clientes_situacao_funcional_before_dates() -> None:
+    """Round 5: situação funcional antes das duas datas."""
+    from notion_rpadv.layout_defaults import default_visible_slugs
+    cols = default_visible_slugs("Clientes")
+    sit_idx = cols.index("situacao_funcional")
+    assert sit_idx < cols.index("data_de_ingresso_no_bb")
+    assert sit_idx < cols.index("data_de_aposentadoria")
+
+
+def test_R5_processos_detalhamento_before_instancia() -> None:
+    """Round 5: detalhamento_da_acao antes de instancia (era depois)."""
+    from notion_rpadv.layout_defaults import default_visible_slugs
+    cols = default_visible_slugs("Processos")
+    assert cols.index("detalhamento_da_acao") < cols.index("instancia")
 
 
 # ---------------------------------------------------------------------------
