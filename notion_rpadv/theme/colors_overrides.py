@@ -7,8 +7,12 @@ configurada no Notion é apenas metadado de schema (preservada em
 ``PropSpec.cor_por_valor`` para diagnóstico), não influencia rendering.
 
 Cada entrada de ``OVERRIDES`` mapeia ``(base_label, prop_key, value)`` para
-uma das 9 famílias da paleta brand:
-``default, blue, purple, green, orange, red, yellow, gray, petrol``.
+uma das 10 famílias da paleta brand:
+``default, blue, purple, green, orange, red, yellow, gray, petrol, pink``.
+
+Round 4 (29-abr-2026): família ``pink`` adicionada para diferenciar
+variantes de "Peça processual" no Catálogo (cível vs trabalhista vs ambos)
+sem reusar cores já alocadas a outros eixos semânticos.
 
 Decisões aplicadas seguindo princípios do Claude Design (round 3b-1):
 - Vermelho é caro — só para situações que travam fluxo (Sobrestado, Crítico).
@@ -34,10 +38,17 @@ OVERRIDES: Final[dict[tuple[str, str, str], str]] = {
     # =================================================================
     # Catalogo
     # =================================================================
-    ("Catalogo", "categoria", "Peças processuais"):       "blue",
-    ("Catalogo", "categoria", "Outras tarefas jurídicas"): "green",
-    ("Catalogo", "categoria", "Administrativo"):          "petrol",
-    ("Catalogo", "categoria", "Diversos"):                "gray",
+    # Round 4 (29-abr-2026): schema renomeado pra singular + valores novos.
+    #   "Peças processuais" → "Peça processual (cível/trabalhista)"
+    #   "Outras tarefas jurídicas" → "Outra tarefa jurídica"
+    #   Adicionadas: variantes (cível) e (trabalhista), Controladoria.
+    ("Catalogo", "categoria", "Peça processual (cível/trabalhista)"): "blue",
+    ("Catalogo", "categoria", "Peça processual (cível)"):             "green",
+    ("Catalogo", "categoria", "Peça processual (trabalhista)"):       "pink",
+    ("Catalogo", "categoria", "Outra tarefa jurídica"):               "purple",
+    ("Catalogo", "categoria", "Controladoria"):                       "yellow",
+    ("Catalogo", "categoria", "Administrativo"):                      "petrol",
+    ("Catalogo", "categoria", "Diversos"):                            "gray",
 
     # =================================================================
     # Clientes
@@ -163,12 +174,28 @@ OVERRIDES: Final[dict[tuple[str, str, str], str]] = {
     # =================================================================
     # Tarefas
     # =================================================================
-    # Status — schema real só tem 2 valores (Pendente, Concluída).
-    ("Tarefas", "status", "Pendente"):  "blue",
-    ("Tarefas", "status", "Concluída"): "green",
+    # Round 4 (29-abr-2026): schema expandido — Status passou de 2 pra 6
+    # valores, Área e Prioridade adicionadas como propriedades novas.
+    #
+    # Status — fluxo expandido com 4 valores intermediários/terminais.
+    ("Tarefas", "status", "Pendente"):              "blue",
+    ("Tarefas", "status", "Em revisão"):            "orange",
+    ("Tarefas", "status", "Aguardando protocolo"):  "purple",
+    ("Tarefas", "status", "Concluída"):             "green",
+    ("Tarefas", "status", "Cancelada"):             "gray",
+    ("Tarefas", "status", "Prejudicada"):           "red",
 
-    # Tarefas.Prioridade e Tarefas.Categoria não existem no schema atual
-    # como select/multi_select — sem entries.
+    # Área — propriedade nova; en-dash U+2013 separa nome da sigla.
+    ("Tarefas", "area", "Cível – CC"):                "blue",
+    ("Tarefas", "area", "Trabalhista – CT"):          "green",
+    ("Tarefas", "area", "Execução cível – EC"):       "purple",
+    ("Tarefas", "area", "Execução trabalhista – ET"): "orange",
+    ("Tarefas", "area", "Liquidação cível – LSC"):    "red",
+
+    # Prioridade — propriedade nova; Normal=default (regra/padrão silenciosa).
+    ("Tarefas", "prioridade", "Normal"):  "default",
+    ("Tarefas", "prioridade", "Alta"):    "orange",
+    ("Tarefas", "prioridade", "Urgente"): "red",
 }
 
 

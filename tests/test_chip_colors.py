@@ -32,18 +32,19 @@ def test_resolve_chip_color_unknown_falls_back_to_default() -> None:
 
 
 def test_resolve_chip_color_returns_brand_palette_only() -> None:
-    """Toda família mapeada está nas 9 famílias brand de LIGHT.chip_*."""
+    """Toda família mapeada está nas 10 famílias brand de LIGHT.chip_*."""
     from notion_rpadv.theme.colors_overrides import OVERRIDES
     from notion_rpadv.theme.tokens import chip_palette
 
     valid_families = {
         "default", "blue", "purple", "green", "orange",
-        "red", "yellow", "gray", "petrol",
+        "red", "yellow", "gray", "petrol", "pink",
     }
     # `amber` é alias técnico de orange em tokens.py — não usado em overrides.
+    # `pink` adicionado no Round 4 pra Catalogo.categoria.
     for key, family in OVERRIDES.items():
         assert family in valid_families, (
-            f"Override {key!r} → {family!r} não está nas 9 famílias brand."
+            f"Override {key!r} → {family!r} não está nas 10 famílias brand."
         )
         # Também garante que chip_palette não cai em default por digitação.
         # (default é OK como override explícito; outras famílias não podem
@@ -128,7 +129,7 @@ def test_parse_color_works_on_brand_palette() -> None:
         LIGHT.chip_default, LIGHT.chip_blue, LIGHT.chip_purple,
         LIGHT.chip_green, LIGHT.chip_orange, LIGHT.chip_red,
         LIGHT.chip_yellow, LIGHT.chip_gray, LIGHT.chip_petrol,
-        LIGHT.chip_amber,
+        LIGHT.chip_amber, LIGHT.chip_pink,
     ):
         # Não levanta:
         parse_color(chip.bg)
@@ -136,17 +137,17 @@ def test_parse_color_works_on_brand_palette() -> None:
 
 
 def test_overrides_use_only_brand_families() -> None:
-    """Toda família referenciada em OVERRIDES é uma das 9 brand."""
+    """Toda família referenciada em OVERRIDES é uma das 10 brand."""
     from notion_rpadv.theme.colors_overrides import OVERRIDES
 
     valid = {
         "default", "blue", "purple", "green", "orange",
-        "red", "yellow", "gray", "petrol",
+        "red", "yellow", "gray", "petrol", "pink",
     }
     used = set(OVERRIDES.values())
     invalid = used - valid
     assert not invalid, (
-        f"Famílias inválidas em OVERRIDES: {invalid!r}. Usar só as 9 brand."
+        f"Famílias inválidas em OVERRIDES: {invalid!r}. Usar só as 10 brand."
     )
 
 

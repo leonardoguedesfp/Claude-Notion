@@ -108,6 +108,7 @@ class Palette:
     chip_gray: ChipPalette
     chip_petrol: ChipPalette
     chip_amber: ChipPalette
+    chip_pink: ChipPalette
 
 
 # ---------------------------------------------------------------------------
@@ -179,6 +180,7 @@ LIGHT: Final[Palette] = Palette(
     chip_gray=ChipPalette(   bg="rgba(111,107,104,0.14)",fg="#4A4744"),
     chip_petrol=ChipPalette( bg="rgba(57,90,90,0.12)",   fg="#2C4646"),
     chip_amber=ChipPalette(  bg="rgba(181,110,63,0.14)", fg="#8B5028"),
+    chip_pink=ChipPalette(   bg="rgba(165,80,110,0.12)", fg="#7A3D55"),
 )
 
 
@@ -247,10 +249,13 @@ def chip_palette(color: str) -> ChipPalette:
     """Return the bg/fg ChipPalette for a given semantic colour name.
 
     Recognised names: blue, purple, green, orange, red, yellow, gray,
-    petrol, amber.  Unknown names fall back to chip_default.
+    petrol, amber, pink.  Unknown names fall back to chip_default.
 
     Round 3a: parâmetro ``dark`` removido junto com a paleta DARK — sempre
     usa LIGHT.
+
+    Round 4: ``pink`` adicionado pra diferenciar variantes de "Peça
+    processual" no Catálogo (cível vs trabalhista vs ambos).
     """
     p: Palette = LIGHT
     mapping: dict[str, ChipPalette] = {
@@ -264,6 +269,7 @@ def chip_palette(color: str) -> ChipPalette:
         "grey":   p.chip_gray,
         "petrol": p.chip_petrol,
         "amber":  p.chip_amber,
+        "pink":   p.chip_pink,
     }
     return mapping.get(color, p.chip_default)
 
