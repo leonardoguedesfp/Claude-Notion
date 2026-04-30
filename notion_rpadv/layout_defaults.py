@@ -15,6 +15,14 @@ deste layout é feita por
 ``notion_rpadv.cache.db.wipe_user_columns_if_layout_changed`` chamado no
 boot da MainWindow. Bumpe ``LAYOUT_VERSION`` sempre que mudar slug, ordem
 ou largura aqui — todos os usuários têm prefs descartadas no próximo boot.
+
+Round 5 (30-abr-2026): primeira coluna de cada base bumpada de 280→320
+porque smoke do operador mostrou truncamento em nomes/CNJ típicos.
+Reordena Clientes (e_mail antes de processos; situação funcional antes
+das datas) e Processos (Tribunal + Link externo agora visíveis;
+detalhamento antes de instância). LAYOUT_VERSION incrementada pra
+disparar wipe one-shot (usuários atuais perdem customização e recebem
+o novo default — comportamento aceito desde o Round 4).
 """
 from __future__ import annotations
 
@@ -23,7 +31,7 @@ from typing import Final
 # Incrementar quando alterar slugs / ordem / larguras em DEFAULT_LAYOUTS.
 # meta.layout_version é comparado contra este número no boot; mismatch
 # dispara wipe de meta_user_columns pra reaplicar o novo layout a todos.
-LAYOUT_VERSION: Final = 1
+LAYOUT_VERSION: Final = 2
 
 
 # (slug, width_px) na ordem visual desejada.
@@ -31,25 +39,35 @@ LAYOUT_VERSION: Final = 1
 # default (mas continua disponível pra habilitar via picker).
 DEFAULT_LAYOUTS: Final[dict[str, list[tuple[str, int]]]] = {
     "Clientes": [
-        ("nome",                    280),
+        # Round 5: nome bumpado pra 320 (truncava nomes longos);
+        # ordem reorganizada — e_mail antes de processos, situação
+        # funcional antes das duas datas.
+        ("nome",                    320),
         ("telefone",                180),
-        ("processos",               240),
         ("e_mail",                  180),
-        ("data_de_aposentadoria",   130),
-        ("data_de_ingresso_no_bb",  130),
+        ("processos",               240),
         ("situacao_funcional",      140),
+        ("data_de_ingresso_no_bb",  130),
+        ("data_de_aposentadoria",   130),
     ],
     "Processos": [
-        ("numero_do_processo",   280),
+        # Round 5: numero_do_processo bumpado pra 320 (CNJ + header
+        # uppercase truncavam); detalhamento antes de instância;
+        # tribunal + link_externo agora visíveis (eram ocultos no R4).
+        ("numero_do_processo",   320),
         ("clientes",             240),
         ("fase",                 140),
         ("tipo_de_processo",     140),
         ("tipo_de_acao",         220),
-        ("instancia",            140),
         ("detalhamento_da_acao", 280),
+        ("instancia",            140),
+        ("tribunal",             140),
+        ("link_externo",         100),
     ],
     "Tarefas": [
-        ("tarefa",             280),
+        # Round 5: tarefa bumpada pra 320 (free-form, descrições
+        # típicas excedem 280).
+        ("tarefa",             320),
         ("tipo_de_tarefa",     240),
         ("cliente",            240),
         ("processo",            240),
@@ -61,7 +79,8 @@ DEFAULT_LAYOUTS: Final[dict[str, list[tuple[str, int]]]] = {
         ("responsavel",        160),
     ],
     "Catalogo": [
-        ("nome",        280),
+        # Round 5: nome bumpado pra 320 (free-form).
+        ("nome",        320),
         ("categoria",   220),
         ("observacoes", 280),
     ],
