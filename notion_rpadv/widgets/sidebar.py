@@ -55,6 +55,7 @@ _MAIN_NAV: list[tuple[str, str, str | None]] = [
 
 _DADOS_NAV: list[tuple[str, str, str | None]] = [
     ("importar", "Importar planilha", None),
+    ("exportar", "Exportar dados",    None),
     ("logs",     "Logs",              None),
 ]
 
@@ -70,6 +71,7 @@ _ICONS: dict[str, str] = {
     "tarefas":   "✓",
     "catalogo":  "📋",
     "importar":  "↑",
+    "exportar":  "↓",
     "logs":      "📝",
     "config":    "⚙",
 }

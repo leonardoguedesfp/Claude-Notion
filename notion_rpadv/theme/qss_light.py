@@ -496,6 +496,14 @@ QLabel#Chip_petrol {{
     font-size: {FS_SM}px;
     font-weight: {FW_MEDIUM};
 }}
+QLabel#Chip_pink {{
+    background: {p.chip_pink.bg};
+    color: {p.chip_pink.fg};
+    border-radius: {RADIUS_SM + 1}px;
+    padding: 1px 8px;
+    font-size: {FS_SM}px;
+    font-weight: {FW_MEDIUM};
+}}
 
 /* ---------------------------------------------------------
    Floating save bar  (QFrame#FloatingSaveBar)

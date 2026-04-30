@@ -170,10 +170,87 @@ class SchemaRegistry:
         # mantêm seus PropSpecs cacheados sem rebuild desnecessário).
         self._propspec_cache.pop(base_label, None)
 
+        # Round 4 Frente 2: drift auto-include — slugs novos no schema
+        # com default_visible=True são adicionados às prefs dos usuários
+        # existentes pra que apareçam visíveis no picker em vez de
+        # silenciosamente ocultos pelo drift protection.
+        if added:
+            self._propagate_added_slugs(
+                base_label, data_source_id, parsed, added,
+            )
+
         return ChangeReport(
             kind=kind, base=base_label,
             added=tuple(added), removed=tuple(removed), changed=tuple(changed),
         )
+
+    def _propagate_added_slugs(
+        self,
+        base_label: str,
+        data_source_id: str,
+        parsed_schema: dict[str, Any],
+        added_slugs: list[str],
+    ) -> None:
+        """Round 4 Frente 2: anexa às prefs de cada usuário (com prefs
+        salvas pra essa base) os slugs novos que têm ``default_visible=True``
+        no schema parsed. Slugs novos com default_visible=False não são
+        anexados — aparecem como opção desmarcada no picker (comportamento
+        legado).
+
+        Os slugs anexados ficam ordenados entre si por ``default_order``.
+        Aparecem ao final da lista do usuário, preservando a ordem que ele
+        configurou pras colunas que já tinha. Idempotente — slugs já presentes
+        nas prefs do usuário não são duplicados.
+
+        Falha em listar/atualizar usuários NÃO aborta o refresh — só loga
+        warning. A regra de negócio (auto-include) é UX nice-to-have, não
+        invariante de integridade.
+        """
+        properties = parsed_schema.get("properties", {})
+        new_visible: list[tuple[int, str]] = []
+        for slug in added_slugs:
+            prop = properties.get(slug)
+            if prop is None:
+                continue
+            if not prop.get("default_visible", False):
+                continue
+            new_visible.append((prop.get("default_order", 999), slug))
+        if not new_visible:
+            return
+        new_visible.sort(key=lambda t: t[0])
+        slugs_to_add = [s for _o, s in new_visible]
+
+        try:
+            users = cache_db.list_users_with_columns(
+                self._audit_conn, data_source_id,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Frente 2: falha listando usuários pra propagação de %r em %s: %s",
+                slugs_to_add, base_label, exc,
+            )
+            return
+
+        for user_id in users:
+            try:
+                current = cache_db.get_user_columns(
+                    self._audit_conn, user_id, data_source_id,
+                )
+                if current is None:
+                    continue
+                current_set = set(current)
+                appended = current + [
+                    s for s in slugs_to_add if s not in current_set
+                ]
+                if appended != current:
+                    cache_db.set_user_columns(
+                        self._audit_conn, user_id, data_source_id, appended,
+                    )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Frente 2: falha atualizando prefs de user=%r base=%s: %s",
+                    user_id, base_label, exc,
+                )
 
     # ------------------------------------------------------------------
     # Lookup público
@@ -236,8 +313,10 @@ class SchemaRegistry:
     ) -> list[str]:
         """Lista de keys visíveis em ordem de exibição.
 
-        Sem user_id → defaults do schema (default_visible=True ordenados
-        por default_order).
+        Sem user_id → defaults do layout-padrão (Round 4: ``layout_defaults``)
+        para as 4 bases conhecidas; fallback à heurística do schema_parser
+        (default_visible=True ordenados por default_order) pra bases não
+        cobertas.
         Com user_id → consulta meta_user_columns(user_id, dsid). Se há
         entrada, retorna na ordem armazenada (filtra slugs que não existem
         mais no schema atual — proteção contra schema drift). Sem entrada,
@@ -260,7 +339,16 @@ class SchemaRegistry:
                     # schema. Mantém ordem definida pelo usuário.
                     return [k for k in user_keys if k in properties]
 
-        # Defaults: keys com default_visible=True, ordenados por default_order
+        # Round 4: defaults vêm do layout-padrão editorial pra as 4 bases
+        # conhecidas. Filtra slugs que ainda não chegaram no schema (ex:
+        # propriedade nova adicionada no Notion mas refresh ainda não rodou)
+        # pra evitar header com coluna sem PropSpec.
+        from notion_rpadv.layout_defaults import default_visible_slugs
+        layout_slugs = default_visible_slugs(base)
+        if layout_slugs:
+            return [s for s in layout_slugs if s in properties]
+
+        # Fallback: heurística antiga para bases não cobertas pelo layout.
         visible = [
             (prop.get("default_order", 999), key)
             for key, prop in properties.items()

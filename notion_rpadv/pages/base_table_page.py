@@ -118,21 +118,192 @@ def _btn_secondary_css(p: Palette) -> str:
 
 
 class _BaseTableView(QTableView):
-    """§3.4 QTableView that paints the area below the last row with the
-    page surface colour instead of leaving the default white.
+    """§3.4 + Round 4 frente 3b: QTableView com (a) tail-area paintada
+    abaixo da última linha pra integrar com a page bg, e (b) overlay de
+    primeira coluna fixa que permanece visível ao rolar horizontalmente.
 
-    Without this, the user sees a hard white rectangle when the table has
-    fewer rows than the viewport — visually disconnected from the rest of
-    the page chrome (cream/navy depending on theme).
+    O overlay de coluna fixa é um 2º QTableView posicionado sobre a
+    coluna 0 do main view, compartilhando model + selectionModel +
+    delegate. Pattern oficial Qt "FrozenColumn" (ver exemplo
+    qtwidgets-itemviews-frozencolumn na documentação Qt 6).
+
+    Vertical scroll é bidirecional (main↔frozen). Horizontal scroll só
+    move o main — frozen permanece fixo. Double-click no frozen é
+    forwardado pro signal doubleClicked do main pra que listeners
+    (relation navigation, etc.) funcionem em ambos os lados.
+
+    Frozen fica oculto quando o model tem menos de 2 colunas (não há
+    o que fixar) ou model é None.
     """
 
     def __init__(self, p: Palette, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._tail_color = QColor(p.app_bg)
 
+        # ---- Round 4: frozen first column overlay ----
+        self._frozen = QTableView(self)
+        self._frozen.setObjectName("FrozenColumn")
+        self._frozen.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._frozen.verticalHeader().hide()
+        self._frozen.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff,
+        )
+        self._frozen.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff,
+        )
+        self._frozen.setShowGrid(False)
+        self._frozen.setAlternatingRowColors(True)
+        self._frozen.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows,
+        )
+        self._frozen.setSelectionMode(
+            QAbstractItemView.SelectionMode.SingleSelection,
+        )
+        self._frozen.verticalHeader().setDefaultSectionSize(32)
+        self._frozen.setSortingEnabled(True)
+        # Stack frozen acima do viewport do main pra cobrir a coluna 0
+        # quando main rola horizontalmente.
+        self.viewport().stackUnder(self._frozen)
+        self._apply_frozen_style(p)
+        self._frozen.setVisible(False)  # mostra só depois de setModel
+
+        # Sync vertical scroll bidirectionally
+        self.verticalScrollBar().valueChanged.connect(
+            self._frozen.verticalScrollBar().setValue,
+        )
+        self._frozen.verticalScrollBar().valueChanged.connect(
+            self.verticalScrollBar().setValue,
+        )
+        # Sync row height (ex: usuário muda densidade)
+        self.verticalHeader().sectionResized.connect(
+            self._on_main_row_resized,
+        )
+        # Sync col 0 width (resize manual no header)
+        self.horizontalHeader().sectionResized.connect(
+            self._on_main_col_resized,
+        )
+        # Forward double-click do frozen → signal doubleClicked do main
+        self._frozen.doubleClicked.connect(self.doubleClicked)
+
+    def _apply_frozen_style(self, p: Palette) -> None:
+        """Aplica stylesheet idêntico ao do main no frozen, com border-right
+        sutil pra deixar visível o limite da coluna fixa quando o main rola."""
+        self._frozen.setStyleSheet(
+            f"""
+            QTableView#FrozenColumn {{
+                background-color: {p.app_panel};
+                alternate-background-color: {p.app_row_hover};
+                color: {p.app_fg};
+                font-family: "{FONT_BODY}", "Segoe UI", Arial, sans-serif;
+                font-size: {FS_MD}px;
+                border: none;
+                border-right: 1px solid {p.app_border};
+                gridline-color: {p.app_border};
+                selection-background-color: {p.app_row_selected};
+                selection-color: {p.app_fg};
+            }}
+            QTableView#FrozenColumn QHeaderView::section {{
+                background-color: {p.app_panel};
+                color: {p.app_fg_muted};
+                font-family: "{FONT_BODY}", "Segoe UI", Arial, sans-serif;
+                font-size: {FS_SM}px;
+                font-weight: {FW_MEDIUM};
+                border: none;
+                border-bottom: 1px solid {p.app_border};
+                padding: {SP_2}px {SP_3}px;
+            }}
+            """,
+        )
+
+    def setModel(self, model: Any) -> None:  # type: ignore[override]
+        super().setModel(model)
+        self._frozen.setModel(model)
+        if model is None or model.columnCount() < 2:
+            self._frozen.setVisible(False)
+            return
+        # Hide tudo exceto coluna 0 no frozen
+        for c in range(model.columnCount()):
+            self._frozen.setColumnHidden(c, c != 0)
+        # Compartilha selectionModel pra realçar a linha selecionada nos dois
+        self._frozen.setSelectionModel(self.selectionModel())
+        # Re-aplica hidden state sempre que o model resetar (picker da Fase 4
+        # muda colunas → modelReset → frozen precisa re-esconder cols 1+)
+        try:
+            model.modelReset.connect(self._on_model_reset)
+        except (TypeError, AttributeError):
+            pass
+        self._refresh_frozen_geometry()
+        self._frozen.setVisible(True)
+
+    def setItemDelegate(self, delegate: Any) -> None:  # type: ignore[override]
+        super().setItemDelegate(delegate)
+        # Round 4: garante que frozen render células igual ao main
+        if hasattr(self, "_frozen") and self._frozen is not None:
+            self._frozen.setItemDelegate(delegate)
+
     def set_palette(self, p: Palette) -> None:
         self._tail_color = QColor(p.app_bg)
+        if hasattr(self, "_frozen"):
+            self._apply_frozen_style(p)
         self.viewport().update()
+
+    def resizeEvent(self, event: Any) -> None:  # type: ignore[override]
+        super().resizeEvent(event)
+        self._refresh_frozen_geometry()
+
+    def _refresh_frozen_geometry(self) -> None:
+        """Re-posiciona e redimensiona o frozen overlay sobre col 0 do main."""
+        if not hasattr(self, "_frozen") or self._frozen is None:
+            return
+        model = self.model()
+        if model is None or model.columnCount() < 2:
+            self._frozen.setVisible(False)
+            return
+        col0_w = self.columnWidth(0)
+        if col0_w <= 0:
+            self._frozen.setVisible(False)
+            return
+        self._frozen.setColumnWidth(0, col0_w)
+        # Posição: à direita do vertical header (que está oculto no
+        # frozen, mas o main pode ter), abaixo do frame.
+        # Tamanho: largura = col0_w; altura = viewport_height + horizontal_header_height
+        # (cobre o header E a área de células — ambos ficam fixos).
+        self._frozen.setGeometry(
+            self.verticalHeader().width() + self.frameWidth(),
+            self.frameWidth(),
+            col0_w,
+            self.viewport().height() + self.horizontalHeader().height(),
+        )
+        self._frozen.setVisible(True)
+
+    def _on_main_col_resized(
+        self, logical_index: int, old_size: int, new_size: int,
+    ) -> None:
+        if logical_index == 0:
+            self._refresh_frozen_geometry()
+
+    def _on_main_row_resized(
+        self, logical_index: int, old_size: int, new_size: int,
+    ) -> None:
+        if hasattr(self, "_frozen") and self._frozen is not None:
+            self._frozen.setRowHeight(logical_index, new_size)
+
+    def _on_model_reset(self) -> None:
+        """Re-aplica setColumnHidden no frozen após modelReset.
+
+        Rodar em modelReset porque o picker da Fase 4 chama
+        ``model.reload()`` que emite modelReset com nova column count
+        / cols(). Sem reaplicar, frozen pode mostrar mais de uma coluna
+        ou esconder col 0 (errado em ambos os casos)."""
+        if not hasattr(self, "_frozen") or self._frozen is None:
+            return
+        model = self.model()
+        if model is None or model.columnCount() < 2:
+            self._frozen.setVisible(False)
+            return
+        for c in range(model.columnCount()):
+            self._frozen.setColumnHidden(c, c != 0)
+        self._refresh_frozen_geometry()
 
     def paintEvent(self, event: QPaintEvent) -> None:  # type: ignore[override]
         super().paintEvent(event)
@@ -246,6 +417,12 @@ class BaseTablePage(QWidget):
 
         # BUG-06: per-column active filter state
         self._active_filters: dict[str, set[str]] = {}
+
+        # Round 4: layout-padrão é aplicado uma vez por sessão (no primeiro
+        # _resize_columns_to_header). Resizes manuais subsequentes do
+        # usuário ficam preservados — reloads só enforcing min_w (nunca
+        # voltam pro layout_width).
+        self._initial_layout_applied: bool = False
 
         self._build_ui(palette)
 
@@ -703,6 +880,10 @@ class BaseTablePage(QWidget):
         # Fase 4: lê do cache do model (recalculado em reload) em vez de
         # consultar colunas_visiveis(base) repetidamente.
         cols = self._model.cols()
+        # Round 4: aplica layout-padrão (larguras editoriais por base) na
+        # primeira passagem; subsequentes só enforcing min_w.
+        from notion_rpadv.layout_defaults import default_width
+        apply_layout = not self._initial_layout_applied
         for col in range(self._model.columnCount()):
             label = self._model.headerData(col, Qt.Orientation.Horizontal) or ""
             text = str(label).upper()  # QSS text-transform: uppercase
@@ -720,8 +901,19 @@ class BaseTablePage(QWidget):
 
             min_w = max(font_min, schema_min)
             header.setSectionResizeMode(col, header.ResizeMode.Interactive)
+
+            # Round 4: largura editorial vence na primeira aplicação. Slug
+            # ausente do layout cai no comportamento legado (só min_w grow).
+            if apply_layout and col < len(cols):
+                layout_w = default_width(self._base, cols[col])
+                if layout_w is not None:
+                    header.resizeSection(col, max(layout_w, min_w))
+                    continue
+
             if header.sectionSize(col) < min_w:
                 header.resizeSection(col, min_w)
+        if apply_layout:
+            self._initial_layout_applied = True
         # §3.1: full-label tooltips on header are served by the model's
         # headerData(ToolTipRole) override — no per-column setup here.
         header.setMinimumSectionSize(min(96, max(80, padding_px + sort_indicator_px + 24)))

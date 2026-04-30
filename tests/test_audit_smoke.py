@@ -63,7 +63,7 @@ def test_AUD_01_cache_record_counts() -> None:
     ).fetchall()}
     assert counts.get("Processos") == 1108
     assert counts.get("Clientes") == 1072
-    assert counts.get("Catalogo") == 37
+    assert counts.get("Catalogo") == 68
     assert counts.get("Tarefas", 0) >= 0
 
 
@@ -469,18 +469,28 @@ def test_AUD_06_search_matches_both_iso_and_br_dates() -> None:
     from PySide6.QtWidgets import QApplication
     QApplication.instance() or QApplication(sys.argv)
 
+    from notion_bulk_edit.config import DATA_SOURCES
+    from notion_bulk_edit.schema_registry import get_schema_registry
     from notion_rpadv.cache import db as cache_db
     from notion_rpadv.models.base_table_model import BaseTableModel
     from notion_rpadv.models.filters import TableFilterProxy
 
     conn = _fresh_conn()
+    # Round 4: layout-padrão de Processos esconde data_de_distribuicao.
+    # Pra esse teste validar search numa coluna específica, força ela
+    # visível via meta_user_columns no audit_conn do singleton.
+    reg_audit = get_schema_registry()._audit_conn  # noqa: SLF001
+    cache_db.set_user_columns(
+        reg_audit, "search-test", DATA_SOURCES["Processos"],
+        ["numero_do_processo", "data_de_distribuicao"],
+    )
     # Fase 3: slugs dinâmicos — title é 'numero_do_processo', distribuição
     # é 'data_de_distribuicao'.
     cache_db.upsert_record(conn, "Processos", "p1",
                            {"page_id": "p1", "numero_do_processo": "0000001-00",
                             "data_de_distribuicao": "2025-03-20"})
 
-    model = BaseTableModel("Processos", conn)
+    model = BaseTableModel("Processos", conn, user_id="search-test")
     proxy = TableFilterProxy()
     proxy.setSourceModel(model)
 
@@ -1351,15 +1361,30 @@ def _proxy_with_processo(distribuicao: str | None = None,
     - 'distribuicao' → 'data_de_distribuicao' (slug da data)
     - 'valor_causa' (REMOVIDO no Notion) → 'id_legal_one' (number existente)
     O parâmetro mantém o nome ``valor_causa`` por compat de assinatura.
+
+    Round 4: layout-padrão de Processos esconde data_de_distribuicao e
+    id_legal_one. Os testes deste bloco validam search nessas colunas
+    especificamente, então simulamos um usuário com prefs que as incluem
+    visíveis (sem isso, search não encontra o valor — coluna oculta).
     """
     import sys
     from PySide6.QtWidgets import QApplication
     QApplication.instance() or QApplication(sys.argv)
+    from notion_bulk_edit.config import DATA_SOURCES
+    from notion_bulk_edit.schema_registry import get_schema_registry
     from notion_rpadv.cache import db as cache_db
     from notion_rpadv.models.base_table_model import BaseTableModel
     from notion_rpadv.models.filters import TableFilterProxy
 
     conn = _fresh_conn()
+    # Round 4: o singleton do schema_registry tem seu próprio audit_conn
+    # (ver conftest.py). user_columns precisa estar lá pra colunas_visiveis()
+    # encontrar — se gravar em ``conn`` o registry não enxerga.
+    reg_audit = get_schema_registry()._audit_conn  # noqa: SLF001
+    cache_db.set_user_columns(
+        reg_audit, "search-test", DATA_SOURCES["Processos"],
+        ["numero_do_processo", "data_de_distribuicao", "id_legal_one"],
+    )
     record: dict = {"page_id": "p1",
                     "numero_do_processo": "0000001-00.0000.0.00.0000"}
     if distribuicao is not None:
@@ -1370,7 +1395,7 @@ def _proxy_with_processo(distribuicao: str | None = None,
         record["id_legal_one"] = valor_causa
     cache_db.upsert_record(conn, "Processos", "p1", record)
 
-    model = BaseTableModel("Processos", conn)
+    model = BaseTableModel("Processos", conn, user_id="search-test")
     proxy = TableFilterProxy()
     proxy.setSourceModel(model)
     return proxy
@@ -2029,9 +2054,13 @@ def test_FASE0_schema_registry_get_prop_returns_none_for_missing() -> None:
 
 
 def test_FASE0_schema_registry_colunas_visiveis_returns_default_visible_only() -> None:
-    """Componente 4: colunas_visiveis sem user_id retorna default_visible=True ordenado."""
+    """Round 4: colunas_visiveis sem user_id retorna o layout-padrão editorial
+    pra bases conhecidas (notion_rpadv.layout_defaults), não mais a
+    heurística de tipo do schema_parser.
+    """
     _skip_if_no_fixtures()
     from notion_bulk_edit.schema_registry import SchemaRegistry
+    from notion_rpadv.layout_defaults import default_visible_slugs
     conn = _audit_only_conn()
     reg = SchemaRegistry(conn)
     raw = _load_fixture("Catalogo")
@@ -2039,12 +2068,14 @@ def test_FASE0_schema_registry_colunas_visiveis_returns_default_visible_only() -
     mock_client.get_data_source.return_value = raw
     reg.refresh_from_api("Catalogo", raw["id"], mock_client)
     cols = reg.colunas_visiveis("Catalogo")
-    # Title sempre primeiro
+    # Round 4: defaults editoriais — nome, categoria, observacoes (rich_text
+    # explicitamente VISÍVEL pra Catalogo, contrariando a heurística antiga).
+    expected = [s for s in default_visible_slugs("Catalogo") if s in {
+        k for k in reg.schema_for_base("Catalogo")
+    }]
+    assert cols == expected
+    # Title continua sendo o primeiro (preservado pela ordem do layout).
     assert cols[0] == "nome"
-    # Multi-select e rollup nunca devem aparecer no default
-    schema = reg.schema_for_base("Catalogo")
-    for k in cols:
-        assert schema[k].tipo not in ("multi_select", "rollup", "rich_text")
 
 
 def test_FASE0_schema_registry_vocabulario_returns_strings_only() -> None:

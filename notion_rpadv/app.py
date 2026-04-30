@@ -25,6 +25,7 @@ from notion_rpadv.pages.catalogo import CatalogoPage
 from notion_rpadv.pages.clientes import ClientesPage
 from notion_rpadv.pages.configuracoes import ConfiguracoesPage
 from notion_rpadv.pages.dashboard import DashboardPage
+from notion_rpadv.pages.exportar import ExportarPage
 from notion_rpadv.pages.importar import ImportarPage
 from notion_rpadv.pages.processos import ProcessosPage
 from notion_rpadv.pages.tarefas import TarefasPage
@@ -51,6 +52,7 @@ _PAGE_CLIENTES   = "clientes"
 _PAGE_TAREFAS    = "tarefas"
 _PAGE_CATALOGO   = "catalogo"
 _PAGE_IMPORTAR   = "importar"
+_PAGE_EXPORTAR   = "exportar"
 _PAGE_LOGS       = "logs"
 _PAGE_CONFIG     = "config"
 
@@ -69,6 +71,7 @@ _NAV_COMMANDS: dict[str, str] = {
     "nav_tarefas":    _PAGE_TAREFAS,
     "nav_catalogo":   _PAGE_CATALOGO,
     "nav_importar":   _PAGE_IMPORTAR,
+    "nav_exportar":   _PAGE_EXPORTAR,
     "nav_logs":       _PAGE_LOGS,
     "nav_config":     _PAGE_CONFIG,
 }
@@ -112,6 +115,20 @@ class MainWindow(QMainWindow):
             # untouched (the .bak is preserved); the user can retry on
             # the next boot. We don't surface a toast here because the
             # status bar isn't built yet.
+            pass
+
+        # Round 4: aplica wipe de meta_user_columns quando LAYOUT_VERSION
+        # bumpa. Sem isso, usuários com prefs salvas nunca veem o novo
+        # layout-padrão (slugs/ordem/larguras editoriais de layout_defaults).
+        try:
+            from notion_rpadv.layout_defaults import LAYOUT_VERSION
+            cache_db.wipe_user_columns_if_layout_changed(
+                self._audit_conn, LAYOUT_VERSION,
+            )
+        except Exception:  # noqa: BLE001
+            # Falha aqui não é fatal — usuário fica com prefs antigas até
+            # próximo boot bem-sucedido. Não surface toast (status bar
+            # ainda não construída).
             pass
 
         # Fase 3 — schema dinâmico: inicializa o singleton SchemaRegistry
@@ -208,6 +225,7 @@ class MainWindow(QMainWindow):
             {"id": "nav_tarefas",    "label": "Ir para Tarefas",         "section": "Navegação"},
             {"id": "nav_catalogo",   "label": "Ir para Catálogo",        "section": "Navegação"},
             {"id": "nav_importar",   "label": "Importar Planilha",       "section": "Ações"},
+            {"id": "nav_exportar",   "label": "Exportar dados",          "section": "Ações"},
             {"id": "nav_logs",       "label": "Ver Logs de Edição",      "section": "Ações"},
             {"id": "nav_config",     "label": "Configurações",           "section": "Ações"},
             {"id": "sync_all",       "label": "Sincronizar tudo",        "section": "Ações"},
@@ -284,6 +302,14 @@ class MainWindow(QMainWindow):
         )
         importar.import_done.connect(self._on_import_done)
         self._add_page(_PAGE_IMPORTAR, importar)
+
+        # Round 4 Frente 4: página de exportação (xlsx snapshot).
+        exportar = ExportarPage(
+            conn=self._conn, token=self._token, user=self._user_id,
+            audit_conn=self._audit_conn,
+        )
+        exportar.toast_requested.connect(self._push_toast)
+        self._add_page(_PAGE_EXPORTAR, exportar)
 
         if LogsPage is not None:
             # BUG-OP-09: LogsPage reads edit_log from audit.db.
