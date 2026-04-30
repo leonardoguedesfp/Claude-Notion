@@ -169,6 +169,16 @@ def _display_value(spec: PropSpec, raw: Any) -> str:
         if isinstance(raw, list):
             return ", ".join(str(v) for v in raw)
         return str(raw)
+    # Round 5 item 3: people — resolve UUIDs do Notion pra nomes via
+    # NOTION_USERS (fallback pro próprio UUID quando não reconhecido).
+    # Usa o helper compartilhado com snapshot_exporter pra DRY.
+    if tipo == "people":
+        from notion_bulk_edit.config import resolve_user_name
+        if isinstance(raw, list):
+            return ", ".join(
+                resolve_user_name(u) for u in raw if u
+            )
+        return resolve_user_name(str(raw))
     # BUG-V3: relation — raw is list[page_id]; display is resolved in data() below
     if tipo == "relation":
         if isinstance(raw, list):

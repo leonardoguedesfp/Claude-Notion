@@ -128,16 +128,12 @@ def _format_for_excel(
         return str(value), 0
 
     if tipo == "people":
+        from notion_bulk_edit.config import resolve_user_name
         if not isinstance(value, list):
             return str(value), 0
-        names = []
-        for uuid in value:
-            user = notion_users.get(str(uuid))
-            if user is not None:
-                names.append(user.get("name") or str(uuid))
-            else:
-                names.append(str(uuid))
-        return ", ".join(names), 0
+        return ", ".join(
+            resolve_user_name(u, users=notion_users) for u in value if u
+        ), 0
 
     if tipo == "relation":
         if not isinstance(value, list):
