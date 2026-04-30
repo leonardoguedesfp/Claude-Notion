@@ -647,28 +647,28 @@ def test_relation_double_click_emits_navigation_signal():
 
 @requires_pyside6
 def test_dashboard_urgent_tasks_panel_is_idempotent():
-    """BUG-V2-06: urgent-tasks panel uses a persistent _TaskRow pool, so
-    repeated refresh() never grows the QLabel count beyond what _build_ui
-    pre-allocated. Validates the same fix applies to the second panel."""
-    from PySide6.QtWidgets import QApplication, QLabel
+    """BUG-V2-06: urgent-tasks panel uses persistent widget pools (legado
+    _TaskRow → Round 6 _UrgentGroup com sub-pool de _TaskCard), então
+    repeated refresh() não cresce a contagem além do que _build_ui
+    pre-allocou. Validates the same fix applies to the second panel.
+
+    Round 6 Parte 2: a partir desta entrega o painel não tem mais
+    label "Nenhuma tarefa urgente" — substituída por 3 headers de
+    grupo (Vencidas/Hoje/Amanhã · 0). Este teste valida idempotência
+    via contagem de _UrgentGroup (deve ser sempre 3)."""
+    from PySide6.QtWidgets import QApplication
     import sys
     QApplication.instance() or QApplication(sys.argv)
 
-    from notion_rpadv.pages.dashboard import DashboardPage
+    from notion_rpadv.pages.dashboard import DashboardPage, _UrgentGroup
 
-    conn = _make_cache()  # zero tarefas → empty state inside the panel
+    conn = _make_cache()  # zero tarefas → grupos com count==0
     page = DashboardPage(conn=conn, user={"name": "Test"})
-    baseline = sum(
-        1 for lbl in page.findChildren(QLabel)
-        if "Nenhuma tarefa urgente" in lbl.text()
-    )
+    baseline = len(page.findChildren(_UrgentGroup))
     for _ in range(6):
         page.refresh()
-    after = sum(
-        1 for lbl in page.findChildren(QLabel)
-        if "Nenhuma tarefa urgente" in lbl.text()
-    )
-    assert baseline == after == 1, (baseline, after)
+    after = len(page.findChildren(_UrgentGroup))
+    assert baseline == after == 3, (baseline, after)
 
 
 # ---------------------------------------------------------------------------

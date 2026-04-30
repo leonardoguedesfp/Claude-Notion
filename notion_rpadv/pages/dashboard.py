@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from PySide6.QtCore import Qt, Signal
@@ -66,12 +66,151 @@ _PT_BR_WEEKDAYS: tuple[str, ...] = (
 # silently — the spec says 7-day window, in practice it's rarely >10).
 _MAX_URGENT_TASKS: int = 10
 
+# Round 6 Parte 2: cap por grupo (Vencidas/Hoje/Amanhã). Vencidas tipicamente
+# tem mais entries acumuladas que Hoje/Amanhã.
+_MAX_TASKS_PER_GROUP: int = 8
+
+# Labels + texto da tag por grupo.
+_GROUP_LABELS: dict[str, str] = {
+    "vencida": "Vencidas",
+    "hoje":    "Hoje",
+    "amanha":  "Amanhã",
+}
+_GROUP_TAG_TEXT: dict[str, str] = {
+    "vencida": "VENCIDA",
+    "hoje":    "HOJE",
+    "amanha":  "AMANHÃ",
+}
+
+# Status terminal — tarefa não aparece como urgente (já foi
+# resolvida ou descartada). "Concluída" é o caso explícito do spec
+# do Round 6; "Cancelada"/"Prejudicada" mantidas como urgentes
+# (apesar de inativas) por interpretação literal do spec, que só
+# menciona concluído pra Vencidas.
+_URGENCY_TERMINAL_STATUS: frozenset[str] = frozenset({"Concluída"})
+
 
 def _format_date_pt_br(dt: datetime) -> str:
     """Return e.g. 'segunda-feira, 27 de abril de 2026'."""
     weekday = _PT_BR_WEEKDAYS[dt.weekday()]
     month = _PT_BR_MONTHS[dt.month - 1]
     return f"{weekday}, {dt.day} de {month} de {dt.year}"
+
+
+# ---------------------------------------------------------------------------
+# Round 6 Parte 2 — pure functions pra classificação + resolução de display
+# ---------------------------------------------------------------------------
+
+
+def _parse_prazo_date(prazo_str: str) -> date | None:
+    """Parse ISO date string (com ou sem T separator) pra ``date`` puro.
+    Retorna None pra strings vazias ou inválidas (não levanta)."""
+    if not prazo_str:
+        return None
+    try:
+        return date.fromisoformat(prazo_str)
+    except ValueError:
+        try:
+            return date.fromisoformat(prazo_str.split("T")[0])
+        except (ValueError, IndexError):
+            return None
+
+
+def _classify_task(
+    record: dict[str, Any], today: date, tomorrow: date,
+) -> str | None:
+    """Round 6 Parte 2: classifica uma Tarefa em ``'vencida'``, ``'hoje'``,
+    ``'amanha'`` ou ``None``.
+
+    Tasks com status terminal (``Concluída``) viram None — não aparecem
+    como urgentes. Sem prazo_fatal também viram None.
+    """
+    status = str(record.get("status", "") or "")
+    if status in _URGENCY_TERMINAL_STATUS:
+        return None
+    prazo = _parse_prazo_date(str(record.get("prazo_fatal", "") or ""))
+    if prazo is None:
+        return None
+    if prazo < today:
+        return "vencida"
+    if prazo == today:
+        return "hoje"
+    if prazo == tomorrow:
+        return "amanha"
+    return None
+
+
+def _group_urgent_tasks(
+    tasks: list[dict[str, Any]], today: date,
+) -> dict[str, list[dict[str, Any]]]:
+    """Round 6 Parte 2: separa Tarefas em 3 buckets de urgência. Bases
+    (lista) preservam ordem de inserção em cada bucket — caller pode
+    re-ordenar (ex: por prazo_fatal asc) se desejar."""
+    tomorrow = today + timedelta(days=1)
+    groups: dict[str, list[dict[str, Any]]] = {
+        "vencida": [], "hoje": [], "amanha": [],
+    }
+    for r in tasks:
+        cat = _classify_task(r, today, tomorrow)
+        if cat in groups:
+            groups[cat].append(r)
+    return groups
+
+
+def _resolve_dashboard_cliente(
+    conn: sqlite3.Connection, record: dict[str, Any],
+) -> str:
+    """Round 6 Parte 2: resolve o rollup-de-relation Tarefas.cliente
+    pra nome via cache local de Clientes. Cap em 2 nomes pra display
+    compacto; resto vira "+N"."""
+    from notion_rpadv.models.base_table_model import _flatten_rollup_uuids
+    raw = record.get("cliente")
+    if raw is None:
+        return ""
+    flat = _flatten_rollup_uuids(raw)
+    if not flat:
+        return ""
+    names: list[str] = []
+    for uid in flat[:2]:
+        rec = cache_db.get_record(conn, "Clientes", str(uid))
+        if rec is None:
+            names.append(str(uid))
+        else:
+            title = rec.get("nome")
+            names.append(str(title) if title else str(uid))
+    extra = f" +{len(flat) - 2}" if len(flat) > 2 else ""
+    return ", ".join(names) + extra
+
+
+def _resolve_dashboard_cnj(
+    conn: sqlite3.Connection, record: dict[str, Any],
+) -> str:
+    """Round 6 Parte 2: resolve Tarefas.processo (relation single) pra
+    o número do processo (CNJ) via cache local de Processos. Mostra só
+    o primeiro processo (se houver múltiplos, o resto fica oculto —
+    Tarefas raramente referenciam mais de 1)."""
+    raw = record.get("processo")
+    if not raw or not isinstance(raw, list):
+        return ""
+    pid = str(raw[0]) if raw[0] else ""
+    if not pid:
+        return ""
+    rec = cache_db.get_record(conn, "Processos", pid)
+    if rec is None:
+        return pid
+    return str(rec.get("numero_do_processo") or pid)
+
+
+def _format_dashboard_subtitle(
+    conn: sqlite3.Connection, record: dict[str, Any],
+) -> str:
+    """Round 6 Parte 2: subtítulo do card de Tarefa Urgente:
+    ``'{cliente} · {CNJ}'``, com partes vazias omitidas. Separador é
+    middle-dot (U+00B7) pra ficar visualmente leve."""
+    cliente = _resolve_dashboard_cliente(conn, record)
+    cnj = _resolve_dashboard_cnj(conn, record)
+    parts = [p for p in (cliente, cnj) if p]
+    return " · ".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -440,10 +579,28 @@ class _SyncRow(QFrame):
         )
 
 
-class _TaskRow(QFrame):
-    """Single row in the urgent tasks list. Reusable: build once, ``update()``
-    it on every refresh instead of creating a new instance — keeps the pool
-    of widgets bounded and the dashboard refresh idempotent."""
+# Round 6 Parte 2: largura fixa do tag — comporta o texto mais longo
+# ("AMANHÃ" ≈ 60px @ FS_SM bold). Folga pra padding + bordas + acentos.
+_TAG_FIXED_WIDTH: int = 84
+_TAG_FIXED_HEIGHT: int = 22
+
+
+class _TaskCard(QFrame):
+    """Round 6 Parte 2: card de uma tarefa urgente, 2 linhas de texto +
+    tag colorida à direita.
+
+    Hierarquia clara:
+    - Linha 1 (forte, ``app_fg_strong`` em peso médio): nome da tarefa.
+    - Linha 2 (suave, ``app_fg_muted``): cliente · número CNJ.
+    - Tag (lateral, fundo + cor por grupo de urgência): "VENCIDA" /
+      "HOJE" / "AMANHÃ", largura fixa _TAG_FIXED_WIDTH pra não cortar
+      independente da largura disponível do card.
+
+    Padrão pool persistente: instância criada uma vez em ``_build_ui``,
+    reaproveitada via ``update_card`` em cada refresh — refresh
+    idempotente, sem widget churn (mesmo padrão do legado _TaskRow
+    que substitui).
+    """
 
     def __init__(self, p: Palette, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -455,13 +612,17 @@ class _TaskRow(QFrame):
                 border: 1px solid {p.app_border};
                 border-radius: {RADIUS_MD}px;
             }}
-            """
+            """,
         )
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(SP_3, SP_2, SP_3, SP_2)
-        layout.setSpacing(SP_3)
+        outer = QHBoxLayout(self)
+        outer.setContentsMargins(SP_3, SP_2, SP_3, SP_2)
+        outer.setSpacing(SP_3)
 
-        # Task title — always present.
+        # VBox de texto (título + subtítulo)
+        text_box = QVBoxLayout()
+        text_box.setContentsMargins(0, 0, 0, 0)
+        text_box.setSpacing(2)
+
         self._title_lbl = QLabel("")
         self._title_lbl.setStyleSheet(
             f"""
@@ -473,13 +634,12 @@ class _TaskRow(QFrame):
                 background: transparent;
                 border: none;
             }}
-            """
+            """,
         )
-        layout.addWidget(self._title_lbl, stretch=2)
+        text_box.addWidget(self._title_lbl)
 
-        # Process number — always created; hidden when empty.
-        self._proc_lbl = QLabel("")
-        self._proc_lbl.setStyleSheet(
+        self._sub_lbl = QLabel("")
+        self._sub_lbl.setStyleSheet(
             f"""
             QLabel {{
                 color: {p.app_fg_muted};
@@ -488,61 +648,131 @@ class _TaskRow(QFrame):
                 background: transparent;
                 border: none;
             }}
-            """
+            """,
         )
-        layout.addWidget(self._proc_lbl, stretch=1)
+        text_box.addWidget(self._sub_lbl)
 
-        # Days badge — fixed position; restyled per update.
-        self._badge = QLabel("")
-        self._badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._badge.setFixedSize(52, 22)
-        layout.addWidget(self._badge)
+        outer.addLayout(text_box, stretch=1)
 
-    # Round 3a: apply_theme removido — paleta única LIGHT.
+        # Tag à direita — width fixa pra não truncar.
+        self._tag = QLabel("")
+        self._tag.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._tag.setFixedSize(_TAG_FIXED_WIDTH, _TAG_FIXED_HEIGHT)
+        outer.addWidget(self._tag)
 
-    def update_row(self, title: str, processo: str, days_left: int) -> None:
-        """Repoint this row at a new (title, processo, days_left) tuple."""
+    def update_card(
+        self, title: str, subtitle: str, group_key: str,
+    ) -> None:
+        """Repoint o card pra um novo (título, subtítulo, grupo)."""
         p = self._p
         self._title_lbl.setText(title or "(sem título)")
-        if processo:
-            self._proc_lbl.setText(processo)
-            self._proc_lbl.setVisible(True)
+        if subtitle:
+            self._sub_lbl.setText(subtitle)
+            self._sub_lbl.setVisible(True)
         else:
-            self._proc_lbl.setText("")
-            self._proc_lbl.setVisible(False)
+            self._sub_lbl.setText("")
+            self._sub_lbl.setVisible(False)
 
-        if days_left <= 0:
-            badge_text = "VENCIDO"
-            badge_bg = p.app_danger_bg
-            badge_fg = p.app_danger
-        elif days_left <= 2:
-            badge_text = f"{days_left}d"
-            badge_bg = p.app_danger_bg
-            badge_fg = p.app_danger
-        elif days_left <= 5:
-            badge_text = f"{days_left}d"
-            badge_bg = p.app_warning_bg
-            badge_fg = p.app_warning
-        else:
-            badge_text = f"{days_left}d"
-            badge_bg = p.app_success_bg
-            badge_fg = p.app_success
-
-        self._badge.setText(badge_text)
-        self._badge.setStyleSheet(
+        tag_text = _GROUP_TAG_TEXT.get(group_key, "")
+        if group_key == "vencida":
+            bg, fg = p.app_danger_bg, p.app_danger
+        elif group_key == "hoje":
+            bg, fg = p.app_warning_bg, p.app_warning
+        else:  # amanha + fallback
+            bg, fg = p.app_info_bg, p.app_info
+        self._tag.setText(tag_text)
+        self._tag.setStyleSheet(
             f"""
             QLabel {{
-                color: {badge_fg};
+                color: {fg};
+                background-color: {bg};
                 font-family: "{FONT_BODY}", "Segoe UI", Arial, sans-serif;
                 font-size: {FS_SM}px;
                 font-weight: {FW_BOLD};
-                background-color: {badge_bg};
                 border-radius: 11px;
                 border: none;
                 padding: 0 6px;
             }}
-            """
+            """,
         )
+
+
+class _UrgentGroup(QWidget):
+    """Round 6 Parte 2: container pra um dos 3 grupos de urgência
+    (Vencidas / Hoje / Amanhã). Header com label + contagem, e pool
+    de _TaskCard sempre presente (visibilidade alternada por refresh).
+
+    Grupos com count==0 ainda mostram o header (com " · 0") — predito
+    pelo usuário e não some surpresa quando há 0 tarefas urgentes;
+    cards ficam ocultos."""
+
+    def __init__(
+        self, group_key: str, p: Palette, parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._p = p
+        self._group_key = group_key
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(SP_2)
+
+        # Header (label + contagem)
+        self._header_lbl = QLabel("")
+        self._header_lbl.setStyleSheet(
+            f"""
+            QLabel {{
+                color: {p.app_fg_muted};
+                font-family: "{FONT_BODY}", "Segoe UI", Arial, sans-serif;
+                font-size: {FS_SM}px;
+                font-weight: {FW_BOLD};
+                letter-spacing: 0.06em;
+                background: transparent;
+                border: none;
+                margin-top: {SP_2}px;
+            }}
+            """,
+        )
+        layout.addWidget(self._header_lbl)
+
+        # Pool de cards persistentes.
+        self._cards: list[_TaskCard] = []
+        for _ in range(_MAX_TASKS_PER_GROUP):
+            card = _TaskCard(p)
+            card.setVisible(False)
+            layout.addWidget(card)
+            self._cards.append(card)
+
+        # Estado inicial: 0 tarefas.
+        self.update_group([])
+
+    @property
+    def group_key(self) -> str:
+        return self._group_key
+
+    def update_group(self, formatted_tasks: list[dict[str, str]]) -> None:
+        """Atualiza header + cards.
+
+        ``formatted_tasks`` é lista de dicts ``{title, subtitle}`` —
+        chamador é responsável por resolver cliente/CNJ antes de chamar
+        (mantém o widget puro em UI, sem dependência de ``conn``)."""
+        label = _GROUP_LABELS.get(self._group_key, "")
+        count = len(formatted_tasks)
+        # Round 6 Parte 2: header em uppercase ASCII (dot-separator).
+        self._header_lbl.setText(f"{label.upper()} · {count}")
+
+        capped = formatted_tasks[: _MAX_TASKS_PER_GROUP]
+        for i, card in enumerate(self._cards):
+            if i < len(capped):
+                t = capped[i]
+                card.update_card(
+                    t.get("title", ""),
+                    t.get("subtitle", ""),
+                    self._group_key,
+                )
+                card.setVisible(True)
+            else:
+                card.setVisible(False)
 
 
 # ---------------------------------------------------------------------------
@@ -759,27 +989,20 @@ class DashboardPage(QWidget):
         self._content_layout.addLayout(cards_row)
 
         # ---- Urgent tasks ----
-        # BUG-V2-06: same persistent-widget approach as the sync panel.
-        # Pre-allocate a fixed pool of _TaskRow widgets (matching the cap
-        # in _load_urgent_tasks) plus an "empty" placeholder label, then
-        # only toggle visibility / mutate text on each refresh. No widget
-        # churn, no DeferredDelete dependence.
+        # Round 6 Parte 2: 3 grupos de urgência (Vencidas/Hoje/Amanhã)
+        # com header próprio e pool de cards. Cada grupo é um
+        # _UrgentGroup que mantém seu próprio sub-pool de _TaskCard;
+        # refresh idempotente preservado (BUG-V2-06).
         self._content_layout.addWidget(_section_heading("Tarefas Urgentes", p))
         self._tasks_container = QVBoxLayout()
         self._tasks_container.setSpacing(SP_2)
         self._content_layout.addLayout(self._tasks_container)
 
-        self._urgent_rows: list[_TaskRow] = []
-        for _ in range(_MAX_URGENT_TASKS):
-            row = _TaskRow(p)
-            row.setVisible(False)
-            self._tasks_container.addWidget(row)
-            self._urgent_rows.append(row)
-        self._urgent_empty_lbl = _body_label(
-            "Nenhuma tarefa urgente nos próximos 7 dias.", p, muted=True
-        )
-        self._urgent_empty_lbl.setVisible(False)
-        self._tasks_container.addWidget(self._urgent_empty_lbl)
+        self._urgent_groups: dict[str, _UrgentGroup] = {}
+        for key in ("vencida", "hoje", "amanha"):
+            group = _UrgentGroup(key, p)
+            self._tasks_container.addWidget(group)
+            self._urgent_groups[key] = group
         # Sentinel for "could not load tasks" — surfaced from cache errors.
         self._urgent_error_lbl = _body_label("", p, muted=True)
         self._urgent_error_lbl.setVisible(False)
@@ -990,59 +1213,51 @@ class DashboardPage(QWidget):
             self._last_sync_lbl.setText(text)
 
     def _load_urgent_tasks(self) -> None:
-        # BUG-V2-06: refresh by mutating the persistent _TaskRow pool built
-        # in _build_ui — toggle visibility, never create widgets here.
+        """Round 6 Parte 2: agrupa Tarefas em Vencidas/Hoje/Amanhã e
+        renderiza cada grupo com header + cards.
+
+        Usa as pure functions ``_group_urgent_tasks`` e
+        ``_format_dashboard_subtitle`` pra que toda a lógica de
+        classificação + resolução cliente/CNJ seja testável headless.
+        Refresh idempotente preservado — pools de _TaskCard dentro de
+        cada _UrgentGroup são reaproveitados (BUG-V2-06)."""
         try:
             tarefas = cache_db.get_all_records(self._conn, "Tarefas")
         except Exception:  # noqa: BLE001
             self._show_urgent_error("Erro ao carregar tarefas.")
             return
 
-        urgent: list[tuple[int, dict[str, Any]]] = []
-        for r in tarefas:
-            prazo_str = str(r.get("prazo_fatal", "") or r.get("prazo", "") or "")
-            days = self._days_remaining(prazo_str)
-            if days is not None and days <= 7:
-                urgent.append((days, r))
-        urgent.sort(key=lambda x: x[0])
-
         # Hide the error label whenever we got here without raising.
         self._urgent_error_lbl.setVisible(False)
+        for group in self._urgent_groups.values():
+            group.setVisible(True)
 
-        if not urgent:
-            for row in self._urgent_rows:
-                row.setVisible(False)
-            self._urgent_empty_lbl.setVisible(True)
-            return
-
-        self._urgent_empty_lbl.setVisible(False)
-        capped = urgent[:_MAX_URGENT_TASKS]
-        for i, row in enumerate(self._urgent_rows):
-            if i < len(capped):
-                days, record = capped[i]
-                # Fase 3: fallbacks legados removidos — slugs dinâmicos são
-                # fonte única após convergência do cache. Lê primeiro o slug
-                # de Tarefas (caminho mais comum aqui), depois Processos.
-                title = str(
-                    record.get("tarefa")             # Tarefas
-                    or record.get("numero_do_processo")  # Processos
-                    or "",
-                )
-                processo = str(
-                    record.get("processo")            # Tarefas → relation com Processo
-                    or record.get("numero_do_processo")  # Processos direto
-                    or "",
-                )
-                row.update_row(title, processo, days)
-                row.setVisible(True)
-            else:
-                row.setVisible(False)
+        groups = _group_urgent_tasks(tarefas, date.today())
+        for key, group_widget in self._urgent_groups.items():
+            records = groups.get(key, [])
+            # Ordena por prazo asc dentro do grupo (mais antigo no
+            # topo entre Vencidas; desempate por nome).
+            records.sort(key=lambda r: (
+                str(r.get("prazo_fatal", "") or ""),
+                str(r.get("tarefa", "") or ""),
+            ))
+            formatted = [
+                {
+                    "title": str(r.get("tarefa", "") or ""),
+                    "subtitle": _format_dashboard_subtitle(self._conn, r),
+                }
+                for r in records
+            ]
+            group_widget.update_group(formatted)
 
     def _show_urgent_error(self, msg: str) -> None:
-        """Surface a one-line error in the urgent-tasks panel."""
-        for row in self._urgent_rows:
-            row.setVisible(False)
-        self._urgent_empty_lbl.setVisible(False)
+        """Surface a one-line error in the urgent-tasks panel.
+
+        Round 6 Parte 2: oculta os 3 grupos pra que a mensagem de erro
+        ocupe sozinha a área (em vez de aparecer abaixo de headers
+        com count==0)."""
+        for group in self._urgent_groups.values():
+            group.setVisible(False)
         self._urgent_error_lbl.setText(msg)
         self._urgent_error_lbl.setVisible(True)
 
