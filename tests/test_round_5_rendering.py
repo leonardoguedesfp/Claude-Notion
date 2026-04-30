@@ -180,7 +180,11 @@ def test_R5_format_for_excel_url_empty_returns_indisponivel() -> None:
 
 def test_R5_xlsx_url_cell_has_hyperlink_when_value_present(tmp_path) -> None:
     """Smoke ponta-a-ponta: célula de url com URL tem cell.hyperlink
-    apontando pro URL bruto, e display value 'link'."""
+    apontando pro URL bruto, e display value 'link'.
+
+    Usa base sintética ``Synth`` (fora de DEFAULT_LAYOUTS) pra que a
+    ordem seja schema-driven e a célula de Link externo fique em col 2.
+    """
     from notion_rpadv.services.snapshot_exporter import export_snapshot
     from openpyxl import load_workbook
 
@@ -199,7 +203,7 @@ def test_R5_xlsx_url_cell_has_hyperlink_when_value_present(tmp_path) -> None:
     }]
     client = MagicMock()
     client.query_all.return_value = pages
-    schemas = {"Processos": {"properties": {
+    schemas = {"Synth": {"properties": {
         "nome": {
             "notion_name": "Nome", "tipo": "title", "label": "Nome",
             "default_order": 1, "default_visible": True, "opcoes": [],
@@ -214,12 +218,12 @@ def test_R5_xlsx_url_cell_has_hyperlink_when_value_present(tmp_path) -> None:
     reg._schemas = schemas
     dest = str(tmp_path / "out.xlsx")
     export_snapshot(
-        client=client, bases=["Processos"], dest_path=dest,
-        schema_registry=reg, data_sources={"Processos": "ds-p"},
+        client=client, bases=["Synth"], dest_path=dest,
+        schema_registry=reg, data_sources={"Synth": "ds-s"},
         notion_users={},
     )
     wb = load_workbook(dest)
-    ws = wb["Processos"]
+    ws = wb["Synth"]
     cell = ws.cell(row=2, column=2)  # Link externo é a 2ª coluna
     assert cell.value == "link"
     assert cell.hyperlink is not None
@@ -247,7 +251,7 @@ def test_R5_xlsx_url_cell_indisponivel_has_no_hyperlink(tmp_path) -> None:
     }]
     client = MagicMock()
     client.query_all.return_value = pages
-    schemas = {"Processos": {"properties": {
+    schemas = {"Synth": {"properties": {
         "nome": {
             "notion_name": "Nome", "tipo": "title", "label": "Nome",
             "default_order": 1, "default_visible": True, "opcoes": [],
@@ -262,12 +266,12 @@ def test_R5_xlsx_url_cell_indisponivel_has_no_hyperlink(tmp_path) -> None:
     reg._schemas = schemas
     dest = str(tmp_path / "out.xlsx")
     export_snapshot(
-        client=client, bases=["Processos"], dest_path=dest,
-        schema_registry=reg, data_sources={"Processos": "ds-p"},
+        client=client, bases=["Synth"], dest_path=dest,
+        schema_registry=reg, data_sources={"Synth": "ds-s"},
         notion_users={},
     )
     wb = load_workbook(dest)
-    ws = wb["Processos"]
+    ws = wb["Synth"]
     cell = ws.cell(row=2, column=2)
     assert cell.value == "indisponível"
     assert cell.hyperlink is None
@@ -355,3 +359,153 @@ def test_R5_double_click_on_empty_url_cell_does_not_open_browser() -> None:
         BaseTablePage._on_table_double_clicked(page, fake_index)
 
     assert not mock_open.called
+
+
+# ---------------------------------------------------------------------------
+# Item 5 — xlsx escreve colunas na ordem do layout (visíveis, depois ocultas)
+# ---------------------------------------------------------------------------
+
+
+def _schema_with_props(props: list[tuple[str, str, str]]) -> dict:
+    """Helper local: schema com (slug, notion_name, tipo) por entrada,
+    preservando ordem de inserção como default_order."""
+    props_dict = {}
+    for order, (slug, notion_name, tipo) in enumerate(props, start=1):
+        props_dict[slug] = {
+            "notion_name": notion_name,
+            "tipo": tipo,
+            "label": notion_name,
+            "default_order": order,
+            "default_visible": True,
+            "opcoes": [],
+        }
+    return {"properties": props_dict}
+
+
+def test_R5_xlsx_columns_in_layout_order_visible_first(tmp_path) -> None:
+    """Round 5 item 5: xlsx escreve colunas na ordem do layout (visíveis
+    primeiro na ordem editorial), depois as omitidas (na ordem do schema).
+
+    Catalogo é a base mais simples pra testar isso — layout tem 3
+    visíveis (nome, categoria, observacoes) e o schema real tem mais 4
+    (prazo, tarefas, criado_em, atualizado_em) que aparecem ocultas
+    no app mas EXPORTAM TODAS no xlsx.
+    """
+    from notion_rpadv.services.snapshot_exporter import export_snapshot
+    from openpyxl import load_workbook
+
+    client = MagicMock()
+    client.query_all.return_value = []
+    # Schema sintético de Catalogo: ordem da API embaralhada de propósito
+    # (categoria antes de nome, prazo no meio) pra provar que o exporter
+    # reordena conforme o layout, não conforme o schema.
+    schemas = {"Catalogo": _schema_with_props([
+        ("categoria",     "Categoria",     "select"),
+        ("prazo",         "Prazo",         "number"),
+        ("nome",          "Nome",          "title"),
+        ("tarefas",       "Tarefas",       "relation"),
+        ("observacoes",   "Observações",   "rich_text"),
+        ("criado_em",     "Criado em",     "created_time"),
+        ("atualizado_em", "Atualizado em", "last_edited_time"),
+    ])}
+    reg = MagicMock()
+    reg._schemas = schemas
+    dest = str(tmp_path / "out.xlsx")
+    export_snapshot(
+        client=client, bases=["Catalogo"], dest_path=dest,
+        schema_registry=reg, data_sources={"Catalogo": "ds-cat"},
+        notion_users={},
+    )
+    wb = load_workbook(dest)
+    ws = wb["Catalogo"]
+    headers = [
+        ws.cell(row=1, column=c).value for c in range(1, 8)
+    ]
+    # Visíveis no layout (Catalogo): nome, categoria, observacoes
+    # Ocultas (resto do schema na ordem da API):
+    #   categoria (já visível, skip), prazo, tarefas, criado_em,
+    #   atualizado_em → excluindo as visíveis: prazo, tarefas,
+    #   criado_em, atualizado_em.
+    assert headers[:3] == ["Nome", "Categoria", "Observações"]
+    # Próximas devem ser as ocultas, na ordem do schema (que aqui foi
+    # embaralhado: prazo aparece antes de tarefas no schema).
+    assert headers[3:] == [
+        "Prazo", "Tarefas", "Criado em", "Atualizado em",
+    ]
+
+
+def test_R5_xlsx_columns_for_unknown_base_falls_back_to_schema_order(
+    tmp_path,
+) -> None:
+    """Bases não cobertas pelo DEFAULT_LAYOUTS preservam a ordem do
+    schema (compatibilidade com bases novas adicionadas sem layout
+    editorial)."""
+    from notion_rpadv.services.snapshot_exporter import export_snapshot
+    from openpyxl import load_workbook
+
+    client = MagicMock()
+    client.query_all.return_value = []
+    schemas = {"BaseSemLayout": _schema_with_props([
+        ("alpha",   "Alpha",   "title"),
+        ("delta",   "Delta",   "select"),
+        ("bravo",   "Bravo",   "number"),
+        ("charlie", "Charlie", "rich_text"),
+    ])}
+    reg = MagicMock()
+    reg._schemas = schemas
+    dest = str(tmp_path / "out.xlsx")
+    export_snapshot(
+        client=client, bases=["BaseSemLayout"], dest_path=dest,
+        schema_registry=reg, data_sources={"BaseSemLayout": "ds-x"},
+        notion_users={},
+    )
+    wb = load_workbook(dest)
+    ws = wb["BaseSemLayout"]
+    headers = [ws.cell(row=1, column=c).value for c in range(1, 5)]
+    # Ordem da API preservada (sem layout pra reordenar).
+    assert headers == ["Alpha", "Delta", "Bravo", "Charlie"]
+
+
+def test_R5_xlsx_exports_all_schema_columns_even_when_reordered(
+    tmp_path,
+) -> None:
+    """Round 5 item 5 garantia: ainda que reordenado, NENHUMA coluna do
+    schema é perdida no xlsx (ordem muda, total não)."""
+    from notion_rpadv.services.snapshot_exporter import export_snapshot
+    from openpyxl import load_workbook
+
+    client = MagicMock()
+    client.query_all.return_value = []
+    # Schema com 5 props; layout de Tarefas tem 10 slugs visíveis (mas
+    # só responsavel está nesta intersecção mínima).
+    schemas = {"Tarefas": _schema_with_props([
+        ("status",       "Status",      "select"),
+        ("descricao",    "Descrição",   "rich_text"),
+        ("tarefa",       "Tarefa",      "title"),
+        ("responsavel",  "Responsável", "people"),
+        ("criado_em",    "Criado em",   "created_time"),
+    ])}
+    reg = MagicMock()
+    reg._schemas = schemas
+    dest = str(tmp_path / "out.xlsx")
+    export_snapshot(
+        client=client, bases=["Tarefas"], dest_path=dest,
+        schema_registry=reg, data_sources={"Tarefas": "ds-t"},
+        notion_users={},
+    )
+    wb = load_workbook(dest)
+    ws = wb["Tarefas"]
+    # Coleta todos os headers até a primeira célula vazia.
+    headers: list = []
+    c = 1
+    while True:
+        v = ws.cell(row=1, column=c).value
+        if v is None:
+            break
+        headers.append(v)
+        c += 1
+    # Sem perdas: todas as 5 props do schema presentes.
+    assert set(headers) == {
+        "Status", "Descrição", "Tarefa", "Responsável", "Criado em",
+    }
+    assert len(headers) == 5

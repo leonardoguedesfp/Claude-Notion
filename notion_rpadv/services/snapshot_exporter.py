@@ -182,15 +182,30 @@ def _write_base_sheet(
     """Escreve uma aba com os dados de ``base``. Cabeçalho em negrito,
     1 linha por página, TODAS as propriedades do schema (ignora
     visibilidade do picker e filtros). Retorna miss_count de relations.
+
+    Round 5 item 5: ordem das colunas segue o layout-padrão (visíveis
+    primeiro na ordem editorial), depois as omitidas (na ordem da API).
+    Bases não cobertas por DEFAULT_LAYOUTS caem na ordem do schema
+    (comportamento legado preservado).
     """
     from notion_bulk_edit.encoders import decode_value
+    from notion_rpadv.layout_defaults import default_visible_slugs
 
     parsed = schema_registry._schemas.get(base, {})  # noqa: SLF001
     properties = parsed.get("properties", {})
+
+    # Round 5 item 5: ordem editorial primeiro, depois resto do schema.
+    layout_slugs = default_visible_slugs(base)
+    visible_in_schema = [s for s in layout_slugs if s in properties]
+    visible_set = set(visible_in_schema)
+    hidden_in_schema = [s for s in properties if s not in visible_set]
+    ordered_slugs = visible_in_schema + hidden_in_schema
+
     headers: list[str] = []
     types: list[str] = []
-    for _slug, prop_dict in properties.items():
-        headers.append(prop_dict.get("notion_name") or _slug)
+    for slug in ordered_slugs:
+        prop_dict = properties[slug]
+        headers.append(prop_dict.get("notion_name") or slug)
         types.append(prop_dict.get("tipo", "rich_text"))
 
     bold = Font(bold=True)

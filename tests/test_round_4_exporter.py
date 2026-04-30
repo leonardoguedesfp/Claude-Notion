@@ -257,7 +257,10 @@ def test_R4_F4_export_snapshot_header_row_uses_notion_names(
 
     client = MagicMock()
     client.query_all.return_value = []
-    schemas = {"Clientes": _make_schema([
+    # Round 5: usa base sintética não coberta pelo DEFAULT_LAYOUTS pra que
+    # a ordem das colunas seja a do schema (caso fallback). O teste
+    # ordering-aware via layout fica em test_round_5_rendering.
+    schemas = {"Synth": _make_schema([
         ("Nome",    "title"),
         ("E-mail",  "email"),
         ("Telefone", "phone_number"),
@@ -265,12 +268,12 @@ def test_R4_F4_export_snapshot_header_row_uses_notion_names(
     reg = _fake_schema_registry(schemas)
     dest = str(tmp_path / "out.xlsx")
     export_snapshot(
-        client=client, bases=["Clientes"], dest_path=dest,
-        schema_registry=reg, data_sources={"Clientes": "ds-c"},
+        client=client, bases=["Synth"], dest_path=dest,
+        schema_registry=reg, data_sources={"Synth": "ds-s"},
         notion_users={},
     )
     wb = load_workbook(dest)
-    ws = wb["Clientes"]
+    ws = wb["Synth"]
     headers = [ws.cell(row=1, column=c).value for c in range(1, 4)]
     assert headers == ["Nome", "E-mail", "Telefone"]
     # Headers em negrito
@@ -310,7 +313,9 @@ def test_R4_F4_export_snapshot_writes_data_rows_with_typed_values(
     ]
     client = MagicMock()
     client.query_all.return_value = pages
-    schemas = {"Clientes": _make_schema([
+    # Round 5: base sintética fora de DEFAULT_LAYOUTS preserva ordem do
+    # schema (relevante pras assertivas posicionais abaixo).
+    schemas = {"Synth": _make_schema([
         ("Nome",                  "title"),
         ("Adiantamento",          "checkbox"),
         ("Data de aposentadoria", "date"),
@@ -320,12 +325,12 @@ def test_R4_F4_export_snapshot_writes_data_rows_with_typed_values(
     reg = _fake_schema_registry(schemas)
     dest = str(tmp_path / "out.xlsx")
     export_snapshot(
-        client=client, bases=["Clientes"], dest_path=dest,
-        schema_registry=reg, data_sources={"Clientes": "ds-c"},
+        client=client, bases=["Synth"], dest_path=dest,
+        schema_registry=reg, data_sources={"Synth": "ds-s"},
         notion_users={},
     )
     wb = load_workbook(dest)
-    ws = wb["Clientes"]
+    ws = wb["Synth"]
     assert ws.cell(row=2, column=1).value == "Maria"
     assert ws.cell(row=2, column=2).value == "Sim"  # checkbox True
     # openpyxl coerce datetime.date pra datetime.datetime na leitura;
@@ -371,20 +376,25 @@ def test_R4_F4_export_snapshot_resolves_relation_titles_in_xlsx(
         return []
     client = MagicMock()
     client.query_all.side_effect = query_all
+    # Round 5: bases sintéticas fora do DEFAULT_LAYOUTS preservam ordem
+    # do schema. SynthClientes pra resolver relation; SynthTarefas tem
+    # (Nome, Cliente) na ordem do schema.
     schemas = {
-        "Clientes": _make_schema([("Nome", "title")]),
-        "Tarefas":  _make_schema([("Nome", "title"), ("Cliente", "relation")]),
+        "SynthClientes": _make_schema([("Nome", "title")]),
+        "SynthTarefas":  _make_schema([
+            ("Nome", "title"), ("Cliente", "relation"),
+        ]),
     }
     reg = _fake_schema_registry(schemas)
     dest = str(tmp_path / "out.xlsx")
     result = export_snapshot(
-        client=client, bases=["Clientes", "Tarefas"],
+        client=client, bases=["SynthClientes", "SynthTarefas"],
         dest_path=dest, schema_registry=reg,
-        data_sources={"Clientes": "ds-c", "Tarefas": "ds-t"},
+        data_sources={"SynthClientes": "ds-c", "SynthTarefas": "ds-t"},
         notion_users={},
     )
     wb = load_workbook(dest)
-    ws = wb["Tarefas"]
+    ws = wb["SynthTarefas"]
     # col 2 = Cliente (relation). Resolvido pra título de cli-1.
     assert ws.cell(row=2, column=2).value == "João"
     assert result.relation_misses == 0
