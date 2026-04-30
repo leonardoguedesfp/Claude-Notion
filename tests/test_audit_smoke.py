@@ -63,7 +63,7 @@ def test_AUD_01_cache_record_counts() -> None:
     ).fetchall()}
     assert counts.get("Processos") == 1108
     assert counts.get("Clientes") == 1072
-    assert counts.get("Catalogo") == 37
+    assert counts.get("Catalogo") == 68
     assert counts.get("Tarefas", 0) >= 0
 
 
