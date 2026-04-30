@@ -126,13 +126,25 @@ _COLOR_ROW_EVEN = QColor("#FFFFFF")
 _EMPTY_PLACEHOLDER: str = "—"  # §3.3 em-dash for null/empty cells
 
 
+_URL_LINK_TEXT: str = "link"
+_URL_EMPTY_TEXT: str = "indisponível"
+
+
 def _display_value(spec: PropSpec, raw: Any) -> str:
     """Convert a raw Python value to a human-readable string for DisplayRole.
 
     §3.3: null/empty cells render as a soft em-dash (rendered in
     ``app_fg_subtle`` by the model's ForegroundRole), not as blank space —
     so users can tell "no value" apart from "0" or "False".
+
+    Round 5 item 2: url tipo tem rendering próprio — "link" quando há
+    URL, "indisponível" quando vazio. Vem ANTES do em-dash placeholder
+    pra capturar o caso None/empty.
     """
+    if spec.tipo == "url":
+        if isinstance(raw, str) and raw.strip():
+            return _URL_LINK_TEXT
+        return _URL_EMPTY_TEXT
     if raw is None:
         return _EMPTY_PLACEHOLDER
     # BUG-V4: empty list should render as the placeholder, not '[]'
@@ -464,6 +476,13 @@ class BaseTableModel(QAbstractTableModel):
             display = self.data(index, Qt.ItemDataRole.DisplayRole)
             if display == _EMPTY_PLACEHOLDER:
                 return QBrush(QColor(LIGHT.app_fg_subtle))
+            # Round 5 item 2: url cells — "link" em accent (chama atenção),
+            # "indisponível" em muted (parece desabilitado).
+            if spec is not None and spec.tipo == "url":
+                if display == _URL_LINK_TEXT:
+                    return QBrush(QColor(LIGHT.app_accent))
+                if display == _URL_EMPTY_TEXT:
+                    return QBrush(QColor(LIGHT.app_fg_subtle))
             return None
 
         if role == Qt.ItemDataRole.FontRole:
@@ -471,6 +490,14 @@ class BaseTableModel(QAbstractTableModel):
                 font = QFont("Courier New", 9)
                 font.setStyleHint(QFont.StyleHint.Monospace)
                 return font
+            # Round 5 item 2: url "link" cells em underline pra parecer
+            # hyperlink. "indisponível" fica sem underline (não é clicável).
+            if spec is not None and spec.tipo == "url":
+                display = self.data(index, Qt.ItemDataRole.DisplayRole)
+                if display == _URL_LINK_TEXT:
+                    font = QFont()
+                    font.setUnderline(True)
+                    return font
             return None
 
         if role == Qt.ItemDataRole.TextAlignmentRole:

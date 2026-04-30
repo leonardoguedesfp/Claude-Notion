@@ -982,7 +982,11 @@ class BaseTablePage(QWidget):
     def _on_table_double_clicked(self, index: Any) -> None:
         """§3.2: navigate to the related record when a relation cell is
         double-clicked. The cell stores list[page_id] in EditRole; we pick
-        the first id and emit (target_base, page_id) for MainWindow."""
+        the first id and emit (target_base, page_id) for MainWindow.
+
+        Round 5 item 2: url cells também respondem ao double-click —
+        abre o URL no browser nativo via QDesktopServices.
+        """
         from notion_bulk_edit.schemas import get_prop
         if not index.isValid():
             return
@@ -992,13 +996,26 @@ class BaseTablePage(QWidget):
         if col >= len(cols):
             return
         spec = get_prop(self._base, cols[col])
-        if spec is None or spec.tipo != "relation" or not spec.target_base:
+        if spec is None:
             return
-        # Navigate to source-model index for the raw page_ids list.
+        # Navigate to source-model index for the raw value.
         src_index = self._proxy.mapToSource(index) if hasattr(self._proxy, "mapToSource") else index
-        raw = self._model.data(src_index, Qt.ItemDataRole.EditRole)
-        if isinstance(raw, list) and raw:
-            self.relation_clicked.emit(spec.target_base, str(raw[0]))
+
+        if spec.tipo == "relation" and spec.target_base:
+            raw = self._model.data(src_index, Qt.ItemDataRole.EditRole)
+            if isinstance(raw, list) and raw:
+                self.relation_clicked.emit(spec.target_base, str(raw[0]))
+            return
+
+        # Round 5 item 2: url cells — abre URL no browser. Cells vazias
+        # ("indisponível") são no-op silencioso.
+        if spec.tipo == "url":
+            url = self._model.data(src_index, Qt.ItemDataRole.EditRole)
+            if isinstance(url, str) and url.strip():
+                from PySide6.QtCore import QUrl
+                from PySide6.QtGui import QDesktopServices
+                QDesktopServices.openUrl(QUrl(url))
+            return
 
     def _on_dirty_changed(self, has_dirty: bool) -> None:
         count = len(self._model.get_dirty_edits())

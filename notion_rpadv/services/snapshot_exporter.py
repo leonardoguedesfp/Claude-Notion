@@ -99,7 +99,17 @@ def _format_for_excel(
 
     None → None (célula vazia). Listas viram strings comma-separated.
     Datas viram ``datetime.date``. Checkbox vira "Sim" ou None.
+
+    Round 5 item 2: url retorna "link" quando há URL ou "indisponível"
+    quando vazio (placeholder informativo, não None). O caller
+    (_write_base_sheet) aplica o hyperlink real na célula via
+    ``cell.hyperlink``.
     """
+    # Round 5 item 2: url tem placeholder informativo mesmo vazio.
+    if tipo == "url":
+        if isinstance(value, str) and value.strip():
+            return "link", 0
+        return "indisponível", 0
     if value is None:
         return None, 0
 
@@ -206,6 +216,14 @@ def _write_base_sheet(
                     cell_value, _dt.datetime,
                 ):
                     cell.number_format = "yyyy-mm-dd"
+                # Round 5 item 2: url "link" vira hyperlink real apontando
+                # pro URL bruto; "indisponível" fica como texto plano sem
+                # estilo de link (parecido com o tratamento na UI).
+                if tipo == "url" and cell_value == "link" and isinstance(
+                    decoded, str,
+                ):
+                    cell.hyperlink = decoded
+                    cell.font = Font(underline="single", color="0563C1")
         if on_progress is not None and (row_idx - 2) % 50 == 0:
             on_progress(base, PHASE_WRITE, row_idx - 1, total_pages)
     if on_progress is not None:
