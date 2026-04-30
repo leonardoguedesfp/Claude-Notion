@@ -267,19 +267,112 @@ class SchemaRegistry:
         Sem cache, hot paths em QTableView (paint, data, flags) chamavam
         este método ~132k vezes em 102s de uso real, reconstruindo ~37
         PropSpecs por chamada (4.65M no total).
+
+        Round 6 Parte 1: enriquece specs de rollup com ``target_base``
+        via 2-hop lookup quando o rollup aponta pra um campo de relation
+        na base relacionada (ex: Tarefas.Cliente roll up Processos.Clientes
+        → target_base="Clientes"). Sem isso, display mostra UUIDs em
+        rollup-de-relation. A enrichment fica aqui (não em
+        _dict_to_propspec) porque precisa acesso aos schemas de OUTRAS
+        bases — informação que só o registry conhece.
         """
+        from dataclasses import replace
+
         cached = self._propspec_cache.get(base)
         if cached is not None:
             return cached
         parsed = self._schemas.get(base)
         if parsed is None:
             return {}
-        result = {
-            key: _dict_to_propspec(prop_dict)
-            for key, prop_dict in parsed.get("properties", {}).items()
-        }
+        result: dict[str, PropSpec] = {}
+        for key, prop_dict in parsed.get("properties", {}).items():
+            spec = _dict_to_propspec(prop_dict)
+            # Round 6 Parte 1: rollup-de-relation ganha target_base.
+            if spec.tipo == "rollup" and not spec.target_base:
+                rollup_target = self._resolve_rollup_target_base(
+                    base, prop_dict,
+                )
+                if rollup_target:
+                    spec = replace(spec, target_base=rollup_target)
+            result[key] = spec
         self._propspec_cache[base] = result
         return result
+
+    def _resolve_rollup_target_base(
+        self, base: str, prop_dict: dict[str, Any],
+    ) -> str:
+        """Round 6 Parte 1: 2-hop lookup pra rollup-de-relation.
+
+        ``rollup_meta`` (capturado pelo schema_parser) tem
+        ``relation_property_name`` (ex: "Processo") e
+        ``rollup_property_name`` (ex: "Clientes"). Sequência:
+
+        1. Hop 1 — encontra a propriedade ``relation`` na base atual
+           cujo notion_name == relation_property_name. Pega o
+           target_data_source_id dela.
+        2. Reverse lookup ``DATA_SOURCES`` pra obter o base_label
+           intermediário (ex: "Processos").
+        3. Hop 2 — encontra a propriedade no schema do intermediário
+           cujo notion_name == rollup_property_name. Se for tipo
+           "relation", pega o target_data_source_id dela.
+        4. Reverse lookup pra obter o target_base final (ex: "Clientes").
+
+        Retorna ``""`` quando qualquer hop falha — rollup não é de
+        relation, ou schemas necessários não estão carregados, ou nomes
+        não casam (defesa contra schemas com renomeação parcial).
+        """
+        from notion_bulk_edit.config import DATA_SOURCES
+
+        rollup_meta = prop_dict.get("rollup_meta") or {}
+        rel_name = rollup_meta.get("relation_property_name", "")
+        rollup_name = rollup_meta.get("rollup_property_name", "")
+        if not (rel_name and rollup_name):
+            return ""
+
+        # Hop 1: relation na base atual
+        current_props = self._schemas.get(base, {}).get("properties", {})
+        intermediate_dsid = ""
+        for prop in current_props.values():
+            if (
+                prop.get("notion_name") == rel_name
+                and prop.get("tipo") == "relation"
+            ):
+                intermediate_dsid = prop.get(
+                    "target_data_source_id", "",
+                ) or ""
+                break
+        if not intermediate_dsid:
+            return ""
+
+        # Reverse lookup: dsid → base_label intermediário
+        intermediate_base = ""
+        for label, dsid in DATA_SOURCES.items():
+            if dsid == intermediate_dsid:
+                intermediate_base = label
+                break
+        if not intermediate_base:
+            return ""
+
+        # Hop 2: rollup_property_name na base intermediária
+        intermediate_props = self._schemas.get(
+            intermediate_base, {},
+        ).get("properties", {})
+        final_dsid = ""
+        for prop in intermediate_props.values():
+            if (
+                prop.get("notion_name") == rollup_name
+                and prop.get("tipo") == "relation"
+            ):
+                final_dsid = prop.get("target_data_source_id", "") or ""
+                break
+        if not final_dsid:
+            return ""
+
+        # Reverse lookup pro target_base final
+        for label, dsid in DATA_SOURCES.items():
+            if dsid == final_dsid:
+                return label
+        return ""
 
     def get_prop(self, base: str, key: str) -> PropSpec | None:
         """Lookup por base + key. None se base ou key não existe.

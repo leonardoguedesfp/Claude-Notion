@@ -186,6 +186,20 @@ def parse_to_schema_json(raw: dict[str, Any], base_label: str) -> dict[str, Any]
         if tipo == "relation":
             rel_block = block.get("relation", {}) or {}
             target_data_source_id = rel_block.get("data_source_id", "") or ""
+        # Round 6 Parte 1: captura metadata de rollup. O registry usa
+        # ``relation_property_name`` + ``rollup_property_name`` pra fazer
+        # a resolução 2-hop e descobrir o target_base de rollups que
+        # apontam pra um campo relation na base relacionada (ex:
+        # Tarefas.Cliente roll up Processos.Clientes → Clientes).
+        # Sem isso o display mostra UUIDs em vez de nomes.
+        rollup_meta: dict[str, str] = {}
+        if tipo == "rollup":
+            rb = block.get("rollup", {}) or {}
+            rollup_meta = {
+                "relation_property_name": rb.get("relation_property_name") or "",
+                "rollup_property_name":   rb.get("rollup_property_name") or "",
+                "function":               rb.get("function") or "",
+            }
         return {
             "notion_name": notion_name,
             "tipo": tipo,
@@ -196,6 +210,7 @@ def parse_to_schema_json(raw: dict[str, Any], base_label: str) -> dict[str, Any]
             "default_visible": visible,
             "default_order": order,
             "target_data_source_id": target_data_source_id,
+            "rollup_meta": rollup_meta,
         }
 
     # Title primeiro (se existe)

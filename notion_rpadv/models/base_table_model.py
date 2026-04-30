@@ -117,6 +117,53 @@ def _resolve_relation(conn: sqlite3.Connection, page_ids: list, target_base: str
     extra = f" +{len(page_ids) - 3}" if len(page_ids) > 3 else ""
     return ", ".join(names) + extra
 
+
+def _flatten_rollup_uuids(raw: Any) -> list[str]:
+    """Round 6 Parte 1: rollup que pulla um campo relation chega como
+    nested ``[["uuid1"], ["uuid2"]]`` (cada item do array é um bloco
+    relation com sua própria lista). Achata pra ``["uuid1", "uuid2"]``.
+
+    Items strings (rollup que pulla title/text) também são preservados.
+    Retorna lista vazia quando não há UUIDs (rollup vazio ou raw None)."""
+    if not isinstance(raw, list):
+        return []
+    flat: list[str] = []
+    for item in raw:
+        if isinstance(item, list):
+            flat.extend(str(x) for x in item if x)
+        elif isinstance(item, str) and item:
+            flat.append(item)
+    return flat
+
+
+def _resolve_rollup_relation(
+    conn: sqlite3.Connection, page_ids: list[str], target_base: str,
+) -> str:
+    """Round 6 Parte 1: igual a ``_resolve_relation`` mas fallback pra
+    UUID-cru em vez de ``"—"`` quando a página não está no cache local.
+
+    Rollups frequentemente apontam pra bases que ainda não sincronizaram
+    (ex: Tarefas.Cliente roll up Processos.Clientes — Clientes pode estar
+    parcialmente cacheado). UUID-cru preserva diagnóstico e permite que
+    o usuário identifique o registro mesmo offline.
+
+    Cap de 5 entradas (vs 3 do relation) porque rollups tipicamente
+    agregam mais itens — Tarefas com múltiplos Processos/Clientes.
+    """
+    if not page_ids or not target_base:
+        return ", ".join(str(p) for p in page_ids if p)
+    title_key = _TITLE_KEY_BY_BASE.get(target_base, "nome")
+    names: list[str] = []
+    for pid in page_ids[:5]:
+        rec = cache_db.get_record(conn, target_base, str(pid))
+        if rec is None:
+            names.append(str(pid))
+        else:
+            title = rec.get(title_key)
+            names.append(str(title) if title else str(pid))
+    extra = f" +{len(page_ids) - 5}" if len(page_ids) > 5 else ""
+    return ", ".join(names) + extra
+
 # Background colours (ARGB strings, styled via the app palette or hard-coded).
 _COLOR_DIRTY = QColor("#FFF9C4")       # pale yellow for dirty cells
 _COLOR_ROW_ALT = QColor("#F5F5F5")    # alternating row tint
@@ -197,7 +244,13 @@ def _display_value(spec: PropSpec, raw: Any) -> str:
             return ", ".join(str(v) for v in raw)
         return str(raw)
     # BUG-EXEC-08: rollup arrays render as comma-joined values, not Python repr
+    # Round 6 Parte 1: nested rollup-de-relation ([[uuid1], [uuid2]]) é
+    # achatado antes do join. Resolução por nome acontece em ``data()``
+    # (precisa de self._conn) quando ``spec.target_base`` está definido.
     if tipo == "rollup":
+        flat = _flatten_rollup_uuids(raw)
+        if flat:
+            return ", ".join(flat)
         if isinstance(raw, list):
             return ", ".join(str(v) for v in raw if v is not None)
         return str(raw)
@@ -450,6 +503,24 @@ class BaseTableModel(QAbstractTableModel):
                 # BUG-V3: for relation columns, resolve page_ids to readable names
                 if spec.tipo == "relation" and spec.target_base and isinstance(raw, list):
                     result = _resolve_relation(self._conn, raw, spec.target_base)
+                # Round 6 Parte 1: rollup-de-relation (ex: Tarefas.Cliente
+                # roll up Processos.Clientes) tem target_base setado pelo
+                # registry via 2-hop lookup. Achata o nested array e
+                # resolve UUIDs pra títulos via cache local. Fallback pra
+                # UUID-cru quando página não cacheada (target ainda não
+                # syncado, ou registro deletado).
+                elif (
+                    spec.tipo == "rollup"
+                    and spec.target_base
+                    and isinstance(raw, list)
+                ):
+                    flat = _flatten_rollup_uuids(raw)
+                    if flat:
+                        result = _resolve_rollup_relation(
+                            self._conn, flat, spec.target_base,
+                        )
+                    else:
+                        result = _display_value(spec, raw)
                 else:
                     result = _display_value(spec, raw)
             else:

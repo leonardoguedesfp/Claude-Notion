@@ -160,6 +160,32 @@ def _format_for_excel(
                 titles.append(title)
         return ", ".join(titles), misses
 
+    # Round 6 Parte 1: rollup-de-relation chega como nested
+    # ``[["uuid1"], ["uuid2"]]`` (cada item do rollup array é um bloco
+    # relation com sua própria lista). Achata + resolve UUIDs via
+    # title_cache (que cobre as bases selecionadas). Fallback pra
+    # UUID-cru quando UUID não está no cache (target_base não
+    # selecionado pra exportação ou registro deletado). NÃO conta
+    # como miss porque rollups frequentemente referenciam páginas
+    # fora do snapshot por design.
+    if tipo == "rollup" and isinstance(value, list):
+        flat: list[str] = []
+        for item in value:
+            if isinstance(item, list):
+                flat.extend(str(x) for x in item if x is not None)
+            elif item is not None:
+                flat.append(str(item))
+        if flat:
+            names = []
+            for uid in flat:
+                t = title_cache.get(uid)
+                if t and t.strip():
+                    names.append(t)
+                else:
+                    names.append(uid)
+            return ", ".join(names), 0
+        # Lista vazia (rollup sem itens) → célula vazia ("").
+        return "", 0
     # Catch-all: number, title/rich_text/url/email/phone, formula, rollup,
     # created/last_edited. Defesa: ``decode_value`` pra rollup com
     # type="array" retorna list (encoders.py:198-204). Sem este branch,
