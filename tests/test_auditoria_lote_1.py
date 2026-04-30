@@ -316,7 +316,14 @@ def test_clientes_delegate_rebinds_on_modelreset() -> None:
     cache_conn = _make_conn()
     facade = NotionFacade("dummy", cache_conn)
     dsid = DATA_SOURCES["Clientes"]
-    cache_db.clear_user_columns(audit_conn, "leonardo", dsid)
+    # Round 4: sucessor_de e sucedido_por não estão no layout-padrão. Pra
+    # validar o rebind do SucessorDelegate, simulamos um usuário que
+    # habilitou ambos via picker — exercício do mesmo code path do bug
+    # original (P1-002).
+    cache_db.set_user_columns(
+        audit_conn, "leonardo", dsid,
+        ["nome", "sucedido_por", "sucessor_de", "telefone"],
+    )
     try:
         page = ClientesPage(
             conn=cache_conn, token="dummy", user="leonardo",

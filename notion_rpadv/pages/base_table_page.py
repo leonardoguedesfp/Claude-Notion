@@ -247,6 +247,12 @@ class BaseTablePage(QWidget):
         # BUG-06: per-column active filter state
         self._active_filters: dict[str, set[str]] = {}
 
+        # Round 4: layout-padrão é aplicado uma vez por sessão (no primeiro
+        # _resize_columns_to_header). Resizes manuais subsequentes do
+        # usuário ficam preservados — reloads só enforcing min_w (nunca
+        # voltam pro layout_width).
+        self._initial_layout_applied: bool = False
+
         self._build_ui(palette)
 
     # ------------------------------------------------------------------
@@ -703,6 +709,10 @@ class BaseTablePage(QWidget):
         # Fase 4: lê do cache do model (recalculado em reload) em vez de
         # consultar colunas_visiveis(base) repetidamente.
         cols = self._model.cols()
+        # Round 4: aplica layout-padrão (larguras editoriais por base) na
+        # primeira passagem; subsequentes só enforcing min_w.
+        from notion_rpadv.layout_defaults import default_width
+        apply_layout = not self._initial_layout_applied
         for col in range(self._model.columnCount()):
             label = self._model.headerData(col, Qt.Orientation.Horizontal) or ""
             text = str(label).upper()  # QSS text-transform: uppercase
@@ -720,8 +730,19 @@ class BaseTablePage(QWidget):
 
             min_w = max(font_min, schema_min)
             header.setSectionResizeMode(col, header.ResizeMode.Interactive)
+
+            # Round 4: largura editorial vence na primeira aplicação. Slug
+            # ausente do layout cai no comportamento legado (só min_w grow).
+            if apply_layout and col < len(cols):
+                layout_w = default_width(self._base, cols[col])
+                if layout_w is not None:
+                    header.resizeSection(col, max(layout_w, min_w))
+                    continue
+
             if header.sectionSize(col) < min_w:
                 header.resizeSection(col, min_w)
+        if apply_layout:
+            self._initial_layout_applied = True
         # §3.1: full-label tooltips on header are served by the model's
         # headerData(ToolTipRole) override — no per-column setup here.
         header.setMinimumSectionSize(min(96, max(80, padding_px + sort_indicator_px + 24)))

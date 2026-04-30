@@ -236,8 +236,10 @@ class SchemaRegistry:
     ) -> list[str]:
         """Lista de keys visíveis em ordem de exibição.
 
-        Sem user_id → defaults do schema (default_visible=True ordenados
-        por default_order).
+        Sem user_id → defaults do layout-padrão (Round 4: ``layout_defaults``)
+        para as 4 bases conhecidas; fallback à heurística do schema_parser
+        (default_visible=True ordenados por default_order) pra bases não
+        cobertas.
         Com user_id → consulta meta_user_columns(user_id, dsid). Se há
         entrada, retorna na ordem armazenada (filtra slugs que não existem
         mais no schema atual — proteção contra schema drift). Sem entrada,
@@ -260,7 +262,16 @@ class SchemaRegistry:
                     # schema. Mantém ordem definida pelo usuário.
                     return [k for k in user_keys if k in properties]
 
-        # Defaults: keys com default_visible=True, ordenados por default_order
+        # Round 4: defaults vêm do layout-padrão editorial pra as 4 bases
+        # conhecidas. Filtra slugs que ainda não chegaram no schema (ex:
+        # propriedade nova adicionada no Notion mas refresh ainda não rodou)
+        # pra evitar header com coluna sem PropSpec.
+        from notion_rpadv.layout_defaults import default_visible_slugs
+        layout_slugs = default_visible_slugs(base)
+        if layout_slugs:
+            return [s for s in layout_slugs if s in properties]
+
+        # Fallback: heurística antiga para bases não cobertas pelo layout.
         visible = [
             (prop.get("default_order", 999), key)
             for key, prop in properties.items()

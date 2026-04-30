@@ -353,6 +353,37 @@ def clear_user_columns(
     conn.commit()
 
 
+def wipe_user_columns_if_layout_changed(
+    conn: sqlite3.Connection, current_version: int,
+) -> int:
+    """Round 4: descarta TODAS as linhas de ``meta_user_columns`` quando
+    ``meta.layout_version`` armazenada é menor que ``current_version``
+    (ou está ausente — primeiro boot pós-Round 4).
+
+    Idempotente: depois do wipe atualiza ``meta.layout_version`` e chamadas
+    subsequentes com o mesmo ``current_version`` viram no-op (retornam 0).
+
+    Usada no boot da MainWindow pra reaplicar o layout-padrão do
+    ``notion_rpadv.layout_defaults`` a todos os usuários quando o time
+    bumpa ``LAYOUT_VERSION`` (mudança editorial de visíveis/ordem/larguras).
+
+    Retorna o número de linhas apagadas (0 quando layout não mudou).
+    """
+    stored = _get_meta(conn, "layout_version")
+    if stored is not None:
+        try:
+            if int(stored) >= current_version:
+                return 0
+        except ValueError:
+            # Valor corrompido — trata como ausente, faz wipe.
+            pass
+    cursor = conn.execute("DELETE FROM meta_user_columns")
+    deleted = cursor.rowcount or 0
+    _set_meta(conn, "layout_version", str(current_version))
+    conn.commit()
+    return deleted
+
+
 def migrate_audit_from_cache_if_needed(
     cache_conn: sqlite3.Connection,
     audit_conn: sqlite3.Connection,

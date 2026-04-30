@@ -114,6 +114,20 @@ class MainWindow(QMainWindow):
             # status bar isn't built yet.
             pass
 
+        # Round 4: aplica wipe de meta_user_columns quando LAYOUT_VERSION
+        # bumpa. Sem isso, usuários com prefs salvas nunca veem o novo
+        # layout-padrão (slugs/ordem/larguras editoriais de layout_defaults).
+        try:
+            from notion_rpadv.layout_defaults import LAYOUT_VERSION
+            cache_db.wipe_user_columns_if_layout_changed(
+                self._audit_conn, LAYOUT_VERSION,
+            )
+        except Exception:  # noqa: BLE001
+            # Falha aqui não é fatal — usuário fica com prefs antigas até
+            # próximo boot bem-sucedido. Não surface toast (status bar
+            # ainda não construída).
+            pass
+
         # Fase 3 — schema dinâmico: inicializa o singleton SchemaRegistry
         # e faz refresh das 4 bases via API (USE_DYNAMIC_SCHEMA/DYNAMIC_BASES
         # foram removidas; sempre on). Refresh é tolerante a erro: se a API
