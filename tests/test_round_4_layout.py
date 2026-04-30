@@ -426,3 +426,237 @@ def test_R4_frozen_col0_width_synced_when_main_resized() -> None:
     view.setColumnWidth(0, 240)
     assert view._frozen.columnWidth(0) == 240  # noqa: SLF001
 
+
+# ---------------------------------------------------------------------------
+# Frente 2 — drift auto-include de slugs novos
+# ---------------------------------------------------------------------------
+
+
+def _refresh_with_schema(reg, base: str, dsid: str, properties: dict) -> None:
+    """Helper: simula refresh_from_api injetando um schema custom via
+    mock client. Útil pra testar a transição "schema vazio → schema com
+    slug novo" sem depender da fixture real."""
+    raw = {
+        "object": "data_source",
+        "id": dsid,
+        "properties": properties,
+    }
+    mock_client = MagicMock()
+    mock_client.get_data_source.return_value = raw
+    return reg.refresh_from_api(base, dsid, mock_client)
+
+
+def test_R4_F2_propagate_appends_added_default_visible_slug() -> None:
+    """Refresh introduz slug novo (default_visible=True via heurística do
+    schema_parser: select). Usuário com prefs salvas recebe o slug
+    anexado ao final."""
+    from notion_bulk_edit.schema_registry import SchemaRegistry
+    conn = _audit_only_conn()
+    reg = SchemaRegistry(conn)
+    dsid = "dsid-test"
+    base = "BaseTest"
+    # Schema inicial: title + um select existente.
+    _refresh_with_schema(reg, base, dsid, {
+        "Nome":   {"type": "title", "title": {}},
+        "Status": {"type": "select", "select": {"options": []}},
+    })
+    cache_db.set_user_columns(conn, "leo", dsid, ["nome", "status"])
+    # Schema novo: adiciona um select adicional ("Area").
+    _refresh_with_schema(reg, base, dsid, {
+        "Nome":   {"type": "title", "title": {}},
+        "Status": {"type": "select", "select": {"options": []}},
+        "Area":   {"type": "select", "select": {"options": []}},
+    })
+    cols = cache_db.get_user_columns(conn, "leo", dsid)
+    assert cols == ["nome", "status", "area"]
+
+
+def test_R4_F2_propagate_skips_added_default_hidden_slug() -> None:
+    """Slug novo com default_visible=False (rich_text na heurística) NÃO é
+    auto-incluído — fica no picker como opção desmarcada."""
+    from notion_bulk_edit.schema_registry import SchemaRegistry
+    conn = _audit_only_conn()
+    reg = SchemaRegistry(conn)
+    dsid = "dsid-test"
+    base = "BaseTest"
+    _refresh_with_schema(reg, base, dsid, {
+        "Nome": {"type": "title", "title": {}},
+    })
+    cache_db.set_user_columns(conn, "leo", dsid, ["nome"])
+    # Adiciona rich_text (default_visible=False na heurística do schema_parser).
+    _refresh_with_schema(reg, base, dsid, {
+        "Nome":      {"type": "title", "title": {}},
+        "Descricao": {"type": "rich_text", "rich_text": {}},
+    })
+    cols = cache_db.get_user_columns(conn, "leo", dsid)
+    assert cols == ["nome"]  # descricao NÃO foi anexada
+
+
+def test_R4_F2_propagate_preserves_user_order() -> None:
+    """A ordem das colunas que o usuário já tinha é preservada; novos
+    slugs vão para o final."""
+    from notion_bulk_edit.schema_registry import SchemaRegistry
+    conn = _audit_only_conn()
+    reg = SchemaRegistry(conn)
+    dsid = "dsid-test"
+    base = "BaseTest"
+    _refresh_with_schema(reg, base, dsid, {
+        "Nome":   {"type": "title", "title": {}},
+        "Status": {"type": "select", "select": {"options": []}},
+        "Tipo":   {"type": "select", "select": {"options": []}},
+    })
+    # Usuário inverteu a ordem: status antes de nome.
+    cache_db.set_user_columns(conn, "leo", dsid, ["status", "nome", "tipo"])
+    _refresh_with_schema(reg, base, dsid, {
+        "Nome":   {"type": "title", "title": {}},
+        "Status": {"type": "select", "select": {"options": []}},
+        "Tipo":   {"type": "select", "select": {"options": []}},
+        "Area":   {"type": "select", "select": {"options": []}},
+    })
+    cols = cache_db.get_user_columns(conn, "leo", dsid)
+    assert cols == ["status", "nome", "tipo", "area"]
+
+
+def test_R4_F2_propagate_orders_multiple_added_slugs_by_default_order() -> None:
+    """Quando vários slugs novos chegam de uma vez, a ordem entre eles
+    segue default_order (ordem de inserção no Notion)."""
+    from notion_bulk_edit.schema_registry import SchemaRegistry
+    conn = _audit_only_conn()
+    reg = SchemaRegistry(conn)
+    dsid = "dsid-test"
+    base = "BaseTest"
+    _refresh_with_schema(reg, base, dsid, {
+        "Nome": {"type": "title", "title": {}},
+    })
+    cache_db.set_user_columns(conn, "leo", dsid, ["nome"])
+    # Adiciona 3 selects de uma vez. Ordem no dict = ordem do parser =
+    # default_order ascendente.
+    _refresh_with_schema(reg, base, dsid, {
+        "Nome":     {"type": "title", "title": {}},
+        "Primeiro": {"type": "select", "select": {"options": []}},
+        "Segundo":  {"type": "select", "select": {"options": []}},
+        "Terceiro": {"type": "select", "select": {"options": []}},
+    })
+    cols = cache_db.get_user_columns(conn, "leo", dsid)
+    assert cols == ["nome", "primeiro", "segundo", "terceiro"]
+
+
+def test_R4_F2_propagate_is_idempotent() -> None:
+    """Slug que já está nas prefs do usuário não é duplicado mesmo
+    aparecendo em ``added``."""
+    from notion_bulk_edit.schema_registry import SchemaRegistry
+    conn = _audit_only_conn()
+    reg = SchemaRegistry(conn)
+    dsid = "dsid-test"
+    base = "BaseTest"
+    _refresh_with_schema(reg, base, dsid, {
+        "Nome": {"type": "title", "title": {}},
+    })
+    cache_db.set_user_columns(conn, "leo", dsid, ["nome", "area"])
+    # area aparece em added (não estava no schema antigo) mas já está
+    # nas prefs do usuário.
+    _refresh_with_schema(reg, base, dsid, {
+        "Nome": {"type": "title", "title": {}},
+        "Area": {"type": "select", "select": {"options": []}},
+    })
+    cols = cache_db.get_user_columns(conn, "leo", dsid)
+    # Sem duplicata
+    assert cols == ["nome", "area"]
+
+
+def test_R4_F2_propagate_does_not_run_on_initial_refresh() -> None:
+    """Schema cacheado pela primeira vez (kind=initial) não dispara
+    propagação — sem schema antigo pra comparar, qualquer slug seria
+    'added' e o auto-include explodiria as prefs do usuário (cenário 0
+    pode estar pré-populado por testes anteriores)."""
+    from notion_bulk_edit.schema_registry import SchemaRegistry
+    conn = _audit_only_conn()
+    reg = SchemaRegistry(conn)
+    dsid = "dsid-test"
+    base = "BaseTest"
+    # Pré-popula prefs ANTES do primeiro refresh (cenário esquisito mas
+    # plausível: usuário já configurou ao tipo de "lista de slugs vazia"
+    # via outro caminho). O refresh inicial NÃO deveria mexer nessas prefs.
+    cache_db.set_user_columns(conn, "leo", dsid, ["nome"])
+    report = _refresh_with_schema(reg, base, dsid, {
+        "Nome": {"type": "title", "title": {}},
+        "Area": {"type": "select", "select": {"options": []}},
+    })
+    assert report.kind == "initial"
+    cols = cache_db.get_user_columns(conn, "leo", dsid)
+    assert cols == ["nome"]  # area NÃO foi propagada (kind=initial)
+
+
+def test_R4_F2_propagate_does_not_run_on_unchanged() -> None:
+    """Schema idêntico ao cacheado (kind=unchanged) — sem added, sem
+    propagação."""
+    from notion_bulk_edit.schema_registry import SchemaRegistry
+    conn = _audit_only_conn()
+    reg = SchemaRegistry(conn)
+    dsid = "dsid-test"
+    base = "BaseTest"
+    schema = {
+        "Nome": {"type": "title", "title": {}},
+        "Area": {"type": "select", "select": {"options": []}},
+    }
+    _refresh_with_schema(reg, base, dsid, schema)
+    cache_db.set_user_columns(conn, "leo", dsid, ["nome"])
+    report = _refresh_with_schema(reg, base, dsid, schema)
+    assert report.kind == "unchanged"
+    cols = cache_db.get_user_columns(conn, "leo", dsid)
+    assert cols == ["nome"]
+
+
+def test_R4_F2_propagate_skips_users_without_prefs() -> None:
+    """Usuário sem prefs salvas (None em get_user_columns) não vira
+    target — auto-include só tem sentido pra quem já tem lista
+    configurada."""
+    from notion_bulk_edit.schema_registry import SchemaRegistry
+    conn = _audit_only_conn()
+    reg = SchemaRegistry(conn)
+    dsid = "dsid-test"
+    base = "BaseTest"
+    _refresh_with_schema(reg, base, dsid, {
+        "Nome": {"type": "title", "title": {}},
+    })
+    # leo tem prefs; carla não.
+    cache_db.set_user_columns(conn, "leo", dsid, ["nome"])
+    _refresh_with_schema(reg, base, dsid, {
+        "Nome": {"type": "title", "title": {}},
+        "Area": {"type": "select", "select": {"options": []}},
+    })
+    assert cache_db.get_user_columns(conn, "leo", dsid) == ["nome", "area"]
+    assert cache_db.get_user_columns(conn, "carla", dsid) is None
+
+
+def test_R4_F2_propagate_propagates_to_multiple_users() -> None:
+    """Cada usuário com prefs recebe o slug novo (independente)."""
+    from notion_bulk_edit.schema_registry import SchemaRegistry
+    conn = _audit_only_conn()
+    reg = SchemaRegistry(conn)
+    dsid = "dsid-test"
+    base = "BaseTest"
+    _refresh_with_schema(reg, base, dsid, {
+        "Nome": {"type": "title", "title": {}},
+    })
+    cache_db.set_user_columns(conn, "leo", dsid, ["nome"])
+    cache_db.set_user_columns(conn, "deborah", dsid, ["nome"])
+    _refresh_with_schema(reg, base, dsid, {
+        "Nome": {"type": "title", "title": {}},
+        "Area": {"type": "select", "select": {"options": []}},
+    })
+    assert cache_db.get_user_columns(conn, "leo", dsid) == ["nome", "area"]
+    assert cache_db.get_user_columns(conn, "deborah", dsid) == ["nome", "area"]
+
+
+def test_R4_F2_list_users_with_columns_returns_user_ids() -> None:
+    """Helper cache_db: lista user_ids com prefs pra um dsid específico."""
+    conn = _audit_only_conn()
+    cache_db.set_user_columns(conn, "leo", "ds1", ["a"])
+    cache_db.set_user_columns(conn, "deborah", "ds1", ["b"])
+    cache_db.set_user_columns(conn, "leo", "ds2", ["c"])
+    users = cache_db.list_users_with_columns(conn, "ds1")
+    assert sorted(users) == ["deborah", "leo"]
+    assert cache_db.list_users_with_columns(conn, "ds2") == ["leo"]
+    assert cache_db.list_users_with_columns(conn, "ds-nada") == []
+

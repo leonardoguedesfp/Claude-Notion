@@ -170,10 +170,87 @@ class SchemaRegistry:
         # mantêm seus PropSpecs cacheados sem rebuild desnecessário).
         self._propspec_cache.pop(base_label, None)
 
+        # Round 4 Frente 2: drift auto-include — slugs novos no schema
+        # com default_visible=True são adicionados às prefs dos usuários
+        # existentes pra que apareçam visíveis no picker em vez de
+        # silenciosamente ocultos pelo drift protection.
+        if added:
+            self._propagate_added_slugs(
+                base_label, data_source_id, parsed, added,
+            )
+
         return ChangeReport(
             kind=kind, base=base_label,
             added=tuple(added), removed=tuple(removed), changed=tuple(changed),
         )
+
+    def _propagate_added_slugs(
+        self,
+        base_label: str,
+        data_source_id: str,
+        parsed_schema: dict[str, Any],
+        added_slugs: list[str],
+    ) -> None:
+        """Round 4 Frente 2: anexa às prefs de cada usuário (com prefs
+        salvas pra essa base) os slugs novos que têm ``default_visible=True``
+        no schema parsed. Slugs novos com default_visible=False não são
+        anexados — aparecem como opção desmarcada no picker (comportamento
+        legado).
+
+        Os slugs anexados ficam ordenados entre si por ``default_order``.
+        Aparecem ao final da lista do usuário, preservando a ordem que ele
+        configurou pras colunas que já tinha. Idempotente — slugs já presentes
+        nas prefs do usuário não são duplicados.
+
+        Falha em listar/atualizar usuários NÃO aborta o refresh — só loga
+        warning. A regra de negócio (auto-include) é UX nice-to-have, não
+        invariante de integridade.
+        """
+        properties = parsed_schema.get("properties", {})
+        new_visible: list[tuple[int, str]] = []
+        for slug in added_slugs:
+            prop = properties.get(slug)
+            if prop is None:
+                continue
+            if not prop.get("default_visible", False):
+                continue
+            new_visible.append((prop.get("default_order", 999), slug))
+        if not new_visible:
+            return
+        new_visible.sort(key=lambda t: t[0])
+        slugs_to_add = [s for _o, s in new_visible]
+
+        try:
+            users = cache_db.list_users_with_columns(
+                self._audit_conn, data_source_id,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Frente 2: falha listando usuários pra propagação de %r em %s: %s",
+                slugs_to_add, base_label, exc,
+            )
+            return
+
+        for user_id in users:
+            try:
+                current = cache_db.get_user_columns(
+                    self._audit_conn, user_id, data_source_id,
+                )
+                if current is None:
+                    continue
+                current_set = set(current)
+                appended = current + [
+                    s for s in slugs_to_add if s not in current_set
+                ]
+                if appended != current:
+                    cache_db.set_user_columns(
+                        self._audit_conn, user_id, data_source_id, appended,
+                    )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Frente 2: falha atualizando prefs de user=%r base=%s: %s",
+                    user_id, base_label, exc,
+                )
 
     # ------------------------------------------------------------------
     # Lookup público

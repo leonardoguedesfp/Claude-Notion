@@ -353,6 +353,21 @@ def clear_user_columns(
     conn.commit()
 
 
+def list_users_with_columns(
+    conn: sqlite3.Connection, data_source_id: str,
+) -> list[str]:
+    """Round 4 Frente 2: lista user_ids que têm prefs salvas pra essa
+    base. Usado pelo SchemaRegistry pra propagar slugs novos do schema
+    do Notion para todos os usuários que já configuraram visibilidade
+    (drift auto-include)."""
+    rows = conn.execute(
+        "SELECT user_id FROM meta_user_columns WHERE data_source_id=? "
+        "ORDER BY user_id",
+        (data_source_id,),
+    ).fetchall()
+    return [str(r["user_id"]) for r in rows]
+
+
 def wipe_user_columns_if_layout_changed(
     conn: sqlite3.Connection, current_version: int,
 ) -> int:
