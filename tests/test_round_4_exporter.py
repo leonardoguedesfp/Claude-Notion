@@ -544,3 +544,96 @@ def test_R4_F4_exportar_page_imports_and_has_4_checkboxes() -> None:
     for base in DATA_SOURCES:
         assert base in page._checkboxes  # noqa: SLF001
         assert page._checkboxes[base].isChecked() is True  # noqa: SLF001
+
+
+# ---------------------------------------------------------------------------
+# Hotfix pós-merge — defaults respeitados + guard com toast amigável
+# ---------------------------------------------------------------------------
+
+
+def _make_exportar_page():
+    """Helper: instancia ExportarPage com QApplication garantida."""
+    import sys
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication(sys.argv)
+    from notion_rpadv.pages.exportar import ExportarPage
+    return ExportarPage(conn=MagicMock(), token="dummy", user="leo")
+
+
+def test_R4_F4_exportar_page_starts_with_all_bases_checked() -> None:
+    """Round 4 hotfix: estado inicial dos checkboxes é Qt.CheckState.Checked
+    (não só isChecked() — defende contra tristate / partial-checked que
+    confundiria handlers que usam checkState() == Checked)."""
+    from PySide6.QtCore import Qt
+    from notion_bulk_edit.config import DATA_SOURCES
+    page = _make_exportar_page()
+    for base in DATA_SOURCES:
+        cb = page._checkboxes[base]  # noqa: SLF001
+        assert cb.isChecked() is True, f"{base} não está marcado"
+        assert cb.checkState() == Qt.CheckState.Checked, (
+            f"{base} em estado tristate/partial em vez de Checked"
+        )
+
+
+def test_R4_F4_exportar_page_collect_bases_returns_all_when_default() -> None:
+    """Round 4 hotfix: ``_collect_bases`` retorna as 4 bases (em ordem do
+    spec) sem que o operador toque em nada. Garantia funcional do
+    "todas marcadas por default"."""
+    from notion_bulk_edit.config import DATA_SOURCES
+    page = _make_exportar_page()
+    bases = page._collect_bases()  # noqa: SLF001
+    # Todas presentes
+    assert set(bases) == set(DATA_SOURCES.keys())
+    # Ordem do spec — preservada via _BASE_ORDER
+    assert bases == ["Clientes", "Processos", "Tarefas", "Catalogo"]
+
+
+def test_R4_F4_exportar_page_empty_selection_shows_friendly_error() -> None:
+    """Round 4 hotfix: nenhum base marcado + clique em Exportar →
+    toast de warning amigável + nenhum worker disparado. Sem isso, um
+    bug que esvaziasse a lista chegaria no exporter como ValueError
+    genérico do openpyxl."""
+    page = _make_exportar_page()
+    # Desmarca todos
+    for cb in page._checkboxes.values():  # noqa: SLF001
+        cb.setChecked(False)
+    # Captura toasts emitidos
+    toasts: list[tuple[str, str]] = []
+    page.toast_requested.connect(
+        lambda msg, kind: toasts.append((msg, kind)),
+    )
+    # Confirma estado pré: bases vazio
+    assert page._collect_bases() == []  # noqa: SLF001
+    # Click handler (curto-circuita antes do QFileDialog)
+    page._on_export_clicked()  # noqa: SLF001
+    # Worker NÃO iniciado
+    assert page._thread is None  # noqa: SLF001
+    assert page._worker is None  # noqa: SLF001
+    # Toast emitido com kind=warning e mensagem reconhecível
+    assert len(toasts) == 1
+    msg, kind = toasts[0]
+    assert kind == "warning"
+    assert "selecione" in msg.lower()
+
+
+def test_R4_F4_format_for_excel_handles_list_in_catchall() -> None:
+    """Round 4 hotfix: rollup com type="array" decodifica como list. O
+    catch-all do _format_for_excel agora joina lists em string em vez de
+    devolver list pro openpyxl (que raise 'Cannot convert [] to Excel').
+
+    Isso é o fix real do bug ValueError observado pelo operador no
+    smoke pós-merge.
+    """
+    from notion_rpadv.services.snapshot_exporter import _format_for_excel
+    # Lista vazia (rollup array sem itens) → string vazia, não [].
+    val, miss = _format_for_excel([], "rollup", {}, {})
+    assert val == ""
+    assert miss == 0
+    # Lista com itens → comma-separated string.
+    val, miss = _format_for_excel([1, 2, 3], "rollup", {}, {})
+    assert val == "1, 2, 3"
+    assert miss == 0
+    # Lista com None misturado → None é descartado.
+    val, miss = _format_for_excel(["a", None, "b"], "rollup", {}, {})
+    assert val == "a, b"
+    assert miss == 0

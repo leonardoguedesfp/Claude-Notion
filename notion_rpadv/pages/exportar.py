@@ -184,10 +184,16 @@ class ExportarPage(QWidget):
                 continue
             cb = QCheckBox(_BASE_DISPLAY.get(base, base))
             cb.setChecked(True)
+            # Round 4 hotfix: NÃO sobrescrever ``QCheckBox::indicator`` size
+            # sem definir ``image`` pros estados :checked/:unchecked. No
+            # Windows, fixar width/height invalida o rendering nativo do ✓
+            # do Qt e o checkbox vira um quadrado sólido sem indicador.
+            # Smoke do operador (Round 4 pós-merge): ✓ ausente até clique.
+            # Solução: deixar o indicator no default Qt — só estiliza o
+            # texto/padding/background do QCheckBox em si.
             cb.setStyleSheet(
                 f"QCheckBox {{ color: {p.app_fg}; font-size: {FS_MD}px; "
-                f"padding: {SP_2}px {SP_3}px; background: transparent; }}"
-                f"QCheckBox::indicator {{ width: 16px; height: 16px; }}",
+                f"padding: {SP_2}px {SP_3}px; background: transparent; }}",
             )
             self._checkboxes[base] = cb
             root.addWidget(cb)
@@ -235,14 +241,31 @@ class ExportarPage(QWidget):
     # Slots
     # ------------------------------------------------------------------
 
+    def _collect_bases(self) -> list[str]:
+        """Lista de bases atualmente marcadas, na ordem do spec
+        (``_BASE_ORDER``). Extraído como método pra ser testável sem
+        clique em botão e pra centralizar o critério de "base
+        selecionada"."""
+        return [
+            b for b in _BASE_ORDER
+            if b in self._checkboxes and self._checkboxes[b].isChecked()
+        ]
+
     def _on_export_clicked(self) -> None:
         if self._thread is not None:
             # Já tem export rodando — guard idempotente.
             return
-        bases = [b for b, cb in self._checkboxes.items() if cb.isChecked()]
+        bases = self._collect_bases()
         if not bases:
+            # Round 4 hotfix: emite toast também (não só status label)
+            # pra que o feedback fique visível mesmo se a label estiver
+            # fora da viewport. Mensagem amigável em vez do ValueError
+            # genérico que viria do exporter caso o guard fosse furado.
             self._set_status(
                 "Selecione pelo menos uma base.", kind="warning",
+            )
+            self.toast_requested.emit(
+                "Selecione pelo menos uma base.", "warning",
             )
             return
 

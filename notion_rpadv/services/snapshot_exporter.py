@@ -154,7 +154,13 @@ def _format_for_excel(
                 titles.append(title)
         return ", ".join(titles), misses
 
-    # number, title/rich_text/url/email/phone, formula, rollup, created/last_edited
+    # Catch-all: number, title/rich_text/url/email/phone, formula, rollup,
+    # created/last_edited. Defesa: ``decode_value`` pra rollup com
+    # type="array" retorna list (encoders.py:198-204). Sem este branch,
+    # uma list vazia ([]) chegaria em ``ws.cell(value=[])`` e openpyxl
+    # raise "Cannot convert [] to Excel". Round 4 hotfix pós-merge.
+    if isinstance(value, list):
+        return ", ".join(str(v) for v in value if v is not None), 0
     return value, 0
 
 
