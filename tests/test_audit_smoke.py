@@ -1623,6 +1623,10 @@ def test_AUD_10_no_outbound_urls_other_than_notion() -> None:
             if any(x in url for x in (
                 "api.notion.com", "fonts.google.com",  # comment ref
                 "github.com", "claude.ai", "notion.so",
+                # Round 7 (Leitor DJE Fase 1): API pública do DJEN
+                # (Diário de Justiça Eletrônico Nacional). Integração
+                # deliberada e auditada em notion_rpadv/services/dje_client.py.
+                "comunicaapi.pje.jus.br",
             )):
                 continue
             bad.append(f"{f.name}:{url}")

@@ -27,6 +27,7 @@ from notion_rpadv.pages.configuracoes import ConfiguracoesPage
 from notion_rpadv.pages.dashboard import DashboardPage
 from notion_rpadv.pages.exportar import ExportarPage
 from notion_rpadv.pages.importar import ImportarPage
+from notion_rpadv.pages.leitor_dje import LeitorDJEPage
 from notion_rpadv.pages.processos import ProcessosPage
 from notion_rpadv.pages.tarefas import TarefasPage
 from notion_rpadv.services.notion_facade import NotionFacade
@@ -53,6 +54,7 @@ _PAGE_TAREFAS    = "tarefas"
 _PAGE_CATALOGO   = "catalogo"
 _PAGE_IMPORTAR   = "importar"
 _PAGE_EXPORTAR   = "exportar"
+_PAGE_LEITOR_DJE = "leitor_dje"
 _PAGE_LOGS       = "logs"
 _PAGE_CONFIG     = "config"
 
@@ -72,6 +74,7 @@ _NAV_COMMANDS: dict[str, str] = {
     "nav_catalogo":   _PAGE_CATALOGO,
     "nav_importar":   _PAGE_IMPORTAR,
     "nav_exportar":   _PAGE_EXPORTAR,
+    "nav_leitor_dje": _PAGE_LEITOR_DJE,
     "nav_logs":       _PAGE_LOGS,
     "nav_config":     _PAGE_CONFIG,
 }
@@ -226,6 +229,7 @@ class MainWindow(QMainWindow):
             {"id": "nav_catalogo",   "label": "Ir para Catálogo",        "section": "Navegação"},
             {"id": "nav_importar",   "label": "Importar Planilha",       "section": "Ações"},
             {"id": "nav_exportar",   "label": "Exportar dados",          "section": "Ações"},
+            {"id": "nav_leitor_dje", "label": "Leitor DJE",              "section": "Ações"},
             {"id": "nav_logs",       "label": "Ver Logs de Edição",      "section": "Ações"},
             {"id": "nav_config",     "label": "Configurações",           "section": "Ações"},
             {"id": "sync_all",       "label": "Sincronizar tudo",        "section": "Ações"},
@@ -310,6 +314,15 @@ class MainWindow(QMainWindow):
         )
         exportar.toast_requested.connect(self._push_toast)
         self._add_page(_PAGE_EXPORTAR, exportar)
+
+        # Round 7 — Leitor DJE Fase 1: baixa publicações DJEN dos
+        # 12 advogados do escritório e empilha em xlsx.
+        leitor_dje = LeitorDJEPage(
+            conn=self._conn, token=self._token, user=self._user_id,
+            audit_conn=self._audit_conn,
+        )
+        leitor_dje.toast_requested.connect(self._push_toast)
+        self._add_page(_PAGE_LEITOR_DJE, leitor_dje)
 
         if LogsPage is not None:
             # BUG-OP-09: LogsPage reads edit_log from audit.db.
