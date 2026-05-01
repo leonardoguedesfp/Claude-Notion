@@ -1,0 +1,549 @@
+"""Testes do ``notion_rpadv.services.dje_client``: HTTP, paginação,
+retry/backoff, anotação ``advogado_consultado``, falha por advogado.
+
+Sem chamada à API real — todas as requisições mockadas via
+``unittest.mock``. Sleep injetado pra eliminar espera real.
+"""
+from __future__ import annotations
+
+from datetime import date
+from typing import Any
+from unittest.mock import MagicMock
+
+import pytest
+
+
+# ---------------------------------------------------------------------------
+# Helpers de mock
+# ---------------------------------------------------------------------------
+
+
+def _mock_response(
+    status: int = 200,
+    json_payload: Any = None,
+    text: str = "",
+    raise_json: bool = False,
+):
+    """Constrói um mock que parece com requests.Response."""
+    resp = MagicMock()
+    resp.status_code = status
+    resp.text = text
+    if raise_json:
+        resp.json.side_effect = ValueError("invalid JSON")
+    else:
+        resp.json.return_value = json_payload if json_payload is not None else {}
+    return resp
+
+
+def _make_session(side_effect):
+    """Cria um Session mockado com .get configurado via side_effect.
+    ``side_effect`` pode ser lista de responses ou callable."""
+    session = MagicMock()
+    session.headers = {}
+    if isinstance(side_effect, list):
+        session.get.side_effect = side_effect
+    else:
+        session.get.side_effect = side_effect
+    return session
+
+
+def _make_client(session, sleep=None):
+    from notion_rpadv.services.dje_client import DJEClient
+    return DJEClient(
+        sleep=sleep if sleep is not None else (lambda _: None),
+        session=session,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Case 1 — Construção dos parâmetros da query
+# ---------------------------------------------------------------------------
+
+
+def test_build_query_params_oab_sem_ponto() -> None:
+    """numeroOab vai sempre como dígitos puros, mesmo se a entrada
+    tiver ponto (formatação BR comum)."""
+    from notion_rpadv.services.dje_client import build_query_params
+    params = build_query_params(
+        oab="36.129", uf="DF",
+        data_inicio=date(2026, 5, 1),
+        data_fim=date(2026, 5, 1),
+        pagina=1,
+    )
+    assert params["numeroOab"] == "36129"
+    assert params["ufOab"] == "DF"
+
+
+def test_build_query_params_datas_iso() -> None:
+    """Datas no formato YYYY-MM-DD (ISO)."""
+    from notion_rpadv.services.dje_client import build_query_params
+    params = build_query_params(
+        "36129", "DF",
+        date(2026, 5, 1), date(2026, 5, 3), 1,
+    )
+    assert params["dataDisponibilizacaoInicio"] == "2026-05-01"
+    assert params["dataDisponibilizacaoFim"] == "2026-05-03"
+
+
+def test_build_query_params_uf_uppercase() -> None:
+    """ufOab é uppercased — entrada com lowercase ainda casa o backend."""
+    from notion_rpadv.services.dje_client import build_query_params
+    params = build_query_params(
+        "36129", "df",
+        date(2026, 5, 1), date(2026, 5, 1), 1,
+    )
+    assert params["ufOab"] == "DF"
+
+
+def test_build_query_params_no_tribunal_no_nome() -> None:
+    """Não passa siglaTribunal nem nomeAdvogado — busca nacional por
+    OAB é a chave canônica do Round 7."""
+    from notion_rpadv.services.dje_client import build_query_params
+    params = build_query_params(
+        "36129", "DF",
+        date(2026, 5, 1), date(2026, 5, 1), 1,
+    )
+    assert "siglaTribunal" not in params
+    assert "nomeAdvogado" not in params
+
+
+def test_build_query_params_pagination_and_size() -> None:
+    """pagina vai como string; itensPorPagina default 100."""
+    from notion_rpadv.services.dje_client import build_query_params
+    params = build_query_params(
+        "36129", "DF",
+        date(2026, 5, 1), date(2026, 5, 1), 7,
+    )
+    assert params["pagina"] == "7"
+    assert params["itensPorPagina"] == "100"
+
+
+# ---------------------------------------------------------------------------
+# Case 2 — Parsing de resposta com 1 página de 3 itens
+# ---------------------------------------------------------------------------
+
+
+def test_parsing_3_items_anota_advogado_consultado() -> None:
+    """Fixture com 3 items → 3 linhas, todas com advogado_consultado
+    no formato 'Nome (OAB/UF)'."""
+    items = [
+        {"id": 1, "hash": "abc", "texto": "publicacao 1"},
+        {"id": 2, "hash": "def", "texto": "publicacao 2"},
+        {"id": 3, "hash": "ghi", "texto": "publicacao 3"},
+    ]
+    session = _make_session([_mock_response(json_payload={"items": items})])
+    client = _make_client(session)
+    advogado = {
+        "nome": "Leonardo Guedes da Fonseca Passos",
+        "oab": "36129", "uf": "DF",
+    }
+    result = client.fetch_advogado(
+        advogado, date(2026, 5, 1), date(2026, 5, 1),
+    )
+    assert len(result.items) == 3
+    expected_label = "Leonardo Guedes da Fonseca Passos (36129/DF)"
+    for it in result.items:
+        assert it["advogado_consultado"] == expected_label
+    # Campos originais preservados (sem renomear, sem traduzir).
+    assert result.items[0]["id"] == 1
+    assert result.items[0]["hash"] == "abc"
+    assert result.items[0]["texto"] == "publicacao 1"
+
+
+# ---------------------------------------------------------------------------
+# Case 3 — Paginação até esgotar
+# ---------------------------------------------------------------------------
+
+
+def test_paginacao_100_47_0() -> None:
+    """Página 1 com 100 items, 2 com 47, 3 vazia → 147 items totais
+    e 3 chamadas (a 3ª seria evitada se a 2ª já < PAGE_SIZE; o spec
+    diz 'até o lote vir vazio OU abaixo do tamanho da página')."""
+    page1 = [{"id": i, "hash": f"h{i}"} for i in range(100)]
+    page2 = [{"id": i + 100, "hash": f"h{i+100}"} for i in range(47)]
+    session = _make_session([
+        _mock_response(json_payload={"items": page1}),
+        _mock_response(json_payload={"items": page2}),
+    ])
+    client = _make_client(session)
+    advogado = {"nome": "X", "oab": "1", "uf": "DF"}
+    result = client.fetch_advogado(
+        advogado, date(2026, 5, 1), date(2026, 5, 1),
+    )
+    assert len(result.items) == 147
+    # Esgota em 2 páginas (a 2ª já < PAGE_SIZE de 100 → para).
+    assert result.paginas == 2
+    assert session.get.call_count == 2
+
+
+def test_paginacao_pagina_completa_seguida_de_vazia() -> None:
+    """Quando todas as páginas vêm completas exceto a última (vazia),
+    paginação termina na vazia — 3 chamadas, 200 items."""
+    page1 = [{"id": i, "hash": f"h{i}"} for i in range(100)]
+    page2 = [{"id": i + 100, "hash": f"h{i+100}"} for i in range(100)]
+    page3: list[dict] = []
+    session = _make_session([
+        _mock_response(json_payload={"items": page1}),
+        _mock_response(json_payload={"items": page2}),
+        _mock_response(json_payload={"items": page3}),
+    ])
+    client = _make_client(session)
+    advogado = {"nome": "X", "oab": "1", "uf": "DF"}
+    result = client.fetch_advogado(
+        advogado, date(2026, 5, 1), date(2026, 5, 1),
+    )
+    assert len(result.items) == 200
+    assert result.paginas == 3
+    assert session.get.call_count == 3
+
+
+# ---------------------------------------------------------------------------
+# Case 4 — Empilhamento entre 2 advogados
+# ---------------------------------------------------------------------------
+
+
+def test_empilhamento_2_advogados_5_pubs_cada() -> None:
+    """fetch_all com 2 advogados de 5 pubs cada → 10 linhas com
+    advogado_consultado distinguindo origem."""
+    pubs_a = [{"id": i, "hash": f"a{i}"} for i in range(5)]
+    pubs_b = [{"id": i + 100, "hash": f"b{i}"} for i in range(5)]
+    session = _make_session([
+        _mock_response(json_payload={"items": pubs_a}),
+        _mock_response(json_payload={"items": pubs_b}),
+    ])
+    client = _make_client(session)
+    advogados = [
+        {"nome": "Alice", "oab": "1", "uf": "DF"},
+        {"nome": "Bob",   "oab": "2", "uf": "DF"},
+    ]
+    summary = client.fetch_all(
+        advogados, date(2026, 5, 1), date(2026, 5, 1),
+    )
+    assert summary.total_items == 10
+    # Cada advogado tem seu próprio result.
+    assert len(summary.by_advogado) == 2
+    labels = {r["advogado_consultado"] for r in summary.rows}
+    assert labels == {"Alice (1/DF)", "Bob (2/DF)"}
+    assert not summary.errors
+
+
+# ---------------------------------------------------------------------------
+# Case 7 — Erro num advogado não derruba os outros
+# ---------------------------------------------------------------------------
+
+
+def test_erro_persistente_em_um_advogado_nao_derruba_demais() -> None:
+    """503 persistente no 2º advogado → o 1º e o 3º são processados
+    normalmente; summary.errors contém só o 2º."""
+
+    call_order = []
+
+    def get_side_effect(url, params=None, timeout=None):
+        oab = params.get("numeroOab") if params else ""
+        call_order.append(oab)
+        if oab == "200":  # 2º advogado falha persistente
+            return _mock_response(status=503, text="service unavailable")
+        return _mock_response(
+            json_payload={"items": [{"id": oab, "hash": f"h{oab}"}]},
+        )
+
+    session = _make_session(get_side_effect)
+    client = _make_client(session)
+    advogados = [
+        {"nome": "AdvA", "oab": "100", "uf": "DF"},
+        {"nome": "AdvB", "oab": "200", "uf": "DF"},
+        {"nome": "AdvC", "oab": "300", "uf": "DF"},
+    ]
+    summary = client.fetch_all(
+        advogados, date(2026, 5, 1), date(2026, 5, 1),
+    )
+    # 2 sucessos × 1 item = 2 linhas
+    assert summary.total_items == 2
+    # Erros: só o B.
+    err_oabs = {r.advogado["oab"] for r in summary.errors}
+    assert err_oabs == {"200"}
+    # Os 3 foram processados (não abortou na falha).
+    assert {r.advogado["oab"] for r in summary.by_advogado} == {"100", "200", "300"}
+
+
+# ---------------------------------------------------------------------------
+# Case 8 — Retry com backoff em 429
+# ---------------------------------------------------------------------------
+
+
+def test_retry_429_2x_depois_200() -> None:
+    """429 nas 2 primeiras tentativas, 200 na 3ª → cliente esperou
+    e retornou os dados. Sleep capturado registra os backoffs."""
+    sleeps: list[float] = []
+    items_ok = [{"id": 1, "hash": "x"}]
+    session = _make_session([
+        _mock_response(status=429, text="rate limit"),
+        _mock_response(status=429, text="rate limit"),
+        _mock_response(json_payload={"items": items_ok}),
+    ])
+    client = _make_client(session, sleep=sleeps.append)
+    advogado = {"nome": "X", "oab": "1", "uf": "DF"}
+    result = client.fetch_advogado(
+        advogado, date(2026, 5, 1), date(2026, 5, 1),
+    )
+    assert len(result.items) == 1
+    # 3 tentativas → 2 sleeps de backoff (2s e 8s). Não houve
+    # sleep entre páginas (foi 1 página só).
+    assert sleeps == [2.0, 8.0]
+    assert result.erro is None
+
+
+def test_retry_429_persistente_3_tentativas() -> None:
+    """429 nas 3 tentativas → falha persistente, advogado entra em
+    summary.errors e log da varredura inteira segue."""
+    sleeps: list[float] = []
+    session = _make_session([
+        _mock_response(status=429, text="rate limit"),
+        _mock_response(status=429, text="rate limit"),
+        _mock_response(status=429, text="rate limit"),
+    ])
+    client = _make_client(session, sleep=sleeps.append)
+    advogado = {"nome": "X", "oab": "1", "uf": "DF"}
+    result = client.fetch_advogado(
+        advogado, date(2026, 5, 1), date(2026, 5, 1),
+    )
+    assert result.erro is not None
+    assert "429" in result.erro
+    # Backoffs aplicados nas 2 esperas.
+    assert sleeps == [2.0, 8.0]
+
+
+def test_retry_503_idem_429() -> None:
+    """503 também é retryable (transient)."""
+    sleeps: list[float] = []
+    session = _make_session([
+        _mock_response(status=503, text="unavailable"),
+        _mock_response(json_payload={"items": [{"id": 1, "hash": "x"}]}),
+    ])
+    client = _make_client(session, sleep=sleeps.append)
+    advogado = {"nome": "X", "oab": "1", "uf": "DF"}
+    result = client.fetch_advogado(
+        advogado, date(2026, 5, 1), date(2026, 5, 1),
+    )
+    assert result.erro is None
+    assert len(result.items) == 1
+    assert sleeps == [2.0]
+
+
+def test_retry_timeout_de_rede() -> None:
+    """Timeout (requests.RequestException) também é retryable."""
+    import requests
+    sleeps: list[float] = []
+    session = MagicMock()
+    session.headers = {}
+    # Lado A: lança Timeout 2x; lado B: 200 OK.
+    session.get.side_effect = [
+        requests.Timeout("timeout"),
+        requests.ConnectionError("network down"),
+        _mock_response(json_payload={"items": [{"id": 1, "hash": "x"}]}),
+    ]
+    client = _make_client(session, sleep=sleeps.append)
+    advogado = {"nome": "X", "oab": "1", "uf": "DF"}
+    result = client.fetch_advogado(
+        advogado, date(2026, 5, 1), date(2026, 5, 1),
+    )
+    assert result.erro is None
+    assert len(result.items) == 1
+    assert sleeps == [2.0, 8.0]
+
+
+def test_retry_4xx_nao_retryable() -> None:
+    """HTTP 400 (bad request) — sem retry, falha imediata."""
+    sleeps: list[float] = []
+    session = _make_session([
+        _mock_response(status=400, text='{"error":"bad request"}'),
+    ])
+    client = _make_client(session, sleep=sleeps.append)
+    advogado = {"nome": "X", "oab": "1", "uf": "DF"}
+    result = client.fetch_advogado(
+        advogado, date(2026, 5, 1), date(2026, 5, 1),
+    )
+    assert result.erro is not None
+    assert "400" in result.erro
+    # Sem backoff — não retryable.
+    assert sleeps == []
+
+
+def test_json_invalido_em_200() -> None:
+    """200 com JSON malformado → falha sem retry (não é transiente)."""
+    sleeps: list[float] = []
+    session = _make_session([
+        _mock_response(status=200, raise_json=True),
+    ])
+    client = _make_client(session, sleep=sleeps.append)
+    advogado = {"nome": "X", "oab": "1", "uf": "DF"}
+    result = client.fetch_advogado(
+        advogado, date(2026, 5, 1), date(2026, 5, 1),
+    )
+    assert result.erro is not None
+    assert "JSON" in result.erro
+    assert sleeps == []
+
+
+# ---------------------------------------------------------------------------
+# Case 9 — Resposta com array vazio
+# ---------------------------------------------------------------------------
+
+
+def test_array_vazio_nao_quebra() -> None:
+    """``items: []`` é cenário válido (advogado sem publicações no
+    período). Não deve levantar; resultado tem 0 items, 1 página
+    consumida."""
+    session = _make_session([_mock_response(json_payload={"items": []})])
+    client = _make_client(session)
+    advogado = {"nome": "X", "oab": "1", "uf": "DF"}
+    result = client.fetch_advogado(
+        advogado, date(2026, 5, 1), date(2026, 5, 1),
+    )
+    assert result.items == []
+    assert result.paginas == 1
+    assert result.erro is None
+
+
+def test_payload_sem_chave_items() -> None:
+    """Defesa contra schema variante: payload sem ``items`` não quebra,
+    é tratado como 0 items (página vazia)."""
+    session = _make_session([_mock_response(json_payload={"meta": "x"})])
+    client = _make_client(session)
+    advogado = {"nome": "X", "oab": "1", "uf": "DF"}
+    result = client.fetch_advogado(
+        advogado, date(2026, 5, 1), date(2026, 5, 1),
+    )
+    assert result.items == []
+    assert result.erro is None
+
+
+# ---------------------------------------------------------------------------
+# Rate limit entre advogados
+# ---------------------------------------------------------------------------
+
+
+def test_rate_limit_entre_advogados_e_paginas() -> None:
+    """fetch_all aplica RATE_LIMIT_SECONDS sleep entre cada chamada
+    HTTP — incluindo entre páginas do mesmo advogado e entre
+    advogados consecutivos."""
+    page1 = [{"id": i, "hash": f"h{i}"} for i in range(100)]
+    page2 = [{"id": i + 100, "hash": f"h{i+100}"} for i in range(5)]
+    pubs_b = [{"id": 999, "hash": "z"}]
+    session = _make_session([
+        _mock_response(json_payload={"items": page1}),  # adv A pg1
+        _mock_response(json_payload={"items": page2}),  # adv A pg2
+        _mock_response(json_payload={"items": pubs_b}),  # adv B pg1
+    ])
+    sleeps: list[float] = []
+    client = _make_client(session, sleep=sleeps.append)
+    summary = client.fetch_all(
+        [
+            {"nome": "AdvA", "oab": "1", "uf": "DF"},
+            {"nome": "AdvB", "oab": "2", "uf": "DF"},
+        ],
+        date(2026, 5, 1), date(2026, 5, 1),
+    )
+    # 1 sleep entre páginas do A + 1 sleep entre A e B = 2 sleeps de 1s.
+    # Não há sleep antes da 1ª requisição (otimização — operador já
+    # esperou pra clicar o botão).
+    from notion_rpadv.services.dje_client import RATE_LIMIT_SECONDS
+    assert sleeps == [RATE_LIMIT_SECONDS, RATE_LIMIT_SECONDS]
+    assert summary.total_items == 100 + 5 + 1
+
+
+# ---------------------------------------------------------------------------
+# on_progress callback
+# ---------------------------------------------------------------------------
+
+
+def test_on_progress_callback_chamado_por_advogado() -> None:
+    """on_progress(idx, total, result) chamado uma vez por advogado,
+    seja sucesso ou erro persistente."""
+    session = _make_session([
+        _mock_response(json_payload={"items": [{"id": 1, "hash": "x"}]}),
+        _mock_response(status=503, text="down"),
+        _mock_response(status=503, text="down"),
+        _mock_response(status=503, text="down"),
+    ])
+    client = _make_client(session)
+    advogados = [
+        {"nome": "AdvA", "oab": "1", "uf": "DF"},
+        {"nome": "AdvB", "oab": "2", "uf": "DF"},
+    ]
+    progress_calls: list[tuple[int, int, str]] = []
+
+    def cb(idx, total, result):
+        progress_calls.append(
+            (idx, total, result.advogado["nome"]),
+        )
+    summary = client.fetch_all(
+        advogados, date(2026, 5, 1), date(2026, 5, 1),
+        on_progress=cb,
+    )
+    assert progress_calls == [
+        (1, 2, "AdvA"),
+        (2, 2, "AdvB"),
+    ]
+    # Erros do B presentes
+    assert len(summary.errors) == 1
+    assert summary.errors[0].advogado["nome"] == "AdvB"
+
+
+def test_on_progress_exception_nao_aborta() -> None:
+    """Callback que levanta não derruba a varredura."""
+    session = _make_session([
+        _mock_response(json_payload={"items": []}),
+        _mock_response(json_payload={"items": []}),
+    ])
+    client = _make_client(session)
+    advogados = [
+        {"nome": "AdvA", "oab": "1", "uf": "DF"},
+        {"nome": "AdvB", "oab": "2", "uf": "DF"},
+    ]
+
+    def bad_cb(idx, total, result):
+        raise RuntimeError("boom")
+
+    summary = client.fetch_all(
+        advogados, date(2026, 5, 1), date(2026, 5, 1),
+        on_progress=bad_cb,
+    )
+    assert len(summary.by_advogado) == 2
+
+
+# ---------------------------------------------------------------------------
+# Anotação ``advogado_consultado`` formato canônico
+# ---------------------------------------------------------------------------
+
+
+def test_format_advogado_label() -> None:
+    """Formato canônico ``Nome (OAB/UF)``."""
+    from notion_rpadv.services.dje_advogados import format_advogado_label
+    label = format_advogado_label({
+        "nome": "Maria Silva", "oab": "12345", "uf": "DF",
+    })
+    assert label == "Maria Silva (12345/DF)"
+
+
+def test_advogados_lista_completa() -> None:
+    """Sanity: lista hardcoded tem os 12 advogados com OAB DF."""
+    from notion_rpadv.services.dje_advogados import ADVOGADOS
+    assert len(ADVOGADOS) == 12
+    for a in ADVOGADOS:
+        assert a["uf"] == "DF"
+        assert a["oab"].isdigit()
+        assert a["nome"].strip()
+
+
+# ---------------------------------------------------------------------------
+# DJEClient construtor
+# ---------------------------------------------------------------------------
+
+
+def test_default_session_has_user_agent_header() -> None:
+    """Sessão default carrega User-Agent canônico."""
+    from notion_rpadv.services.dje_client import DJEClient, USER_AGENT
+    client = DJEClient()
+    # Acessa via internal — teste de smoke; não chama API.
+    assert client._session.headers["User-Agent"] == USER_AGENT  # noqa: SLF001
