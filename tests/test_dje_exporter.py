@@ -98,14 +98,15 @@ def test_xlsx_aba_chamada_publicacoes(tmp_path: Path) -> None:
 
 
 def test_xlsx_advogados_consultados_eh_primeira_coluna(tmp_path: Path) -> None:
-    """Round 7 Fase 2: ``advogados_consultados`` (plural) é a 1ª coluna
-    do schema canônico. F1 era ``advogado_consultado`` (singular) — F2
-    rebatizou via dedup pra plural com lista de nomes do escritório
-    intimados na mesma publicação."""
+    """Fase 3: ``advogados_consultados_escritorio`` (renomeada) é a 1ª
+    coluna do schema canônico. Antes era ``advogados_consultados``."""
     from notion_rpadv.services.dje_exporter import write_publicacoes_xlsx
     rows = [{
         "id": 1, "hash": "abc", "texto": "publi 1",
-        "advogado_consultado": "Leonardo (36129/DF)",
+        "advogado_consultado": "Leonardo Guedes da Fonseca Passos (36129/DF)",
+        "destinatarioadvogados": [
+            {"advogado": {"numero_oab": "36129", "uf_oab": "DF", "nome": "Leonardo"}},
+        ],
     }]
     result = write_publicacoes_xlsx(
         rows=rows,
@@ -115,9 +116,10 @@ def test_xlsx_advogados_consultados_eh_primeira_coluna(tmp_path: Path) -> None:
     )
     wb = _read_back(result.path)
     ws = wb["Publicacoes"]
-    assert ws.cell(row=1, column=1).value == "advogados_consultados"
-    # Valor da linha 2 col 1: nome do advogado (plural com 1 entrada).
-    assert ws.cell(row=2, column=1).value == "Leonardo (36129/DF)"
+    assert ws.cell(row=1, column=1).value == "advogados_consultados_escritorio"
+    assert ws.cell(row=2, column=1).value == (
+        "Leonardo Guedes da Fonseca Passos (36129/DF)"
+    )
 
 
 def test_xlsx_header_em_negrito(tmp_path: Path) -> None:
@@ -171,14 +173,9 @@ def test_xlsx_serializa_arrays_como_json(tmp_path: Path) -> None:
 
 
 def test_xlsx_schema_canonico_20_colunas_em_ordem_fixa(tmp_path: Path) -> None:
-    """Round 7 Fase 2: schema canônico de 20 colunas em ordem fixa
-    (CANONICAL_COLUMNS), independente do payload de entrada.
-
-    Substitui o teste F1 ``test_xlsx_preserva_ordem_colunas_do_primeiro_item``
-    que assertava schema-agnóstico. F2 trava o contrato: caller passa
-    rows brutos do client, exporter aplica transform e escreve as 20
-    colunas em ordem fixa.
-    """
+    """Fase 3: schema canônico passou de 20 → 21 colunas em ordem fixa
+    (CANONICAL_COLUMNS). 1ª col renomeada, última col nova
+    (``oabs_externas_consultadas``)."""
     from notion_rpadv.services.dje_exporter import write_publicacoes_xlsx
     from notion_rpadv.services.dje_transform import CANONICAL_COLUMNS
     rows = [{
@@ -197,12 +194,11 @@ def test_xlsx_schema_canonico_20_colunas_em_ordem_fixa(tmp_path: Path) -> None:
         ws.cell(row=1, column=c).value
         for c in range(1, ws.max_column + 1)
     ]
-    # 20 colunas exatas, na ordem do schema canônico.
+    # 21 colunas exatas, na ordem do schema canônico Fase 3.
     assert headers == CANONICAL_COLUMNS
-    # Garantia: ``advogados_consultados`` e ``observacoes`` são as 2
-    # primeiras (adições da Fase 2).
-    assert headers[0] == "advogados_consultados"
+    assert headers[0] == "advogados_consultados_escritorio"
     assert headers[1] == "observacoes"
+    assert headers[-1] == "oabs_externas_consultadas"
 
 
 def test_xlsx_chaves_extras_no_payload_sao_ignoradas(tmp_path: Path) -> None:
@@ -235,8 +231,7 @@ def test_xlsx_chaves_extras_no_payload_sao_ignoradas(tmp_path: Path) -> None:
 
 def test_xlsx_lista_vazia_gera_arquivo_so_com_header(tmp_path: Path) -> None:
     """0 publicações → arquivo gerado mesmo assim com header completo
-    (20 colunas do schema canônico F2). Operador vê que rodou, sem
-    confundir com erro."""
+    (21 colunas do schema canônico Fase 3)."""
     from notion_rpadv.services.dje_exporter import write_publicacoes_xlsx
     from notion_rpadv.services.dje_transform import CANONICAL_COLUMNS
     result = write_publicacoes_xlsx(
@@ -249,9 +244,8 @@ def test_xlsx_lista_vazia_gera_arquivo_so_com_header(tmp_path: Path) -> None:
     assert result.skipped == []
     wb = _read_back(result.path)
     ws = wb["Publicacoes"]
-    # F2: 1ª col é advogados_consultados (era advogado_consultado no F1)
-    assert ws.cell(row=1, column=1).value == "advogados_consultados"
-    # Header completo do schema canônico.
+    # Fase 3: 1ª col é advogados_consultados_escritorio
+    assert ws.cell(row=1, column=1).value == "advogados_consultados_escritorio"
     headers = [
         ws.cell(row=1, column=c).value
         for c in range(1, ws.max_column + 1)
@@ -411,12 +405,15 @@ def test_F21_06_linha_com_erro_inesperado_eh_pulada_demais_escritas(
     assert sk.row_id == 200
     assert "fake fail" in sk.error.lower()
     # Arquivo existe e tem header + 2 linhas de dados (sem gaps).
+    # Fase 3: validamos por col 3 (`id`) que sempre tem dado — col 1
+    # (advogados_consultados_escritorio) só é populada pra advogados
+    # da lista oficial; estes testes usam OABs sintéticas.
     wb = _read_back(result.path)
     ws = wb["Publicacoes"]
-    assert ws.cell(row=2, column=1).value is not None
-    assert ws.cell(row=3, column=1).value is not None
+    assert ws.cell(row=2, column=3).value is not None
+    assert ws.cell(row=3, column=3).value is not None
     # Linha 4 do xlsx é vazia (só foram escritas 2 de 3 source rows).
-    assert ws.cell(row=4, column=1).value is None
+    assert ws.cell(row=4, column=3).value is None
 
 
 def test_F21_07_multiplas_linhas_com_erro_todas_puladas_arquivo_gerado(
@@ -480,14 +477,14 @@ def test_F21_07_multiplas_linhas_com_erro_todas_puladas_arquivo_gerado(
         f"esperava 2 warnings 'linha pulada', got {pulada_count}: {warn_msgs!r}"
     )
     # Arquivo gerado com 3 linhas de dados (5 source - 2 puladas).
+    # Fase 3: validamos por col 3 (`id`) que sempre tem dado.
     assert result.path.exists()
     wb = _read_back(result.path)
     ws = wb["Publicacoes"]
-    # rows 2, 3, 4 têm dados; row 5 vazia.
-    assert ws.cell(row=2, column=1).value is not None
-    assert ws.cell(row=3, column=1).value is not None
-    assert ws.cell(row=4, column=1).value is not None
-    assert ws.cell(row=5, column=1).value is None
+    assert ws.cell(row=2, column=3).value is not None
+    assert ws.cell(row=3, column=3).value is not None
+    assert ws.cell(row=4, column=3).value is not None
+    assert ws.cell(row=5, column=3).value is None
 
 
 def test_F21_08_zero_linhas_com_erro_skipped_eh_lista_vazia(
@@ -507,8 +504,264 @@ def test_F21_08_zero_linhas_com_erro_skipped_eh_lista_vazia(
     )
     assert result.skipped == []
     assert isinstance(result.skipped, list)
-    # Arquivo OK com 1 linha de dados.
+    # Arquivo OK com 1 linha de dados. Fase 3: validamos por col 3 (id)
+    # que sempre é populada (col 1 = escritório fica vazia pra OAB sintética).
     wb = _read_back(result.path)
     ws = wb["Publicacoes"]
-    assert ws.cell(row=2, column=1).value is not None  # advogados_consultados
-    assert ws.cell(row=3, column=1).value is None      # sem 2ª linha
+    assert ws.cell(row=2, column=3).value is not None
+    assert ws.cell(row=3, column=3).value is None
+
+
+# ---------------------------------------------------------------------------
+# Fase 3 — F3-29..F3-31: schema renomeado e nova coluna
+# ---------------------------------------------------------------------------
+
+
+def test_F3_29_schema_xlsx_tem_21_colunas_em_ordem(tmp_path: Path) -> None:
+    """F3-29: o xlsx gerado tem 21 cabeçalhos exatamente nessa ordem."""
+    from notion_rpadv.services.dje_exporter import write_publicacoes_xlsx
+    from notion_rpadv.services.dje_transform import CANONICAL_COLUMNS
+
+    rows = [{
+        "id": 1, "hash": "h1", "siglaTribunal": "TRT10",
+        "data_disponibilizacao": "2026-04-30",
+        "advogado_consultado": "Leonardo Guedes da Fonseca Passos (36129/DF)",
+        "destinatarioadvogados": [],
+    }]
+    result = write_publicacoes_xlsx(
+        rows, tmp_path, date(2026, 4, 30), date(2026, 4, 30),
+    )
+    wb = _read_back(result.path)
+    ws = wb["Publicacoes"]
+    headers = [
+        ws.cell(row=1, column=c).value for c in range(1, 22)
+    ]
+    assert len(headers) == 21
+    assert headers == CANONICAL_COLUMNS
+
+
+def test_F3_30_advogados_consultados_escritorio_eh_primeira(
+    tmp_path: Path,
+) -> None:
+    """F3-30: ``advogados_consultados_escritorio`` é a 1ª coluna."""
+    from notion_rpadv.services.dje_exporter import write_publicacoes_xlsx
+
+    rows = [{
+        "id": 1, "hash": "h1", "siglaTribunal": "TRT10",
+        "data_disponibilizacao": "2026-04-30",
+        "advogado_consultado": "Leonardo Guedes da Fonseca Passos (36129/DF)",
+        "destinatarioadvogados": [],
+    }]
+    result = write_publicacoes_xlsx(
+        rows, tmp_path, date(2026, 4, 30), date(2026, 4, 30),
+    )
+    wb = _read_back(result.path)
+    ws = wb["Publicacoes"]
+    assert ws.cell(row=1, column=1).value == (
+        "advogados_consultados_escritorio"
+    )
+
+
+def test_F3_31_oabs_externas_consultadas_eh_ultima_e_vazia_em_padrao(
+    tmp_path: Path,
+) -> None:
+    """F3-31: ``oabs_externas_consultadas`` é a 21ª coluna; vazia em
+    modo padrão (defaults do ``write_publicacoes_xlsx``)."""
+    from notion_rpadv.services.dje_exporter import write_publicacoes_xlsx
+
+    rows = [{
+        "id": 1, "hash": "h1", "siglaTribunal": "TRT10",
+        "data_disponibilizacao": "2026-04-30",
+        "advogado_consultado": "Leonardo Guedes da Fonseca Passos (36129/DF)",
+        "destinatarioadvogados": [
+            {"advogado": {"numero_oab": "36129", "uf_oab": "DF", "nome": "Leonardo"}},
+        ],
+    }]
+    result = write_publicacoes_xlsx(
+        rows, tmp_path, date(2026, 4, 30), date(2026, 4, 30),
+    )
+    wb = _read_back(result.path)
+    ws = wb["Publicacoes"]
+    assert ws.cell(row=1, column=21).value == "oabs_externas_consultadas"
+    # Linha 2 (primeira de dados) tem essa célula vazia em modo padrão.
+    assert ws.cell(row=2, column=21).value in (None, "")
+
+
+# ---------------------------------------------------------------------------
+# Fase 3 — F3-34..F3-37: histórico completo
+# ---------------------------------------------------------------------------
+
+
+def test_F3_34_historico_gerado_apos_execucao_com_publicacoes_novas(
+    tmp_path: Path,
+) -> None:
+    """F3-34: após execução com publicações novas, gera/sobrescreve
+    ``Historico_DJEN_completo.xlsx`` com todas as rows ordenadas."""
+    from notion_rpadv.services.dje_exporter import (
+        HISTORICO_FILENAME,
+        write_historico_completo_xlsx,
+    )
+
+    db_rows = [
+        {
+            "id": 100, "hash": "h100", "siglaTribunal": "TRT10",
+            "data_disponibilizacao": "2026-04-29",
+            "destinatarioadvogados": [],
+            "advogados_consultados_escritorio": "Ricardo (15523/DF)",
+            "oabs_externas_consultadas": "",
+        },
+        {
+            "id": 200, "hash": "h200", "siglaTribunal": "TRT01",
+            "data_disponibilizacao": "2026-04-30",
+            "destinatarioadvogados": [],
+            "advogados_consultados_escritorio": "Leonardo (36129/DF)",
+            "oabs_externas_consultadas": "",
+        },
+    ]
+    result = write_historico_completo_xlsx(db_rows, tmp_path)
+    assert result.locked is False
+    assert result.path == tmp_path / HISTORICO_FILENAME
+    assert result.path.exists()
+
+    wb = _read_back(result.path)
+    ws = wb["Publicacoes"]
+    # 1 header + 2 dados
+    assert ws.cell(row=1, column=1).value == "advogados_consultados_escritorio"
+    # Ordem: data DESC, sigla ASC
+    # 200 (2026-04-30, TRT01) primeiro, 100 (2026-04-29, TRT10) depois
+    assert ws.cell(row=2, column=3).value == 200  # 'id' é coluna 3
+    assert ws.cell(row=3, column=3).value == 100
+
+
+def test_F3_35_historico_inclui_publicacoes_de_modo_manual(
+    tmp_path: Path,
+) -> None:
+    """F3-35: histórico junta publicações de execuções padrão e manual.
+    Em particular, oabs_externas_consultadas aparece preenchida."""
+    from notion_rpadv.services.dje_exporter import (
+        write_historico_completo_xlsx,
+    )
+
+    db_rows = [
+        {
+            "id": 1, "hash": "h1", "siglaTribunal": "STJ",
+            "data_disponibilizacao": "2026-04-15",
+            "destinatarioadvogados": [],
+            "advogados_consultados_escritorio": "Ricardo (15523/DF)",
+            "oabs_externas_consultadas": "",
+        },
+        {
+            "id": 2, "hash": "h2", "siglaTribunal": "STJ",
+            "data_disponibilizacao": "2026-04-20",
+            "destinatarioadvogados": [],
+            "advogados_consultados_escritorio": "",
+            "oabs_externas_consultadas": "Joao Silva (12345/SP)",
+        },
+    ]
+    result = write_historico_completo_xlsx(db_rows, tmp_path)
+    assert result.locked is False
+    wb = _read_back(result.path)
+    ws = wb["Publicacoes"]
+    # 1ª linha de dados (mais recente, id=2) tem externa preenchida
+    assert ws.cell(row=2, column=21).value == "Joao Silva (12345/SP)"
+    # 2ª linha (id=1) tem externa vazia
+    assert ws.cell(row=3, column=21).value in (None, "")
+
+
+def test_F3_36_historico_locked_nao_derruba_execucao(tmp_path: Path) -> None:
+    """F3-36: PermissionError ao escrever o .tmp → returna locked=True;
+    Excel-de-execução foi gerado normalmente em outro path; SQLite OK."""
+    from notion_rpadv.services.dje_exporter import (
+        HISTORICO_TMP_FILENAME,
+        write_historico_completo_xlsx,
+    )
+    import unittest.mock as mock
+
+    db_rows = [{
+        "id": 1, "hash": "h1", "siglaTribunal": "TRT10",
+        "data_disponibilizacao": "2026-04-30",
+        "destinatarioadvogados": [],
+        "advogados_consultados_escritorio": "Ricardo (15523/DF)",
+        "oabs_externas_consultadas": "",
+    }]
+    # Simula bloqueio: patch Workbook.save pra levantar PermissionError
+    # quando alvo é o .tmp.
+    real_save = None
+    from openpyxl.workbook.workbook import Workbook as _WB
+    real_save = _WB.save
+
+    def fake_save(self, target):
+        if HISTORICO_TMP_FILENAME in str(target):
+            raise PermissionError(
+                f"[Errno 13] Permission denied: '{target}'",
+            )
+        return real_save(self, target)
+
+    with mock.patch.object(_WB, "save", new=fake_save):
+        result = write_historico_completo_xlsx(db_rows, tmp_path)
+    assert result.locked is True
+    assert result.path is None
+    # Arquivo final NÃO existe (escrita pulada)
+    from notion_rpadv.services.dje_exporter import HISTORICO_FILENAME
+    assert not (tmp_path / HISTORICO_FILENAME).exists()
+
+
+def test_F3_37_historico_em_banco_vazio_nao_eh_gerado_pelo_caller(
+    tmp_path: Path,
+) -> None:
+    """F3-37 (parte exporter): chamar ``write_historico_completo_xlsx``
+    com lista vazia gera arquivo só com header (caller deveria não chamar
+    quando count=0; mas se chamar, ainda funciona sem crashar).
+
+    O fluxo de não-gerar quando banco vazio vive no ``_DJEWorker._run_inner``
+    (validado em test_leitor_dje_page com mock).
+    """
+    from notion_rpadv.services.dje_exporter import (
+        write_historico_completo_xlsx,
+    )
+
+    result = write_historico_completo_xlsx([], tmp_path)
+    assert result.locked is False
+    assert result.path is not None
+    assert result.path.exists()
+    wb = _read_back(result.path)
+    ws = wb["Publicacoes"]
+    # Header existe; sem dados.
+    assert ws.cell(row=1, column=1).value == "advogados_consultados_escritorio"
+    assert ws.cell(row=2, column=1).value is None
+
+
+def test_F3_historico_atomic_rename_substitui_anterior(tmp_path: Path) -> None:
+    """Quando histórico já existe, replace funciona e não deixa .tmp órfão."""
+    from notion_rpadv.services.dje_exporter import (
+        HISTORICO_FILENAME,
+        HISTORICO_TMP_FILENAME,
+        write_historico_completo_xlsx,
+    )
+
+    db_rows1 = [{
+        "id": 1, "hash": "h1", "siglaTribunal": "TRT10",
+        "data_disponibilizacao": "2026-04-30",
+        "destinatarioadvogados": [],
+        "advogados_consultados_escritorio": "Ricardo (15523/DF)",
+        "oabs_externas_consultadas": "",
+    }]
+    write_historico_completo_xlsx(db_rows1, tmp_path)
+    final_path = tmp_path / HISTORICO_FILENAME
+    assert final_path.exists()
+    size1 = final_path.stat().st_size
+
+    db_rows2 = db_rows1 + [{
+        "id": 2, "hash": "h2", "siglaTribunal": "TRT01",
+        "data_disponibilizacao": "2026-05-01",
+        "destinatarioadvogados": [],
+        "advogados_consultados_escritorio": "Leonardo (36129/DF)",
+        "oabs_externas_consultadas": "",
+    }]
+    write_historico_completo_xlsx(db_rows2, tmp_path)
+    assert final_path.exists()
+    size2 = final_path.stat().st_size
+    # Cresceu: 2ª escrita tem 1 linha a mais
+    assert size2 != size1
+    # .tmp não ficou órfão
+    assert not (tmp_path / HISTORICO_TMP_FILENAME).exists()

@@ -32,11 +32,16 @@ class Advogado(TypedDict):
 ADVOGADOS: Final[list[Advogado]] = [
     {"nome": "Ricardo Luiz Rodrigues da Fonseca Passos", "oab": "15523", "uf": "DF"},
     {"nome": "Leonardo Guedes da Fonseca Passos",        "oab": "36129", "uf": "DF"},
-    {"nome": "Vitor Guedes da Fonseca Passos",           "oab": "48468", "uf": "DF"},
-    {"nome": "Cecília Maria Lapetina Chiaratto",         "oab": "20120", "uf": "DF"},
-    {"nome": "Samantha Lais Soares Mickievicz",          "oab": "38809", "uf": "DF"},
-    {"nome": "Deborah Nascimento de Castro",             "oab": "75799", "uf": "DF"},
-    # Temporariamente desativados em 2026-05-01 (Fase 2.1).
+    # Desativados temporariamente em 02/05/2026 por sobrecarga 429 da
+    # API DJEN em janelas longas durante carga inicial. Reativar quando:
+    # - Watermark por advogado estiver consolidado em produção
+    # - Volume diário (1-2 dias) estabilizado, sem 429
+    # {"nome": "Vitor Guedes da Fonseca Passos",           "oab": "48468", "uf": "DF"},
+    # {"nome": "Cecília Maria Lapetina Chiaratto",         "oab": "20120", "uf": "DF"},
+    # {"nome": "Samantha Lais Soares Mickievicz",          "oab": "38809", "uf": "DF"},
+    # {"nome": "Deborah Nascimento de Castro",             "oab": "75799", "uf": "DF"},
+    # ---
+    # Desativados antes (Fase 2.1, 2026-05-01).
     # {"nome": "Juliana Vieira Gomes",                     "oab": "65089", "uf": "DF"},
     # {"nome": "Juliana Chiaratto Batista",                "oab": "81225", "uf": "DF"},
     # {"nome": "Shirley Oliveira Pessoa",                  "oab": "37654", "uf": "DF"},
@@ -48,6 +53,19 @@ ADVOGADOS: Final[list[Advogado]] = [
 
 def format_advogado_label(adv: Advogado) -> str:
     """Formato canônico pra coluna ``advogado_consultado`` do xlsx:
-    ``"Nome Completo (OAB/UF)"``. Fonte única do critério — usado
-    pelo client e pelos testes."""
-    return f"{adv['nome']} ({adv['oab']}/{adv['uf']})"
+    ``"Nome Completo (OAB/UF)"`` quando há nome,
+    ``"OAB/UF"`` (puro) quando ``nome == ""``. Fonte única do critério
+    — usado pelo client e pelos testes.
+
+    Nome vazio acontece em modo manual (refator pós-Fase 3 hotfix UX):
+    o usuário só digita OAB+UF e o nome real é resolvido pelo
+    ``dje_transform.split_advogados_columns`` quando o resultado da API
+    traz ``destinatarioadvogados`` com a OAB pesquisada — vira
+    ``"FULANO DE TAL (OAB/UF)"`` no Excel. Pesquisas sem retorno
+    permanecem com label ``"OAB/UF"`` puro (não há de onde extrair nome).
+    """
+    nome = (adv.get("nome") or "").strip()
+    base = f"{adv['oab']}/{adv['uf']}"
+    if not nome:
+        return base
+    return f"{nome} ({base})"

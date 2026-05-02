@@ -391,12 +391,21 @@ def test_F2_25_sort_por_tribunal_asc_data_desc() -> None:
 
 def test_F2_26_integracao_dedup_observacoes_html_ordem_colunas() -> None:
     """Fixture com 10 itens (3 ids únicos, 7 duplicatas), 1 com anomalia
-    A e 1 com anomalia B → 3 linhas finais, 20 colunas exatas, observacoes
-    populado nas certas, texto sem HTML, ordem por tribunal+data."""
+    A e 1 com anomalia B → 3 linhas finais, 21 colunas exatas (Fase 3),
+    observacoes populado nas certas, texto sem HTML, ordem por tribunal+data.
+
+    OABs sintéticas (100/DF..1000/DF) — passamos elas como ``oficiais``
+    ao transform pra que o split as classifique como escritório.
+    """
     from notion_rpadv.services.dje_transform import (
         CANONICAL_COLUMNS,
         transform_rows,
     )
+
+    fake_oficiais_labels = {
+        f"{n*100}/DF": f"Adv{chr(64+n)} ({n*100}/DF)"
+        for n in range(1, 11)  # 100/DF..1000/DF
+    }
     raw = [
         # id=1 (4 duplicatas, anomalia A: ativo=False)
         _row(id=1, ativo=False, siglaTribunal="STJ",
@@ -445,14 +454,16 @@ def test_F2_26_integracao_dedup_observacoes_html_ordem_colunas() -> None:
              data_disponibilizacao="2026-04-28",
              advogado_consultado="AdvJ (1000/DF)"),
     ]
-    rows, columns = transform_rows(raw)
+    rows, columns = transform_rows(
+        raw, oabs_escritorio_oficiais_labels=fake_oficiais_labels,
+    )
 
     # 1) Dedup: 3 linhas finais
     assert len(rows) == 3
 
-    # 2) 20 colunas em ordem canônica
+    # 2) 21 colunas em ordem canônica (Fase 3)
     assert columns == CANONICAL_COLUMNS
-    assert len(columns) == 20
+    assert len(columns) == 21
 
     # 3) Ordem: STJ 2026-04-30 (id=1), STJ 2026-04-28 (id=3), TRT10 2026-04-29 (id=2)
     assert [r["id"] for r in rows] == [1, 3, 2]
@@ -467,15 +478,16 @@ def test_F2_26_integracao_dedup_observacoes_html_ordem_colunas() -> None:
     assert "<br>" not in rows[0]["texto"]
     assert "Despacho\ncontinuação\nfim" == rows[0]["texto"]
 
-    # 6) advogados_consultados ordem alfabética e separados por "; "
-    assert rows[0]["advogados_consultados"] == (
+    # 6) advogados_consultados_escritorio (Fase 3) — ordem alfabética
+    assert rows[0]["advogados_consultados_escritorio"] == (
         "AdvA (100/DF); AdvB (200/DF); AdvC (300/DF); AdvD (400/DF)"
     )
 
     # 7) Colunas removidas não aparecem
     for dropped in ("ativo", "status", "meio", "meiocompleto",
                     "motivo_cancelamento", "data_cancelamento",
-                    "advogado_consultado"):
+                    "advogado_consultado",
+                    "advogados_consultados"):  # Fase 3: plural antigo dropado
         for r in rows:
             assert dropped not in r, f"{dropped} ainda presente em {r}"
 
@@ -562,12 +574,12 @@ def test_check_constants_motivo_whitespace_only_nao_dispara() -> None:
 
 
 def test_canonical_columns_tem_20_entradas_unicas() -> None:
-    """Sanity: schema canônico tem 20 colunas únicas, na ordem do spec."""
+    """Fase 3: schema canônico tem 21 colunas únicas (era 20)."""
     from notion_rpadv.services.dje_transform import CANONICAL_COLUMNS
-    assert len(CANONICAL_COLUMNS) == 20
-    assert len(set(CANONICAL_COLUMNS)) == 20
-    # Primeiras 2 colunas: as adições da F2.
-    assert CANONICAL_COLUMNS[0] == "advogados_consultados"
+    assert len(CANONICAL_COLUMNS) == 21
+    assert len(set(CANONICAL_COLUMNS)) == 21
+    # Fase 3: 1ª coluna foi renomeada; 2ª segue a mesma.
+    assert CANONICAL_COLUMNS[0] == "advogados_consultados_escritorio"
     assert CANONICAL_COLUMNS[1] == "observacoes"
 
 
@@ -805,3 +817,307 @@ def test_F22_05_regra_b_tolerancia_sufixo_letra_na_oab() -> None:
     # Hipotético: se Ricardo viesse com sufixo, ainda matchearia.
     hipotetico = [{"advogado": {"numero_oab": "15523A", "uf_oab": "DF"}}]
     assert _socios_presentes(hipotetico) == (True, False)
+
+
+# ---------------------------------------------------------------------------
+# Fase 3 — F3-12..F3-15: split de oabs_escritorio/oabs_externas
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def escritorio_labels() -> dict[str, str]:
+    """Lookup OAB/UF → label das 6 OABs oficiais do escritório."""
+    return {
+        "15523/DF": "Ricardo Luiz Rodrigues da Fonseca Passos (15523/DF)",
+        "36129/DF": "Leonardo Guedes da Fonseca Passos (36129/DF)",
+        "48468/DF": "Vitor Guedes da Fonseca Passos (48468/DF)",
+        "20120/DF": "Cecília Maria Lapetina Chiaratto (20120/DF)",
+        "38809/DF": "Samantha Lais Soares Mickievicz (38809/DF)",
+        "75799/DF": "Deborah Nascimento de Castro (75799/DF)",
+    }
+
+
+def _row_dedup(
+    advs_str: str,
+    destinatarios: list[dict] | None = None,
+    rid: int = 1,
+) -> dict:
+    """Constrói uma row já no formato pós-dedup: ``advogados_consultados``
+    é o agregado dos pesquisados que matcharam, ``destinatarioadvogados``
+    é a lista completa de quem foi intimado pela publicação."""
+    return {
+        "id": rid,
+        "advogados_consultados": advs_str,
+        "destinatarioadvogados": destinatarios or [],
+    }
+
+
+def _adv_entry(numero_oab: str, uf: str = "DF", nome: str = "X") -> dict:
+    """Entry no formato real do DJEN (campos sob ``advogado``)."""
+    return {"advogado": {"numero_oab": numero_oab, "uf_oab": uf, "nome": nome}}
+
+
+def test_F3_12_modo_padrao_publicacao_com_dois_socios(
+    escritorio_labels: dict[str, str],
+) -> None:
+    """F3-12: modo padrão — publicação com Ricardo + Leonardo + 1 externo.
+    oabs_escritorio = ambos sócios; oabs_externas = vazio."""
+    from notion_rpadv.services.dje_transform import split_advogados_columns
+
+    todas_marcadas = set(escritorio_labels.keys())
+    row = _row_dedup(
+        "Ricardo Luiz Rodrigues da Fonseca Passos (15523/DF); "
+        "Leonardo Guedes da Fonseca Passos (36129/DF)",
+        destinatarios=[
+            _adv_entry("15523", "DF", "Ricardo"),
+            _adv_entry("36129", "DF", "Leonardo"),
+            _adv_entry("99999", "SP", "Externo"),
+        ],
+    )
+    out = split_advogados_columns(
+        [row],
+        oabs_escritorio_marcadas=todas_marcadas,
+        oabs_escritorio_oficiais_labels=escritorio_labels,
+    )
+    assert out[0]["advogados_consultados_escritorio"] == (
+        "Leonardo Guedes da Fonseca Passos (36129/DF); "
+        "Ricardo Luiz Rodrigues da Fonseca Passos (15523/DF)"
+    )
+    assert out[0]["oabs_externas_consultadas"] == ""
+    # advogados_consultados (plural antigo) é removido pela função.
+    assert "advogados_consultados" not in out[0]
+
+
+def test_F3_13_modo_manual_so_leonardo_marcado(
+    escritorio_labels: dict[str, str],
+) -> None:
+    """F3-13: manual com Ricardo desmarcado e Leonardo marcado.
+    oabs_escritorio = só Leonardo (filtro pela intenção)."""
+    from notion_rpadv.services.dje_transform import split_advogados_columns
+
+    # No fluxo real, o client só pesquisou Leonardo (Ricardo desmarcado).
+    # Logo a row pós-dedup só tem Leonardo no agregado.
+    row = _row_dedup(
+        "Leonardo Guedes da Fonseca Passos (36129/DF)",
+        destinatarios=[
+            _adv_entry("15523", "DF", "Ricardo"),
+            _adv_entry("36129", "DF", "Leonardo"),
+        ],
+    )
+    out = split_advogados_columns(
+        [row],
+        oabs_escritorio_marcadas={"36129/DF"},
+        oabs_escritorio_oficiais_labels=escritorio_labels,
+    )
+    assert out[0]["advogados_consultados_escritorio"] == (
+        "Leonardo Guedes da Fonseca Passos (36129/DF)"
+    )
+    assert out[0]["oabs_externas_consultadas"] == ""
+
+
+def test_F3_14_modo_manual_so_externa_traz_realidade(
+    escritorio_labels: dict[str, str],
+) -> None:
+    """F3-14: manual com 0 OABs do escritório marcadas e 1 externa
+    (12345/SP). Publicação intima Ricardo + externo. oabs_escritorio
+    deve refletir REALIDADE (Ricardo aparece em destinatarioadvogados,
+    mesmo desmarcado). oabs_externas = só Joao Silva."""
+    from notion_rpadv.services.dje_transform import split_advogados_columns
+
+    row = _row_dedup(
+        "Joao Silva (12345/SP)",
+        destinatarios=[
+            _adv_entry("15523", "DF", "Ricardo"),
+            _adv_entry("12345", "SP", "Joao Silva"),
+        ],
+    )
+    out = split_advogados_columns(
+        [row],
+        oabs_escritorio_marcadas=set(),
+        oabs_externas_pesquisadas={"12345/SP"},
+        oabs_escritorio_oficiais_labels=escritorio_labels,
+    )
+    # Ricardo aparece (realidade) — formato canônico do escritório
+    assert out[0]["advogados_consultados_escritorio"] == (
+        "Ricardo Luiz Rodrigues da Fonseca Passos (15523/DF)"
+    )
+    # Externa: Joao Silva
+    assert out[0]["oabs_externas_consultadas"] == "Joao Silva (12345/SP)"
+
+
+def test_F3_15_formato_ordem_separador(
+    escritorio_labels: dict[str, str],
+) -> None:
+    """F3-15: separador é ``"; "`` (ponto-e-vírgula + espaço); ordem
+    alfabética por label completa (consistente com o legado)."""
+    from notion_rpadv.services.dje_transform import split_advogados_columns
+
+    row = _row_dedup(
+        # Insere em ordem propositalmente embaralhada
+        "Vitor Guedes da Fonseca Passos (48468/DF); "
+        "Ricardo Luiz Rodrigues da Fonseca Passos (15523/DF); "
+        "Leonardo Guedes da Fonseca Passos (36129/DF)",
+        destinatarios=[
+            _adv_entry("15523", "DF", "Ricardo"),
+            _adv_entry("36129", "DF", "Leonardo"),
+            _adv_entry("48468", "DF", "Vitor"),
+        ],
+    )
+    out = split_advogados_columns(
+        [row],
+        oabs_escritorio_marcadas=set(escritorio_labels.keys()),
+        oabs_escritorio_oficiais_labels=escritorio_labels,
+    )
+    final = out[0]["advogados_consultados_escritorio"]
+    # Ordem alfabética: Leonardo < Ricardo < Vitor
+    assert final == (
+        "Leonardo Guedes da Fonseca Passos (36129/DF); "
+        "Ricardo Luiz Rodrigues da Fonseca Passos (15523/DF); "
+        "Vitor Guedes da Fonseca Passos (48468/DF)"
+    )
+    # Separador exato (espaço-pontoevírgula-espaço entre cada um)
+    assert "; " in final
+    assert ";  " not in final  # 2 espaços não permitidos
+
+
+def test_F3_split_remove_chave_advogados_consultados_antiga(
+    escritorio_labels: dict[str, str],
+) -> None:
+    """A chave plural antiga ``advogados_consultados`` não pode
+    sobreviver no output do split."""
+    from notion_rpadv.services.dje_transform import split_advogados_columns
+
+    row = _row_dedup("Ricardo Luiz Rodrigues da Fonseca Passos (15523/DF)")
+    out = split_advogados_columns(
+        [row],
+        oabs_escritorio_marcadas={"15523/DF"},
+        oabs_escritorio_oficiais_labels=escritorio_labels,
+    )
+    assert "advogados_consultados" not in out[0]
+
+
+def test_F3_split_label_externa_nao_pesquisada_eh_dropada(
+    escritorio_labels: dict[str, str],
+) -> None:
+    """Externa que aparece no agregado (do client) mas não está em
+    ``oabs_externas_pesquisadas`` é dropada — defesa contra rows
+    contaminadas por execução anterior."""
+    from notion_rpadv.services.dje_transform import split_advogados_columns
+
+    row = _row_dedup(
+        "Externa Nao Pesquisada (88888/SP)",
+        destinatarios=[_adv_entry("88888", "SP", "Externa")],
+    )
+    out = split_advogados_columns(
+        [row],
+        oabs_escritorio_marcadas={"15523/DF"},  # qualquer escritório marcado
+        oabs_externas_pesquisadas=set(),
+        oabs_escritorio_oficiais_labels=escritorio_labels,
+    )
+    assert out[0]["oabs_externas_consultadas"] == ""
+    assert out[0]["advogados_consultados_escritorio"] == ""
+
+
+def test_F3_canonical_columns_tem_21_e_inclui_novas() -> None:
+    """Schema canônico tem 21 colunas; primeira renomeada e última nova."""
+    from notion_rpadv.services.dje_transform import CANONICAL_COLUMNS
+
+    assert len(CANONICAL_COLUMNS) == 21
+    assert CANONICAL_COLUMNS[0] == "advogados_consultados_escritorio"
+    assert CANONICAL_COLUMNS[-1] == "oabs_externas_consultadas"
+    # Nome antigo plural não está mais
+    assert "advogados_consultados" not in CANONICAL_COLUMNS
+
+
+def test_resolve_nome_externa_via_destinatarios(
+    escritorio_labels: dict[str, str],
+) -> None:
+    """Hotfix UX: label 'OAB/UF' pura (sem nome) é resolvida via
+    destinatarioadvogados quando a publicação tem advogado matching."""
+    from notion_rpadv.services.dje_transform import split_advogados_columns
+
+    row = _row_dedup(
+        "12345/SP",  # label sem nome — usuário só digitou OAB+UF
+        destinatarios=[
+            _adv_entry("12345", "SP", "FULANO RESOLVIDO DA API"),
+        ],
+    )
+    out = split_advogados_columns(
+        [row],
+        oabs_escritorio_marcadas=set(escritorio_labels.keys()),
+        oabs_externas_pesquisadas={"12345/SP"},
+        oabs_escritorio_oficiais_labels=escritorio_labels,
+    )
+    assert out[0]["oabs_externas_consultadas"] == (
+        "FULANO RESOLVIDO DA API (12345/SP)"
+    )
+
+
+def test_resolve_externa_sem_match_mantem_oab_pura(
+    escritorio_labels: dict[str, str],
+) -> None:
+    """Hotfix UX: se destinatarioadvogados não tem a OAB pesquisada,
+    label permanece como '12345/SP' (sem nome)."""
+    from notion_rpadv.services.dje_transform import split_advogados_columns
+
+    row = _row_dedup(
+        "12345/SP",
+        destinatarios=[
+            _adv_entry("99999", "RJ", "Outro advogado"),  # OAB diferente
+        ],
+    )
+    out = split_advogados_columns(
+        [row],
+        oabs_escritorio_marcadas=set(escritorio_labels.keys()),
+        oabs_externas_pesquisadas={"12345/SP"},
+        oabs_escritorio_oficiais_labels=escritorio_labels,
+    )
+    assert out[0]["oabs_externas_consultadas"] == "12345/SP"
+
+
+def test_format_advogado_label_sem_nome_retorna_oab_pura() -> None:
+    """``format_advogado_label`` com ``nome=''`` retorna 'OAB/UF' puro."""
+    from notion_rpadv.services.dje_advogados import format_advogado_label
+    assert format_advogado_label(
+        {"nome": "", "oab": "12345", "uf": "SP"},
+    ) == "12345/SP"
+    assert format_advogado_label(
+        {"nome": "Joao", "oab": "12345", "uf": "SP"},
+    ) == "Joao (12345/SP)"
+
+
+def test_extract_oab_uf_aceita_formato_bare() -> None:
+    """``_extract_oab_uf`` reconhece tanto 'Nome (OAB/UF)' quanto 'OAB/UF'."""
+    from notion_rpadv.services.dje_transform import _extract_oab_uf
+    assert _extract_oab_uf("Joao (12345/SP)") == "12345/SP"
+    assert _extract_oab_uf("12345/SP") == "12345/SP"
+    assert _extract_oab_uf("malformado") is None
+
+
+def test_F3_transform_rows_for_history_pula_dedup_e_split() -> None:
+    """``transform_rows_for_history`` aceita rows já com as 2 colunas
+    finais (vindas do SQLite) e não faz dedup nem re-split."""
+    from notion_rpadv.services.dje_transform import (
+        transform_rows_for_history,
+    )
+
+    db_rows = [
+        {
+            "id": 1,
+            "hash": "h1",
+            "siglaTribunal": "TRT10",
+            "data_disponibilizacao": "2026-04-30",
+            "destinatarioadvogados": [],
+            "advogados_consultados_escritorio": (
+                "Ricardo Luiz Rodrigues da Fonseca Passos (15523/DF)"
+            ),
+            "oabs_externas_consultadas": "",
+        },
+    ]
+    rows, columns = transform_rows_for_history(db_rows)
+    assert len(rows) == 1
+    assert rows[0]["advogados_consultados_escritorio"] == (
+        "Ricardo Luiz Rodrigues da Fonseca Passos (15523/DF)"
+    )
+    # 21 colunas
+    assert len(columns) == 21
