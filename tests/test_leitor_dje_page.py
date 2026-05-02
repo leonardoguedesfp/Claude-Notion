@@ -115,3 +115,72 @@ def test_R7_leitor_dje_page_resolve_output_dir_uses_settings_when_present(
         assert target.exists()
     finally:
         settings.remove(_KEY_OUTPUT_DIR)
+
+
+# ---------------------------------------------------------------------------
+# Sidebar wire — pega o gap do hotfix do commit fc00d4a
+# ---------------------------------------------------------------------------
+
+
+def test_R7_sidebar_dados_nav_includes_leitor_dje() -> None:
+    """``_DADOS_NAV`` em widgets/sidebar.py deve declarar a entry
+    ``leitor_dje`` entre 'exportar' e 'logs'.
+
+    Este teste pega o gap do hotfix: o commit fc00d4a prometia o wire
+    do sidebar mas o stat do commit ficou em 4 arquivos (sidebar não
+    entrou). Sem este test_R7_sidebar_*, o smoke real do operador era
+    o único filtro — usuário abre o app e a aba não aparece.
+    """
+    from notion_rpadv.widgets.sidebar import _DADOS_NAV
+    page_ids = [p[0] for p in _DADOS_NAV]
+    assert "leitor_dje" in page_ids, (
+        f"_DADOS_NAV sem 'leitor_dje': {page_ids}"
+    )
+    # Ordem do spec: entre exportar e logs.
+    idx_exp = page_ids.index("exportar")
+    idx_dje = page_ids.index("leitor_dje")
+    idx_log = page_ids.index("logs")
+    assert idx_exp < idx_dje < idx_log, (
+        f"Ordem inesperada: {page_ids}"
+    )
+    # Label exato.
+    label = next(p[1] for p in _DADOS_NAV if p[0] == "leitor_dje")
+    assert label == "Leitor DJE"
+
+
+def test_R7_sidebar_icon_present_for_leitor_dje() -> None:
+    """``_ICONS`` tem entry pra ``leitor_dje`` — sem isso o
+    SidebarItem renderiza o caractere fallback "·" (cosmético, mas
+    deixa a entry inconsistente com as outras)."""
+    from notion_rpadv.widgets.sidebar import _ICONS
+    assert "leitor_dje" in _ICONS
+    assert _ICONS["leitor_dje"]  # não-vazio
+
+
+def test_R7_sidebar_widget_instancia_com_leitor_dje() -> None:
+    """Smoke real do widget: instanciar ``Sidebar`` e confirmar que o
+    SidebarItem ``leitor_dje`` foi criado no ``_items`` dict.
+
+    Este é o teste mais importante: simula o caminho que o app real
+    percorre. Se este passar, a aba aparece na barra lateral.
+    """
+    _qapp()
+    from notion_rpadv.widgets.sidebar import Sidebar, SidebarItem
+    sb = Sidebar(user={"name": "Test", "initials": "TT", "role": ""})
+    assert "leitor_dje" in sb._items, (  # noqa: SLF001
+        f"Sidebar não criou item 'leitor_dje'. "
+        f"items presentes: {list(sb._items.keys())}"  # noqa: SLF001
+    )
+    item = sb._items["leitor_dje"]  # noqa: SLF001
+    assert isinstance(item, SidebarItem)
+    assert item.page_id == "leitor_dje"
+
+
+def test_R7_app_nav_commands_includes_leitor_dje() -> None:
+    """Command palette dispatch (``_NAV_COMMANDS`` em app.py) tem a
+    entry ``nav_leitor_dje`` mapeando pro page_id correto. Sem isso,
+    digitar "Leitor DJE" no Ctrl+K não navega."""
+    from notion_rpadv.app import _NAV_COMMANDS, _PAGE_LEITOR_DJE
+    assert "nav_leitor_dje" in _NAV_COMMANDS
+    assert _NAV_COMMANDS["nav_leitor_dje"] == _PAGE_LEITOR_DJE
+    assert _PAGE_LEITOR_DJE == "leitor_dje"
