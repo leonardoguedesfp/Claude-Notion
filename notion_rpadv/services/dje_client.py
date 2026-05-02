@@ -343,31 +343,52 @@ def _resolve_retry_after_seconds(
     """Lê o header ``Retry-After`` de uma resposta 429 e devolve a
     espera em segundos.
 
-    - Header ausente ou vazio → ``fallback`` (backoff atual).
-    - Header em segundos inteiros (``"5"``) → valor convertido,
-      capado em ``RETRY_AFTER_CAP_SECONDS`` (com warning quando
-      capa).
-    - Header em qualquer outro formato (HTTP-date RFC 7231,
-      string não-numérica, etc.) → ``fallback``. Decisão deliberada:
-      DJEN historicamente só envia inteiro; suporte a HTTP-date
-      adicionaria parsing/timezones sem ganho prático.
+    Casos tratados (comportamento por categoria do valor):
+
+    - **Ausente/vazio** → ``fallback`` (silencioso).
+    - **Inteiro positivo** (``"5"``) → o valor, capado em
+      ``RETRY_AFTER_CAP_SECONDS``.
+    - **Zero** (``"0"``) → 0.0 (servidor liberou, não esperar).
+    - **Inteiro negativo** (``"-39"``, ``"-57"``) → ``fallback``. Bug
+      conhecido do DJEN observado no smoke da Fase 2.1: servidor envia
+      valores negativos (provavelmente um delta-time mal-calculado que
+      virou negativo). Log warning específico classifica como bug do
+      servidor pra dar contexto ao operador.
+    - **Outros formatos** (HTTP-date RFC 7231, string solta,
+      ``"5.5"``) → ``fallback``. Suporte a HTTP-date NÃO implementado
+      intencionalmente — DJEN historicamente só envia inteiro.
+
+    Cap acima de ``RETRY_AFTER_CAP_SECONDS`` emite warning e usa o cap.
     """
     headers = getattr(response, "headers", None) or {}
     raw = headers.get("Retry-After")
     if raw is None:
         return fallback
     raw_str = str(raw).strip()
-    if not raw_str.isdigit():
+    if not raw_str:
+        return fallback
+    # Detecta inteiro com sinal opcional. ``int()`` aceita ``"-39"``;
+    # ``isdigit()`` não — usar try/except é mais limpo que regex.
+    try:
+        seconds_int = int(raw_str)
+    except ValueError:
         logger.warning(
-            "DJE: Retry-After=%r não-numérico, usando fallback %.1fs",
+            "DJE: Retry-After=%r formato não suportado, usando fallback %.1fs",
             raw, fallback,
         )
         return fallback
-    seconds = float(int(raw_str))
+    if seconds_int < 0:
+        logger.warning(
+            "DJE: Retry-After=%ds inválido (negativo, bug do servidor), "
+            "usando fallback %.1fs",
+            seconds_int, fallback,
+        )
+        return fallback
+    seconds = float(seconds_int)
     if seconds > RETRY_AFTER_CAP_SECONDS:
         logger.warning(
             "DJE: Retry-After=%ds recebido, capando em %.0fs",
-            int(seconds), RETRY_AFTER_CAP_SECONDS,
+            seconds_int, RETRY_AFTER_CAP_SECONDS,
         )
         return RETRY_AFTER_CAP_SECONDS
     return seconds

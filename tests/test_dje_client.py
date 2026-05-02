@@ -643,3 +643,57 @@ def test_F21_12cap_retry_after_acima_do_cap_eh_capado_em_60s() -> None:
     assert result.erro is None
     # Cap em 60s (default em Fase 2.1).
     assert sleeps[0] == RETRY_AFTER_CAP_SECONDS == 60.0
+
+
+# ---------------------------------------------------------------------------
+# Fase 2.2 — Retry-After refinado (zero válido, negativo distinguido)
+# ---------------------------------------------------------------------------
+
+
+def test_F22_14_retry_after_zero_nao_espera_e_prossegue() -> None:
+    """``Retry-After: 0`` → cliente não espera (sleep com valor 0)
+    antes do retry. Servidor sinalizou 'pode prosseguir agora'."""
+    sleeps: list[float] = []
+    resp_429 = _mock_response(status=429)
+    resp_429.headers = {"Retry-After": "0"}
+    resp_ok = _mock_response(json_payload={"items": []})
+    session = _make_session([resp_429, resp_ok])
+    client = _make_client(session, sleep=sleeps.append)
+    advogado = {"nome": "X", "oab": "1", "uf": "DF"}
+    result = client.fetch_advogado(
+        advogado, date(2026, 5, 1), date(2026, 5, 1),
+    )
+    assert result.erro is None
+    assert sleeps[0] == 0.0
+
+
+def test_F22_15_retry_after_negativo_eh_invalido_log_classifica_bug_servidor(
+    caplog,
+) -> None:
+    """``Retry-After: -39`` → fallback no backoff atual + warning log
+    com mensagem específica "negativo, bug do servidor". Bug observado
+    no smoke real da Fase 2.1 (DJEN envia valores tipo -39, -41, -57)."""
+    import logging
+    from notion_rpadv.services.dje_client import RETRY_BACKOFFS
+    sleeps: list[float] = []
+    resp_429 = _mock_response(status=429)
+    resp_429.headers = {"Retry-After": "-39"}
+    resp_ok = _mock_response(json_payload={"items": []})
+    session = _make_session([resp_429, resp_ok])
+    client = _make_client(session, sleep=sleeps.append)
+    advogado = {"nome": "X", "oab": "1", "uf": "DF"}
+    with caplog.at_level(logging.WARNING, logger="dje.client"):
+        result = client.fetch_advogado(
+            advogado, date(2026, 5, 1), date(2026, 5, 1),
+        )
+    assert result.erro is None
+    # Caiu no fallback do backoff (não no valor negativo).
+    assert sleeps[0] == RETRY_BACKOFFS[0]
+    # Mensagem de log classifica o erro como bug do servidor.
+    relevant = [
+        r.getMessage() for r in caplog.records
+        if r.levelno == logging.WARNING and "Retry-After" in r.getMessage()
+    ]
+    assert any("negativo" in m and "bug do servidor" in m for m in relevant), (
+        f"esperava warning 'negativo, bug do servidor', got: {relevant!r}"
+    )
