@@ -850,3 +850,72 @@ def test_F22_11_retry_diferido_falha_em_ambas_passadas_mantem_erro() -> None:
     # Erro permanece no advogado (sub-janela abr falhou definitivamente).
     assert len(summary.errors) == 1
     assert summary.errors[0].advogado["oab"] == "1"
+
+
+# ---------------------------------------------------------------------------
+# Fase 2.2 — Cancelamento (is_cancelled)
+# ---------------------------------------------------------------------------
+
+
+def test_F22_12_cancelamento_entre_advogados_para_e_marca_cancelled() -> None:
+    """``is_cancelled`` retorna True após o 1º advogado completar →
+    a varredura para no início do 2º; ``summary.cancelled == True``;
+    items do 1º preservados."""
+    # Single-day window (sem split). 1ª chamada: AdvA OK. Antes da
+    # 2ª chamada (AdvB), is_cancelled vira True → para.
+    items_a = [{"id": 1, "hash": "a"}]
+    session = _make_session([
+        _mock_response(json_payload={"items": items_a}),
+    ])
+    client = _make_client(session)
+    advogados = [
+        {"nome": "AdvA", "oab": "1", "uf": "DF"},
+        {"nome": "AdvB", "oab": "2", "uf": "DF"},
+    ]
+    # Flag que vira True após 1ª chamada à get.
+    cancel_after_calls = [1]  # mutable container
+    def is_cancelled():
+        return session.get.call_count >= cancel_after_calls[0]
+
+    summary = client.fetch_all(
+        advogados, date(2026, 5, 1), date(2026, 5, 1),
+        is_cancelled=is_cancelled,
+    )
+    assert summary.cancelled is True
+    # 1 item do AdvA captado (não perdeu).
+    assert summary.total_items == 1
+    # session.get foi chamado exatamente 1 vez (AdvB nunca).
+    assert session.get.call_count == 1
+
+
+def test_F22_13_cancelamento_entre_paginas_retorna_parcial() -> None:
+    """``is_cancelled`` retorna True após pag 2 do AdvA → fetch_advogado
+    para entre páginas; items das 2 páginas preservados, summary
+    marca cancelled."""
+    page1 = [{"id": i, "hash": f"h{i}"} for i in range(100)]
+    page2 = [{"id": i + 100, "hash": f"h{i+100}"} for i in range(100)]
+    page3 = [{"id": i + 200, "hash": f"h{i+200}"} for i in range(50)]  # nunca alcançada
+    session = _make_session([
+        _mock_response(json_payload={"items": page1}),
+        _mock_response(json_payload={"items": page2}),
+        _mock_response(json_payload={"items": page3}),
+    ])
+    client = _make_client(session)
+    advogados = [{"nome": "X", "oab": "1", "uf": "DF"}]
+    # Cancela após 2 calls (= entre pag 2 e pag 3).
+    def is_cancelled():
+        return session.get.call_count >= 2
+
+    summary = client.fetch_all(
+        advogados, date(2026, 5, 1), date(2026, 5, 1),
+        is_cancelled=is_cancelled,
+    )
+    assert summary.cancelled is True
+    # 100 + 100 = 200 items das 2 primeiras páginas.
+    assert summary.total_items == 200
+    # 2 chamadas, não 3.
+    assert session.get.call_count == 2
+    # AdvogadoResult agregado preservou os items.
+    assert len(summary.by_advogado[0].items) == 200
+    # erro = None (cancelamento ≠ erro).
+    assert summary.by_advogado[0].erro is None

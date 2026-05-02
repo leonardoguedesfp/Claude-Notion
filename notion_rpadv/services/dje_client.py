@@ -242,6 +242,7 @@ class DJEClient:
         advogado: Advogado,
         data_inicio: date,
         data_fim: date,
+        is_cancelled: Callable[[], bool] | None = None,
     ) -> AdvogadoResult:
         """Pagina e coleta TODAS as publicações de um único advogado
         no intervalo. Cada item retornado vira dict do JSON da API com
@@ -252,11 +253,27 @@ class DJEClient:
         Falha persistente (após retries) NÃO levanta — popula
         ``result.erro`` com a mensagem e retorna o que já tinha
         coletado em páginas anteriores. Caller decide se segue.
+
+        **Fase 2.2 — cancelamento:** ``is_cancelled`` é uma callable
+        opcional que, se retornar True, faz a paginação parar entre
+        páginas (não no meio de retry HTTP). Items já coletados em
+        páginas anteriores são preservados; ``result.erro`` permanece
+        None — não é "erro", é cancelamento. Caller distingue via
+        ``summary.cancelled`` no FetchSummary agregador.
         """
         result = AdvogadoResult(advogado=advogado)
         label = format_advogado_label(advogado)
         pagina = 1
         while True:
+            # Checkpoint de cancelamento ENTRE páginas (não no meio de
+            # uma request HTTP em retry — ver spec do user da Fase 2.2).
+            if is_cancelled is not None and is_cancelled():
+                logger.info(
+                    "DJE: %s — cancelamento detectado antes da pag %d "
+                    "(parcial: %d publicações em %d página(s))",
+                    label, pagina, len(result.items), result.paginas,
+                )
+                return result
             if pagina > 1:
                 # Rate limit entre páginas do mesmo advogado.
                 self._sleep(RATE_LIMIT_SECONDS)
@@ -298,6 +315,7 @@ class DJEClient:
         data_inicio: date,
         data_fim: date,
         on_progress: Callable[[int, int, AdvogadoResult], None] | None = None,
+        is_cancelled: Callable[[], bool] | None = None,
     ) -> FetchSummary:
         """Itera sobre todos os advogados sequencialmente, aplicando
         rate limit entre cada chamada HTTP. Acumula em ``FetchSummary``.
@@ -332,6 +350,14 @@ class DJEClient:
         identifica paginação profunda como trigger principal do 429
         cascade; janelas curtas raramente atingem profundidade
         problemática.
+
+        **Fase 2.2 — cancelamento:** ``is_cancelled`` é uma callable
+        opcional checada nos checkpoints (entre advogados, entre
+        sub-janelas e — via propagação ao ``fetch_advogado`` — entre
+        páginas). Quando True, varredura para de forma limpa,
+        ``summary.cancelled = True``, e items já coletados são
+        preservados pra exporter parcial. Cancelamento NÃO interrompe
+        request HTTP em retry.
         """
         summary = FetchSummary()
         sub_windows = _split_window_monthly(data_inicio, data_fim)
@@ -355,25 +381,49 @@ class DJEClient:
 
         # Varredura principal: cada advogado em todas as sub-janelas.
         for adv_idx, adv in enumerate(advogados):
+            # Checkpoint de cancelamento ANTES de iniciar próximo advogado.
+            if is_cancelled is not None and is_cancelled():
+                summary.cancelled = True
+                break
             for sub_idx, (sub_di, sub_df) in enumerate(sub_windows):
+                # Checkpoint de cancelamento ANTES de iniciar próxima
+                # sub-janela do mesmo advogado.
+                if is_cancelled is not None and is_cancelled():
+                    summary.cancelled = True
+                    break
                 if not first_request:
                     self._sleep(RATE_LIMIT_SECONDS)
                 first_request = False
-                sub_result = self.fetch_advogado(adv, sub_di, sub_df)
+                sub_result = self.fetch_advogado(
+                    adv, sub_di, sub_df, is_cancelled=is_cancelled,
+                )
                 aggs[adv_idx].items.extend(sub_result.items)
                 aggs[adv_idx].paginas += sub_result.paginas
                 if sub_result.erro is not None:
                     failed_per_adv[adv_idx].add(sub_idx)
                     aggs[adv_idx].erro = sub_result.erro
+                # Cancelamento detectado DENTRO de fetch_advogado precisa
+                # ser propagado pra summary.cancelled aqui — fetch_advogado
+                # não tem como sinalizar cancel via AdvogadoResult.
+                if is_cancelled is not None and is_cancelled():
+                    summary.cancelled = True
+                    break
             if on_progress is not None:
                 try:
                     on_progress(adv_idx + 1, total, aggs[adv_idx])
                 except Exception:  # noqa: BLE001
                     # Callback faulty não pode derrubar a varredura.
                     logger.exception("DJE: on_progress raised")
+            # Pós-iteração interna: se cancelado, sai do outer loop tb.
+            if summary.cancelled:
+                break
 
-        # Retry diferido: só dispara em janelas que foram splitadas.
-        if len(sub_windows) > 1 and any(failed_per_adv):
+        # Retry diferido: só dispara em janelas splitadas E não cancelado.
+        if (
+            len(sub_windows) > 1
+            and any(failed_per_adv)
+            and not summary.cancelled
+        ):
             n_failed = sum(len(f) for f in failed_per_adv)
             logger.info(
                 "DJE: %d sub-janela(s) falharam → retry diferido com "
@@ -382,15 +432,21 @@ class DJEClient:
             )
             for adv_idx, fails in enumerate(failed_per_adv):
                 for sub_idx in sorted(fails):
+                    if is_cancelled is not None and is_cancelled():
+                        summary.cancelled = True
+                        break
                     self._sleep(RETRY_DEFERRED_PAUSE_SECONDS)
                     sub_di, sub_df = sub_windows[sub_idx]
                     sub_result = self.fetch_advogado(
                         advogados[adv_idx], sub_di, sub_df,
+                        is_cancelled=is_cancelled,
                     )
                     if sub_result.erro is None:
                         aggs[adv_idx].items.extend(sub_result.items)
                         aggs[adv_idx].paginas += sub_result.paginas
                         failed_per_adv[adv_idx].discard(sub_idx)
+                if summary.cancelled:
+                    break
             # Após retry: se TODAS as falhas de um advogado foram
             # recuperadas, limpa o erro do agregado. Senão, mantém.
             for adv_idx in range(len(advogados)):
