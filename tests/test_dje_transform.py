@@ -700,3 +700,108 @@ def test_F21_04_sanitize_passa_intacto_em_none_e_nao_string() -> None:
     assert sanitize_for_xlsx(lista_com_lixo) is lista_com_lixo
     dict_com_lixo = {"k": "A" + chr(0x2426) + "B"}
     assert sanitize_for_xlsx(dict_com_lixo) is dict_com_lixo
+
+
+# ---------------------------------------------------------------------------
+# Fase 2.2 — Regra B contra fixture REAL do DJEN
+#
+# Fase 2.1 lia ``numero_oab``/``uf_oab`` do nível raiz da entry de
+# ``destinatarioadvogados``. Os testes F2-09..F2-14 usavam fixtures
+# sintéticas alinhadas com o código (mas erradas vs. realidade) — bug
+# nunca foi pego. Smoke real 01/01→01/05/2026 mostrou (False, False)
+# em 100% das 2135 publicações.
+#
+# Fixture nova ``destinatarioadvogados_real_sample.json`` foi extraída
+# do xlsx do smoke real, slimmed pra conter só os campos relevantes
+# (id, comunicacao_id, advogado{id, nome, numero_oab, uf_oab}).
+# ---------------------------------------------------------------------------
+
+
+import json as _json
+from pathlib import Path as _Path
+
+
+def _load_real_fixture() -> dict:
+    """Carrega a fixture extraída do xlsx do smoke da Fase 2.1."""
+    p = (
+        _Path(__file__).resolve().parent
+        / "fixtures" / "dje" / "destinatarioadvogados_real_sample.json"
+    )
+    return _json.loads(p.read_text(encoding="utf-8"))
+
+
+def test_F22_01_regra_b_real_ricardo_e_leonardo_ambos_presentes() -> None:
+    """Sample real onde Ricardo+Leonardo aparecem em ``destinatarioadvogados``
+    (estrutura aninhada ``entry.advogado.numero_oab``) → ``(True, True)``
+    e ``observacoes`` da Regra B == ""."""
+    from notion_rpadv.services.dje_transform import (
+        _check_socios,
+        _socios_presentes,
+    )
+    fix = _load_real_fixture()
+    da = fix["ricardo_e_leonardo"]
+    assert _socios_presentes(da) == (True, True)
+    # Sanity: linha "normal" da Regra A → observacoes da Regra B == ""
+    assert _check_socios({"destinatarioadvogados": da}) == ""
+
+
+def test_F22_02_regra_b_real_so_ricardo_dispara_falta_leonardo() -> None:
+    """Sample real onde só Ricardo aparece → ``(True, False)`` e msg
+    "Leonardo não consta..."."""
+    from notion_rpadv.services.dje_transform import (
+        _check_socios,
+        _socios_presentes,
+    )
+    fix = _load_real_fixture()
+    da = fix["so_ricardo"]
+    assert _socios_presentes(da) == (True, False)
+    msg = _check_socios({"destinatarioadvogados": da})
+    assert "Leonardo" in msg and "não consta" in msg
+    assert "Ricardo" not in msg or "Leonardo" in msg.split("Ricardo")[0]
+
+
+def test_F22_03_regra_b_real_so_leonardo_dispara_falta_ricardo() -> None:
+    """Sample real onde só Leonardo aparece → ``(False, True)`` e msg
+    "Ricardo não consta..."."""
+    from notion_rpadv.services.dje_transform import (
+        _check_socios,
+        _socios_presentes,
+    )
+    fix = _load_real_fixture()
+    da = fix["so_leonardo"]
+    assert _socios_presentes(da) == (False, True)
+    msg = _check_socios({"destinatarioadvogados": da})
+    assert "Ricardo" in msg and "não consta" in msg
+
+
+def test_F22_04_regra_b_real_nem_ricardo_nem_leonardo_dispara_msg_completa() -> None:
+    """Sample real onde nenhum dos dois aparece → ``(False, False)`` e
+    msg "Nem Ricardo nem Leonardo..."."""
+    from notion_rpadv.services.dje_transform import (
+        _check_socios,
+        _socios_presentes,
+    )
+    fix = _load_real_fixture()
+    da = fix["nem_ricardo_nem_leonardo"]
+    assert _socios_presentes(da) == (False, False)
+    msg = _check_socios({"destinatarioadvogados": da})
+    assert "Nem Ricardo" in msg and "nem Leonardo" in msg
+
+
+def test_F22_05_regra_b_tolerancia_sufixo_letra_na_oab() -> None:
+    """OAB com sufixo de letra (e.g. ``"25200A"`` da Mariana Knofel) é
+    tolerada — comparamos só os dígitos. Sample real contém Mariana
+    + Ricardo + Leonardo. Importante: ``25200`` não confunde com
+    sócios (Ricardo=15523, Leonardo=36129), então o sample valida
+    AMBOS — sufixo presente E sócios detectados."""
+    from notion_rpadv.services.dje_transform import _socios_presentes
+    fix = _load_real_fixture()
+    da = fix["com_mariana_sufixo_25200A"]
+    # Sócios detectados normalmente apesar da Mariana estar na lista.
+    assert _socios_presentes(da) == (True, True)
+    # Sanity: a entry da Mariana realmente tem sufixo no fixture.
+    nums = [str(e.get("advogado", {}).get("numero_oab") or "") for e in da]
+    assert "25200A" in nums, f"fixture sem sufixo esperado: {nums}"
+    # Hipotético: se Ricardo viesse com sufixo, ainda matchearia.
+    hipotetico = [{"advogado": {"numero_oab": "15523A", "uf_oab": "DF"}}]
+    assert _socios_presentes(hipotetico) == (True, False)

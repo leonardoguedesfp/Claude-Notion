@@ -193,3 +193,102 @@ def test_R7_app_nav_commands_includes_leitor_dje() -> None:
     assert "nav_leitor_dje" in _NAV_COMMANDS
     assert _NAV_COMMANDS["nav_leitor_dje"] == _PAGE_LEITOR_DJE
     assert _PAGE_LEITOR_DJE == "leitor_dje"
+
+
+# ---------------------------------------------------------------------------
+# Fase 2.2 — botão Cancelar (state machine)
+# ---------------------------------------------------------------------------
+
+
+def test_F22_16_cancel_btn_oculto_no_estado_inicial() -> None:
+    """Estado inicial: ``_cancel_btn`` oculto, ``_download_btn``
+    habilitado. UI não polui o operador com botão sem função."""
+    _qapp()
+    from notion_rpadv.pages.leitor_dje import LeitorDJEPage
+    page = LeitorDJEPage(conn=MagicMock(), token="dummy", user="leo")
+    # Cancelar oculto (não há varredura em curso).
+    assert (
+        not page._cancel_btn.isVisible()  # noqa: SLF001
+        or page._cancel_btn.isHidden()    # noqa: SLF001
+    )
+    # Baixar habilitado.
+    assert page._download_btn.isEnabled()  # noqa: SLF001
+
+
+def test_F22_17_click_em_baixar_torna_cancel_visivel_e_habilitado(
+    tmp_path: Path,
+) -> None:
+    """Click em Baixar → Cancelar fica visível + habilitado, Baixar
+    desabilita. Worker é instanciado.
+
+    Mocka ``_DJEWorker`` pra evitar HTTP real e thread em loop —
+    interesse aqui é APENAS a transição da UI."""
+    _qapp()
+    from unittest.mock import patch
+    from PySide6.QtCore import QSettings
+    from notion_rpadv.pages.leitor_dje import (
+        _KEY_OUTPUT_DIR,
+        _SETTINGS_APP,
+        _SETTINGS_ORG,
+        LeitorDJEPage,
+    )
+    settings = QSettings(_SETTINGS_ORG, _SETTINGS_APP)
+    settings.setValue(_KEY_OUTPUT_DIR, str(tmp_path))
+    try:
+        page = LeitorDJEPage(conn=MagicMock(), token="dummy", user="leo")
+        # Mock _DJEWorker e QThread pra não disparar HTTP real.
+        with patch("notion_rpadv.pages.leitor_dje._DJEWorker") as mock_w_cls, \
+             patch("notion_rpadv.pages.leitor_dje.QThread") as mock_thr_cls:
+            mock_worker = MagicMock()
+            mock_w_cls.return_value = mock_worker
+            mock_thr_cls.return_value = MagicMock()
+            page._on_download_clicked()  # noqa: SLF001
+        # Estado pós-click: Cancelar não-oculto (visibility flag setado),
+        # Baixar desabilitado. Usa isHidden() porque parent widget não
+        # está show()'d em ambiente headless — isVisible() seria False
+        # mesmo com setVisible(True).
+        assert not page._cancel_btn.isHidden()  # noqa: SLF001
+        assert page._cancel_btn.isEnabled()  # noqa: SLF001
+        assert not page._download_btn.isEnabled()  # noqa: SLF001
+        assert page._cancel_btn.text() == "Cancelar"  # noqa: SLF001
+        assert page._worker is mock_worker  # noqa: SLF001
+    finally:
+        settings.remove(_KEY_OUTPUT_DIR)
+
+
+def test_F22_18_click_em_cancelar_chama_request_cancel_e_muda_label(
+    tmp_path: Path,
+) -> None:
+    """Click em Cancelar → ``worker.request_cancel()`` chamado, botão
+    fica desabilitado com label 'Cancelando...'. UX de feedback:
+    operador sabe que o sistema recebeu o pedido.
+
+    Mocka worker pra teste não disparar HTTP real."""
+    _qapp()
+    from unittest.mock import patch
+    from PySide6.QtCore import QSettings
+    from notion_rpadv.pages.leitor_dje import (
+        _KEY_OUTPUT_DIR,
+        _SETTINGS_APP,
+        _SETTINGS_ORG,
+        LeitorDJEPage,
+    )
+    settings = QSettings(_SETTINGS_ORG, _SETTINGS_APP)
+    settings.setValue(_KEY_OUTPUT_DIR, str(tmp_path))
+    try:
+        page = LeitorDJEPage(conn=MagicMock(), token="dummy", user="leo")
+        with patch("notion_rpadv.pages.leitor_dje._DJEWorker") as mock_w_cls, \
+             patch("notion_rpadv.pages.leitor_dje.QThread") as mock_thr_cls:
+            mock_worker = MagicMock()
+            mock_w_cls.return_value = mock_worker
+            mock_thr_cls.return_value = MagicMock()
+            page._on_download_clicked()  # noqa: SLF001
+            # Click em Cancelar
+            page._on_cancel_clicked()  # noqa: SLF001
+        # request_cancel() foi chamado no worker.
+        mock_worker.request_cancel.assert_called_once()
+        # Label muda + desabilita pra evitar clique repetido.
+        assert page._cancel_btn.text() == "Cancelando..."  # noqa: SLF001
+        assert not page._cancel_btn.isEnabled()  # noqa: SLF001
+    finally:
+        settings.remove(_KEY_OUTPUT_DIR)

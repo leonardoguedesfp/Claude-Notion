@@ -57,10 +57,15 @@ smoke real em janela longa (01/01→30/04/2026) gerar 429 catastrófico em
 3. Clique **Baixar publicações**.
 4. Acompanhe o progresso na barra (6 etapas — uma por advogado) e na área de log abaixo.
 5. Ao terminar, clique **Abrir arquivo gerado** ou **Abrir pasta**.
+6. Pra interromper a varredura, clique **Cancelar** (botão aparece ao lado de "Baixar publicações" durante a execução). O arquivo parcial é salvo com o que já foi captado até o ponto do cancelamento.
 
-> **Janelas longas (> 30 dias)** podem demorar vários minutos por
-> advogado. A pausa entre requisições é de 2s (Fase 2.1, era 1s) e o
-> cliente honra o header `Retry-After` quando o servidor pede uma espera
+> **Janelas longas (> 31 dias)** são automaticamente divididas em
+> sub-janelas mensais (jan/26, fev/26, ...) pra reduzir paginação
+> profunda no backend do DJEN — descoberta da Fase 2.2 após smoke real
+> identificar 429 catastrófico em paginação > 20. Sub-janelas que
+> falham na 1ª passada são reagendadas com pausa de 30s (retry diferido).
+> A pausa entre requisições é de 2s (Fase 2.1, era 1s) e o cliente
+> honra o header `Retry-After` quando o servidor pede uma espera
 > explícita no 429 (cap em 60s pra evitar travar a UI por minutos).
 
 ### O que ele faz
@@ -125,6 +130,16 @@ A coluna sinaliza dois grupos de anomalia:
 Linhas sem anomalia → `observacoes` é string vazia. Múltiplas mensagens
 unidas por ` | ` (Regra A primeiro, Regra B depois).
 
+> **Nota Fase 2.2:** o smoke real de 01/01→01/05/2026 revelou que o código
+> da Fase 2.1 lia `numero_oab`/`uf_oab` do nível raiz da entry de
+> `destinatarioadvogados`, mas a estrutura real do DJEN aninha esses
+> campos dentro de um sub-objeto `advogado` (`entry.advogado.numero_oab`).
+> A Regra B disparava em 100% das publicações como falso-positivo. Fix
+> da Fase 2.2: descer no nível correto, com fallback no nível raiz pra
+> compat com fixtures legacy. Tolerância adicional a sufixo de letra
+> na OAB (e.g. `"25200A"` da Mariana Knofel Jaguaribe) — comparamos
+> só os dígitos.
+
 ### Configuração
 
 - **Pasta de destino**: configurável via `QSettings` (`leitor_dje/output_dir`).
@@ -147,7 +162,21 @@ unidas por ` | ` (Regra A primeiro, Regra B depois).
 - 429 com header `Retry-After: <segundos>` → cliente honra o valor do
   servidor em vez do backoff fixo, capado em **60s** pra evitar travar
   a UI (Fase 2.1).
+- 429 com `Retry-After: 0` → não espera, prossegue imediato (Fase 2.2).
+- 429 com `Retry-After: -39` (negativo, bug do servidor DJEN observado
+  no smoke real) → cai no fallback do backoff atual, com warning log
+  específico classificando a origem (Fase 2.2).
 - HTTP 4xx (≠ 429) → registra corpo da resposta e segue (sem retry).
+- **Janela > 31 dias é dividida automaticamente em sub-janelas mensais**
+  (Fase 2.2) — calendar-aligned (jan/26, fev/26, ...) — pra reduzir
+  pressão de paginação profunda no backend. Reduz risco de 429
+  catastrófico observado em janelas de 4 meses.
+- **Retry diferido** (Fase 2.2): após a varredura principal de uma janela
+  splitada, sub-janelas que falharam persistentemente são reagendadas
+  UMA vez com pausa de **30s** entre cada — tempo pro backend recuperar
+  bucket de rate limit. Se recuperar todas as falhas de um advogado,
+  o erro é limpo; se ainda falhar, mantém. Retry diferido NÃO dispara
+  em janelas curtas (≤ 31 dias).
 - Falha em ≥ 1 advogado → arquivo é gerado mesmo assim (incompleto), com
   banner amarelo listando os advogados afetados.
 - Caracteres de controle Unicode (incluindo o bloco "Control Pictures"
@@ -160,6 +189,12 @@ unidas por ` | ` (Regra A primeiro, Regra B depois).
   ("M linha(s) com caractere inválido foram puladas"). Detalhes (até 10
   linhas) aparecem na área de log da UI; acima do cap, log do sistema
   guarda o resto.
+- **Cancelamento da varredura** (Fase 2.2): botão "Cancelar" ao lado de
+  "Baixar publicações" interrompe a varredura entre advogados, entre
+  sub-janelas, ou entre páginas. NÃO interrompe HTTP em retry (pra não
+  corromper paginação). Items já captados são salvos em arquivo parcial.
+  Banner final mostra "Varredura cancelada pelo usuário. N publicações
+  captadas até o ponto do cancelamento foram salvas".
 - Divergência entre duplicatas de mesmo `id` (campos não-advogado) →
   warning no logger `dje.transform`, primeira ocorrência mantida.
 

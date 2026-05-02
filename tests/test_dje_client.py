@@ -643,3 +643,279 @@ def test_F21_12cap_retry_after_acima_do_cap_eh_capado_em_60s() -> None:
     assert result.erro is None
     # Cap em 60s (default em Fase 2.1).
     assert sleeps[0] == RETRY_AFTER_CAP_SECONDS == 60.0
+
+
+# ---------------------------------------------------------------------------
+# Fase 2.2 — Retry-After refinado (zero válido, negativo distinguido)
+# ---------------------------------------------------------------------------
+
+
+def test_F22_14_retry_after_zero_nao_espera_e_prossegue() -> None:
+    """``Retry-After: 0`` → cliente não espera (sleep com valor 0)
+    antes do retry. Servidor sinalizou 'pode prosseguir agora'."""
+    sleeps: list[float] = []
+    resp_429 = _mock_response(status=429)
+    resp_429.headers = {"Retry-After": "0"}
+    resp_ok = _mock_response(json_payload={"items": []})
+    session = _make_session([resp_429, resp_ok])
+    client = _make_client(session, sleep=sleeps.append)
+    advogado = {"nome": "X", "oab": "1", "uf": "DF"}
+    result = client.fetch_advogado(
+        advogado, date(2026, 5, 1), date(2026, 5, 1),
+    )
+    assert result.erro is None
+    assert sleeps[0] == 0.0
+
+
+def test_F22_15_retry_after_negativo_eh_invalido_log_classifica_bug_servidor(
+    caplog,
+) -> None:
+    """``Retry-After: -39`` → fallback no backoff atual + warning log
+    com mensagem específica "negativo, bug do servidor". Bug observado
+    no smoke real da Fase 2.1 (DJEN envia valores tipo -39, -41, -57)."""
+    import logging
+    from notion_rpadv.services.dje_client import RETRY_BACKOFFS
+    sleeps: list[float] = []
+    resp_429 = _mock_response(status=429)
+    resp_429.headers = {"Retry-After": "-39"}
+    resp_ok = _mock_response(json_payload={"items": []})
+    session = _make_session([resp_429, resp_ok])
+    client = _make_client(session, sleep=sleeps.append)
+    advogado = {"nome": "X", "oab": "1", "uf": "DF"}
+    with caplog.at_level(logging.WARNING, logger="dje.client"):
+        result = client.fetch_advogado(
+            advogado, date(2026, 5, 1), date(2026, 5, 1),
+        )
+    assert result.erro is None
+    # Caiu no fallback do backoff (não no valor negativo).
+    assert sleeps[0] == RETRY_BACKOFFS[0]
+    # Mensagem de log classifica o erro como bug do servidor.
+    relevant = [
+        r.getMessage() for r in caplog.records
+        if r.levelno == logging.WARNING and "Retry-After" in r.getMessage()
+    ]
+    assert any("negativo" in m and "bug do servidor" in m for m in relevant), (
+        f"esperava warning 'negativo, bug do servidor', got: {relevant!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Fase 2.2 — Split de janela mensal (puro)
+# ---------------------------------------------------------------------------
+
+
+def test_F22_06_split_window_janela_curta_nao_splita() -> None:
+    """Janela ≤ 31 dias → 1 sub-janela (não splita; comportamento
+    Fase 2.1 preservado)."""
+    from notion_rpadv.services.dje_client import _split_window_monthly
+    # Mesmo dia
+    assert _split_window_monthly(date(2026, 5, 1), date(2026, 5, 1)) == [
+        (date(2026, 5, 1), date(2026, 5, 1)),
+    ]
+    # 31 dias exatos
+    assert _split_window_monthly(date(2026, 5, 1), date(2026, 6, 1)) == [
+        (date(2026, 5, 1), date(2026, 6, 1)),
+    ]
+    # 7 dias dentro do mesmo mês
+    assert _split_window_monthly(date(2026, 5, 1), date(2026, 5, 8)) == [
+        (date(2026, 5, 1), date(2026, 5, 8)),
+    ]
+
+
+def test_F22_07_split_window_4_meses_calendar_aligned() -> None:
+    """Janela 01/01→01/05/2026 (4 meses, > 31 dias) → 5 sub-janelas
+    calendar-aligned (jan/fev/mar/abr/mai). Cada sub-janela vai do
+    dia 1 ao último dia do mês, exceto a primeira (que começa em
+    data_inicio) e a última (que termina em data_fim)."""
+    from notion_rpadv.services.dje_client import _split_window_monthly
+    result = _split_window_monthly(date(2026, 1, 1), date(2026, 5, 1))
+    assert result == [
+        (date(2026, 1, 1), date(2026, 1, 31)),
+        (date(2026, 2, 1), date(2026, 2, 28)),
+        (date(2026, 3, 1), date(2026, 3, 31)),
+        (date(2026, 4, 1), date(2026, 4, 30)),
+        (date(2026, 5, 1), date(2026, 5, 1)),
+    ]
+
+
+def test_F22_08_split_window_atravessando_ano_e_dezembro() -> None:
+    """Janela 15/12/2025 → 15/02/2026 (3 meses parciais, atravessa
+    ano) → 3 sub-janelas (dez/25, jan/26, fev/26). Testa o branch
+    de mês == 12 (incrementa ano)."""
+    from notion_rpadv.services.dje_client import _split_window_monthly
+    result = _split_window_monthly(date(2025, 12, 15), date(2026, 2, 15))
+    assert result == [
+        (date(2025, 12, 15), date(2025, 12, 31)),
+        (date(2026, 1, 1), date(2026, 1, 31)),
+        (date(2026, 2, 1), date(2026, 2, 15)),
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Fase 2.2 — fetch_all com sub-janelas (integração)
+# ---------------------------------------------------------------------------
+
+
+def test_F22_09_fetch_all_janela_longa_chama_sub_janelas() -> None:
+    """fetch_all com janela > 31 dias chama fetch_advogado uma vez
+    por sub-janela. Items são agregados num único AdvogadoResult."""
+    # Janela 4 meses → 5 sub-janelas. Mock: cada sub-janela retorna
+    # 2 items (1 página, < PAGE_SIZE → fetch_advogado para após 1 req).
+    sub_payloads = [
+        _mock_response(json_payload={"items": [
+            {"id": f"{m}-1", "hash": "x"},
+            {"id": f"{m}-2", "hash": "y"},
+        ]})
+        for m in range(5)  # 5 sub-janelas
+    ]
+    session = _make_session(sub_payloads)
+    client = _make_client(session)
+    advogados = [{"nome": "X", "oab": "1", "uf": "DF"}]
+    summary = client.fetch_all(
+        advogados, date(2026, 1, 1), date(2026, 5, 1),
+    )
+    # 5 sub-janelas × 2 items = 10 items totais.
+    assert summary.total_items == 10
+    assert len(summary.by_advogado) == 1
+    # Sem erros: tudo correu bem.
+    assert summary.errors == []
+    # 5 chamadas HTTP (1 por sub-janela, cada uma com 2 items < PAGE_SIZE).
+    assert session.get.call_count == 5
+
+
+def test_F22_10_retry_diferido_recupera_falha_em_sub_janela() -> None:
+    """Janela longa (split): 1 sub-janela falha persistente na 1ª
+    passada → retry diferido tenta de novo, sucesso → ``erro`` é
+    limpo no AdvogadoResult agregado."""
+    from notion_rpadv.services.dje_client import RETRY_DEFERRED_PAUSE_SECONDS
+
+    # Cenário: 4 sub-janelas (jan/fev/mar/abr/26 numa janela de 4 meses
+    # ajustada pra cair em 4). Janela 02/01 → 02/05 = 5 sub-janelas
+    # iremos usar 02/01 → 30/04 = 4 sub-janelas (jan/fev/mar/abr).
+    # Sub 0,1,2 ok; sub 3 (abr) falha 503 3x na 1ª passada;
+    # depois retry diferido: 1 chamada extra OK.
+    responses = [
+        _mock_response(json_payload={"items": [{"id": "j", "hash": "j"}]}),  # jan
+        _mock_response(json_payload={"items": [{"id": "f", "hash": "f"}]}),  # fev
+        _mock_response(json_payload={"items": [{"id": "m", "hash": "m"}]}),  # mar
+        # abr — 3 falhas (retry budget esgotado)
+        _mock_response(status=503),
+        _mock_response(status=503),
+        _mock_response(status=503),
+        # retry diferido na sub abr — 1 chamada bem-sucedida
+        _mock_response(json_payload={"items": [{"id": "a", "hash": "a"}]}),
+    ]
+    sleeps: list[float] = []
+    session = _make_session(responses)
+    client = _make_client(session, sleep=sleeps.append)
+    advogados = [{"nome": "X", "oab": "1", "uf": "DF"}]
+    summary = client.fetch_all(
+        advogados, date(2026, 1, 2), date(2026, 4, 30),
+    )
+    # 4 sub-janelas × 1 item cada = 4 items totais (incluindo o recuperado).
+    assert summary.total_items == 4
+    # Sem erros: retry diferido recuperou.
+    assert summary.errors == []
+    # Pausa de retry diferido foi aplicada (≥ RETRY_DEFERRED_PAUSE_SECONDS).
+    assert RETRY_DEFERRED_PAUSE_SECONDS in sleeps
+
+
+def test_F22_11_retry_diferido_falha_em_ambas_passadas_mantem_erro() -> None:
+    """Janela longa: 1 sub-janela falha 503 na 1ª passada E no retry
+    diferido → ``erro`` permanece no AdvogadoResult agregado, listado
+    em summary.errors."""
+    # 4 sub-janelas (jan/fev/mar/abr). Sub 3 (abr) falha em todas
+    # as 6 chamadas (3 na 1ª passada + 3 no retry diferido).
+    responses = [
+        _mock_response(json_payload={"items": [{"id": "j", "hash": "j"}]}),
+        _mock_response(json_payload={"items": [{"id": "f", "hash": "f"}]}),
+        _mock_response(json_payload={"items": [{"id": "m", "hash": "m"}]}),
+        # 1ª passada da abr — 3 falhas
+        _mock_response(status=503),
+        _mock_response(status=503),
+        _mock_response(status=503),
+        # Retry diferido — também 3 falhas
+        _mock_response(status=503),
+        _mock_response(status=503),
+        _mock_response(status=503),
+    ]
+    session = _make_session(responses)
+    client = _make_client(session)
+    advogados = [{"nome": "X", "oab": "1", "uf": "DF"}]
+    summary = client.fetch_all(
+        advogados, date(2026, 1, 2), date(2026, 4, 30),
+    )
+    # 3 items das sub-janelas que sucederam (jan/fev/mar).
+    assert summary.total_items == 3
+    # Erro permanece no advogado (sub-janela abr falhou definitivamente).
+    assert len(summary.errors) == 1
+    assert summary.errors[0].advogado["oab"] == "1"
+
+
+# ---------------------------------------------------------------------------
+# Fase 2.2 — Cancelamento (is_cancelled)
+# ---------------------------------------------------------------------------
+
+
+def test_F22_12_cancelamento_entre_advogados_para_e_marca_cancelled() -> None:
+    """``is_cancelled`` retorna True após o 1º advogado completar →
+    a varredura para no início do 2º; ``summary.cancelled == True``;
+    items do 1º preservados."""
+    # Single-day window (sem split). 1ª chamada: AdvA OK. Antes da
+    # 2ª chamada (AdvB), is_cancelled vira True → para.
+    items_a = [{"id": 1, "hash": "a"}]
+    session = _make_session([
+        _mock_response(json_payload={"items": items_a}),
+    ])
+    client = _make_client(session)
+    advogados = [
+        {"nome": "AdvA", "oab": "1", "uf": "DF"},
+        {"nome": "AdvB", "oab": "2", "uf": "DF"},
+    ]
+    # Flag que vira True após 1ª chamada à get.
+    cancel_after_calls = [1]  # mutable container
+    def is_cancelled():
+        return session.get.call_count >= cancel_after_calls[0]
+
+    summary = client.fetch_all(
+        advogados, date(2026, 5, 1), date(2026, 5, 1),
+        is_cancelled=is_cancelled,
+    )
+    assert summary.cancelled is True
+    # 1 item do AdvA captado (não perdeu).
+    assert summary.total_items == 1
+    # session.get foi chamado exatamente 1 vez (AdvB nunca).
+    assert session.get.call_count == 1
+
+
+def test_F22_13_cancelamento_entre_paginas_retorna_parcial() -> None:
+    """``is_cancelled`` retorna True após pag 2 do AdvA → fetch_advogado
+    para entre páginas; items das 2 páginas preservados, summary
+    marca cancelled."""
+    page1 = [{"id": i, "hash": f"h{i}"} for i in range(100)]
+    page2 = [{"id": i + 100, "hash": f"h{i+100}"} for i in range(100)]
+    page3 = [{"id": i + 200, "hash": f"h{i+200}"} for i in range(50)]  # nunca alcançada
+    session = _make_session([
+        _mock_response(json_payload={"items": page1}),
+        _mock_response(json_payload={"items": page2}),
+        _mock_response(json_payload={"items": page3}),
+    ])
+    client = _make_client(session)
+    advogados = [{"nome": "X", "oab": "1", "uf": "DF"}]
+    # Cancela após 2 calls (= entre pag 2 e pag 3).
+    def is_cancelled():
+        return session.get.call_count >= 2
+
+    summary = client.fetch_all(
+        advogados, date(2026, 5, 1), date(2026, 5, 1),
+        is_cancelled=is_cancelled,
+    )
+    assert summary.cancelled is True
+    # 100 + 100 = 200 items das 2 primeiras páginas.
+    assert summary.total_items == 200
+    # 2 chamadas, não 3.
+    assert session.get.call_count == 2
+    # AdvogadoResult agregado preservou os items.
+    assert len(summary.by_advogado[0].items) == 200
+    # erro = None (cancelamento ≠ erro).
+    assert summary.by_advogado[0].erro is None
