@@ -58,10 +58,18 @@ logger = logging.getLogger("dje.transform")
 # ---------------------------------------------------------------------------
 
 
-# Ordem editorial das 20 colunas no xlsx final. Fonte única do contrato.
-# Bumpe esta lista conjuntamente com testes que assertam a ordem.
+# Ordem editorial das 21 colunas no xlsx final (Fase 3).
+# Fonte única do contrato — bumpe esta lista conjuntamente com testes que
+# asseguram a ordem.
+#
+# Diferenças vs Fase 2 (era 20 colunas):
+# - ``advogados_consultados`` → renomeada pra ``advogados_consultados_escritorio``
+#   (clareza: lista só os advogados do escritório, não os externos).
+# - ``oabs_externas_consultadas`` (nova, última posição): preenchida em modo
+#   manual quando o usuário pesquisa OABs fora da lista oficial; vazia em
+#   modo padrão.
 CANONICAL_COLUMNS: Final[list[str]] = [
-    "advogados_consultados",
+    "advogados_consultados_escritorio",
     "observacoes",
     "id",
     "hash",
@@ -81,6 +89,7 @@ CANONICAL_COLUMNS: Final[list[str]] = [
     "destinatarios",
     "destinatarioadvogados",
     "datadisponibilizacao",
+    "oabs_externas_consultadas",
 ]
 
 # Colunas removidas do output F2 (cobertas pela ``observacoes``).
@@ -106,6 +115,126 @@ _REGRA_A_DEFAULTS: Final[dict[str, Any]] = {
     "meio":        "D",
     "meiocompleto": "Diário de Justiça Eletrônico Nacional",
 }
+
+
+# ---------------------------------------------------------------------------
+# Helpers de OAB (Fase 3 — split escritório/externas)
+# ---------------------------------------------------------------------------
+
+
+# Casa "(OAB/UF)" no final do label "Nome Completo (OAB/UF)".
+# OAB pode ter sufixo de letra (e.g. "25200A" da Mariana Knofel
+# Jaguaribe — caso real do DJEN).
+_OAB_UF_RE: Final = re.compile(r"\(([A-Za-z0-9]+)/([A-Z]{2})\)\s*$")
+# Casa "OAB/UF" puro (sem nome, sem parênteses) — usado pelo modo
+# manual onde o usuário só digita OAB+UF e o nome é resolvido depois.
+_OAB_UF_BARE_RE: Final = re.compile(r"^([A-Za-z0-9]+)/([A-Z]{2})$")
+
+
+def _extract_oab_uf(label: str) -> str | None:
+    """Extrai ``OAB/UF`` de uma label de advogado.
+
+    Aceita 2 formatos:
+    - ``"Nome Completo (OAB/UF)"`` (com nome) → extrai do parênteses final
+    - ``"OAB/UF"`` (sem nome) → label inteira é a chave
+
+    Retorna ``None`` se o formato não bater. OAB com sufixo letra é
+    preservado (e.g. ``"25200A"``).
+    """
+    if not label:
+        return None
+    s = label.strip()
+    m = _OAB_UF_RE.search(s)
+    if m:
+        return f"{m.group(1)}/{m.group(2)}"
+    m = _OAB_UF_BARE_RE.match(s)
+    if m:
+        return f"{m.group(1)}/{m.group(2)}"
+    return None
+
+
+def _resolve_externa_nome_via_destinatarios(
+    label: str,
+    destinatarioadvogados,
+) -> str:
+    """Pra labels de externas no formato ``"OAB/UF"`` puro (sem nome),
+    tenta resolver o nome a partir de ``destinatarioadvogados`` da
+    publicação — match por ``numero_oab + uf_oab``. Se achou, retorna
+    ``"NOME (OAB/UF)"``. Senão, retorna a label original.
+
+    Refator pós-Fase 3 hotfix UX: usuário do modo manual só digita
+    OAB+UF; o nome real é resolvido aqui após captura, usando o que
+    a API DJEN devolveu.
+    """
+    if "(" in label:  # já tem nome — passa direto
+        return label
+    oab_uf = _extract_oab_uf(label)
+    if oab_uf is None:
+        return label
+    target_oab, target_uf = oab_uf.split("/")
+    if not isinstance(destinatarioadvogados, list):
+        return label
+    for entry in destinatarioadvogados:
+        if not isinstance(entry, dict):
+            continue
+        adv = entry.get("advogado") if isinstance(
+            entry.get("advogado"), dict,
+        ) else entry
+        oab_raw = str(adv.get("numero_oab") or "").strip()
+        oab_digits = "".join(c for c in oab_raw if c.isdigit())
+        uf = str(adv.get("uf_oab") or "").strip().upper()
+        if oab_digits == target_oab and uf == target_uf:
+            nome = str(adv.get("nome") or "").strip()
+            if nome:
+                return f"{nome} ({target_oab}/{target_uf})"
+            break
+    return label
+
+
+def _default_oab_to_label_escritorio() -> dict[str, str]:
+    """Lookup ``OAB/UF`` → ``"Nome Completo (OAB/UF)"`` derivado da
+    lista oficial ``ADVOGADOS``. Lazy import pra quebrar ciclo
+    transform→advogados→transform (impossível hoje, mas defensivo).
+    """
+    from notion_rpadv.services.dje_advogados import (
+        ADVOGADOS,
+        format_advogado_label,
+    )
+    return {
+        f"{a['oab']}/{a['uf']}": format_advogado_label(a)
+        for a in ADVOGADOS
+    }
+
+
+def _oabs_escritorio_em_destinatario(
+    destinatarioadvogados: Any,
+    oabs_escritorio_oficiais: set[str],
+) -> set[str]:
+    """Devolve subset das ``oabs_escritorio_oficiais`` que aparecem em
+    ``destinatarioadvogados`` da publicação.
+
+    Mesma estratégia de leitura aninhada do ``_socios_presentes``
+    (campos sob ``entry["advogado"]`` com fallback ao nível raiz).
+    Tolerância a sufixo de letra na OAB.
+    """
+    result: set[str] = set()
+    if not isinstance(destinatarioadvogados, list):
+        return result
+    for entry in destinatarioadvogados:
+        if not isinstance(entry, dict):
+            continue
+        adv = entry.get("advogado") if isinstance(
+            entry.get("advogado"), dict,
+        ) else entry
+        oab_raw = str(adv.get("numero_oab") or "").strip()
+        oab_digits = "".join(c for c in oab_raw if c.isdigit())
+        uf = str(adv.get("uf_oab") or "").strip().upper()
+        if not oab_digits or not uf:
+            continue
+        oab_uf = f"{oab_digits}/{uf}"
+        if oab_uf in oabs_escritorio_oficiais:
+            result.add(oab_uf)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -442,6 +571,112 @@ def dedup_by_id(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
+# Split advogados em colunas escritório/externas (Fase 3)
+# ---------------------------------------------------------------------------
+
+
+def split_advogados_columns(
+    rows: list[dict[str, Any]],
+    *,
+    oabs_escritorio_marcadas: set[str],
+    oabs_externas_pesquisadas: set[str] | None = None,
+    oabs_escritorio_oficiais_labels: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
+    """Para cada row já deduplicada (com chave ``advogados_consultados``
+    agregando os pesquisados que matcharam), separa em 2 colunas finais:
+
+    - ``advogados_consultados_escritorio``: labels do escritório (formato
+      ``"Nome (OAB/UF); ..."``)
+    - ``oabs_externas_consultadas``: labels externos pesquisados (mesmo
+      formato; vazio em modo padrão)
+
+    Regra escritório:
+    - Se ``oabs_escritorio_marcadas`` não-vazio → mantém só os marcados
+      que aparecem no agregado (filtro pela intenção da busca).
+    - Se ``oabs_escritorio_marcadas`` vazio (modo manual sem nenhuma
+      marcada) → reflete a REALIDADE: traz do ``destinatarioadvogados``
+      todos os advogados do escritório que aparecem, mesmo que não
+      tenham sido pesquisados (regra do spec F3-14).
+
+    Regra externas: subset do agregado cuja OAB está em
+    ``oabs_externas_pesquisadas``.
+
+    ``oabs_escritorio_oficiais_labels``: lookup ``OAB/UF`` →
+    ``"Nome (OAB/UF)"`` das 6 OABs oficiais do escritório. Default:
+    deriva de ``ADVOGADOS``. Parametrizável pra teste.
+
+    Remove a chave ``advogados_consultados`` (plural antigo) das rows.
+    """
+    if oabs_externas_pesquisadas is None:
+        oabs_externas_pesquisadas = set()
+    if oabs_escritorio_oficiais_labels is None:
+        oabs_escritorio_oficiais_labels = _default_oab_to_label_escritorio()
+    oabs_escritorio_oficiais = set(oabs_escritorio_oficiais_labels.keys())
+
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        new_row = dict(row)
+        agregado_str = new_row.pop("advogados_consultados", "") or ""
+        labels_agregados = [
+            s.strip() for s in agregado_str.split(";") if s.strip()
+        ]
+
+        # Separa labels agregados em escritório vs externos pelo lookup OAB.
+        escritorio_no_agregado: list[str] = []
+        externas_no_agregado: list[str] = []
+        for label in labels_agregados:
+            oab_uf = _extract_oab_uf(label)
+            if oab_uf is None:
+                # Label malformada (sem padrão "(OAB/UF)" no fim) — defesa:
+                # joga no bucket escritório (assume busca interna).
+                escritorio_no_agregado.append(label)
+                continue
+            if oab_uf in oabs_escritorio_oficiais:
+                escritorio_no_agregado.append(label)
+            else:
+                externas_no_agregado.append(label)
+
+        # Aplica regra do escritório.
+        if oabs_escritorio_marcadas:
+            escritorio_final = [
+                label for label in escritorio_no_agregado
+                if (uf_oab := _extract_oab_uf(label)) is not None
+                and uf_oab in oabs_escritorio_marcadas
+            ]
+        else:
+            # Modo manual sem nenhuma do escritório marcada — reflete realidade.
+            oabs_realidade = _oabs_escritorio_em_destinatario(
+                new_row.get("destinatarioadvogados"),
+                oabs_escritorio_oficiais,
+            )
+            escritorio_final = [
+                oabs_escritorio_oficiais_labels[oab_uf]
+                for oab_uf in oabs_realidade
+            ]
+
+        # Aplica regra das externas: só pesquisadas que aparecem.
+        # Antes de retornar, tenta resolver o nome via
+        # destinatarioadvogados pra labels que vieram só "OAB/UF" puras
+        # (modo manual onde o usuário não digita o nome).
+        destinatarios = new_row.get("destinatarioadvogados")
+        externas_final = [
+            _resolve_externa_nome_via_destinatarios(label, destinatarios)
+            for label in externas_no_agregado
+            if (uf_oab := _extract_oab_uf(label)) is not None
+            and uf_oab in oabs_externas_pesquisadas
+        ]
+
+        new_row["advogados_consultados_escritorio"] = "; ".join(
+            sorted(escritorio_final),
+        )
+        new_row["oabs_externas_consultadas"] = "; ".join(
+            sorted(externas_final),
+        )
+        out.append(new_row)
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Apply enrichment + cleanup
 # ---------------------------------------------------------------------------
 
@@ -536,20 +771,61 @@ class _DescStr:
 
 def transform_rows(
     raw_rows: list[dict[str, Any]],
+    *,
+    oabs_escritorio_marcadas: set[str] | None = None,
+    oabs_externas_pesquisadas: set[str] | None = None,
+    oabs_escritorio_oficiais_labels: dict[str, str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
-    """Pipeline completo da Fase 2:
-    1. Dedup por ``id`` → 1 linha por publicação
-    2. Enrich cada linha: ``observacoes``, strip HTML do ``texto``,
-       normalização de encoding em nomeOrgao/nomeClasse/tipoDocumento
-    3. Drop das 6 colunas redundantes
-    4. Sort por siglaTribunal ASC + data_disponibilizacao DESC
+    """Pipeline completo de captação (Fase 3):
+    1. Dedup por ``id`` → 1 linha por publicação, agregando os
+       ``advogado_consultado`` (singular do client) em
+       ``advogados_consultados`` (plural intermediário).
+    2. Split em 2 colunas finais: ``advogados_consultados_escritorio``
+       e ``oabs_externas_consultadas`` (Fase 3 — vide
+       ``split_advogados_columns``).
+    3. Enrich cada linha: ``observacoes``, strip HTML do ``texto``,
+       normalização de encoding, drop das 6 colunas redundantes,
+       sanitize de control chars.
+    4. Sort por siglaTribunal ASC + data_disponibilizacao DESC.
 
     Retorna ``(rows, columns)`` — rows são os dicts processados,
-    columns é ``CANONICAL_COLUMNS`` (20 entradas em ordem fixa).
+    columns é ``CANONICAL_COLUMNS`` (21 entradas em ordem fixa).
     Caller (``dje_exporter.write_publicacoes_xlsx``) escreve nessa
     ordem no xlsx.
+
+    Defaults dos params (modo padrão, retrocompat com chamadas legacy):
+    - ``oabs_escritorio_marcadas=None`` → usa todas as 6 oficiais.
+    - ``oabs_externas_pesquisadas=None`` → set vazio.
     """
+    if oabs_escritorio_oficiais_labels is None:
+        oabs_escritorio_oficiais_labels = _default_oab_to_label_escritorio()
+    if oabs_escritorio_marcadas is None:
+        oabs_escritorio_marcadas = set(oabs_escritorio_oficiais_labels.keys())
+    if oabs_externas_pesquisadas is None:
+        oabs_externas_pesquisadas = set()
+
     deduped = dedup_by_id(raw_rows)
-    enriched = [_enrich_row(r) for r in deduped]
+    splitted = split_advogados_columns(
+        deduped,
+        oabs_escritorio_marcadas=oabs_escritorio_marcadas,
+        oabs_externas_pesquisadas=oabs_externas_pesquisadas,
+        oabs_escritorio_oficiais_labels=oabs_escritorio_oficiais_labels,
+    )
+    enriched = [_enrich_row(r) for r in splitted]
+    sorted_rows = sort_rows(enriched)
+    return sorted_rows, list(CANONICAL_COLUMNS)
+
+
+def transform_rows_for_history(
+    db_rows: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Pipeline pro histórico completo (Fase 3): rows já vêm do SQLite
+    com ``advogados_consultados_escritorio`` e ``oabs_externas_consultadas``
+    pré-calculados em execuções anteriores. Pula dedup e split — faz só
+    enrich + sort.
+
+    Retorna ``(rows, columns)`` no mesmo formato de ``transform_rows``.
+    """
+    enriched = [_enrich_row(r) for r in db_rows]
     sorted_rows = sort_rows(enriched)
     return sorted_rows, list(CANONICAL_COLUMNS)

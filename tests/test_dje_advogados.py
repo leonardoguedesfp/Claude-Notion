@@ -1,14 +1,20 @@
 """Testes da lista oficial ``ADVOGADOS`` em ``dje_advogados.py``.
 
-Fase 2.1 (2026-05-01) reduziu a lista de 12 para 6 advogados ativos.
-Os 6 desativados ficam comentados (não deletados) com cabeçalho explicativo —
-caso operacional muda, descomenta-se a linha desejada.
+Histórico:
+- Fase 2.1 (2026-05-01): lista reduzida de 12 → 6.
+- Pós-smoke real do refator watermark-por-advogado (02/05/2026): lista
+  reduzida de 6 → 2 (Ricardo + Leonardo) por sobrecarga 429 da API DJEN
+  em janelas longas. Reativar quando watermark estiver consolidado e
+  volume diário sem 429.
+
+Os advogados desativados ficam comentados (não deletados) com cabeçalho
+explicativo — caso operacional muda, descomenta-se a linha desejada.
 
 Estes testes garantem:
-- F21-13: contagem de advogados ativos = 6
-- F21-14: as 6 OABs ativas estão presentes e corretas
-- F21-15: as 6 OABs desativadas continuam no arquivo (linha comentada),
-  protegendo contra deleção acidental.
+- contagem de advogados ativos
+- OABs ativas presentes e corretas
+- OABs desativadas continuam no arquivo (linha comentada), protegendo
+  contra deleção acidental.
 """
 from __future__ import annotations
 
@@ -17,13 +23,15 @@ from pathlib import Path
 OABS_ATIVAS = (
     "15523",  # Ricardo Luiz Rodrigues da Fonseca Passos
     "36129",  # Leonardo Guedes da Fonseca Passos
+)
+
+OABS_DESATIVADAS = (
+    # Desativadas no pós-smoke do refator watermark-por-advogado:
     "48468",  # Vitor Guedes da Fonseca Passos
     "20120",  # Cecília Maria Lapetina Chiaratto
     "38809",  # Samantha Lais Soares Mickievicz
     "75799",  # Deborah Nascimento de Castro
-)
-
-OABS_DESATIVADAS = (
+    # Desativadas antes (Fase 2.1):
     "65089",  # Juliana Vieira Gomes
     "81225",  # Juliana Chiaratto Batista
     "37654",  # Shirley Oliveira Pessoa
@@ -33,22 +41,21 @@ OABS_DESATIVADAS = (
 )
 
 
-def test_F21_13_lista_ativa_tem_6_entradas() -> None:
-    """ADVOGADOS tem exatamente 6 entradas (Fase 2.1: era 12)."""
+def test_lista_ativa_tem_2_entradas_pos_smoke_refator() -> None:
+    """ADVOGADOS tem exatamente 2 entradas após smoke do refator
+    watermark-por-advogado (Ricardo + Leonardo)."""
     from notion_rpadv.services.dje_advogados import ADVOGADOS
-    assert len(ADVOGADOS) == 6
+    assert len(ADVOGADOS) == 2
 
 
-def test_F21_14_oabs_ativas_corretas() -> None:
-    """As 6 OABs ativas correspondem aos sócios+colaboradores mantidos
-    em 2026-05-01."""
+def test_oabs_ativas_corretas() -> None:
+    """As 2 OABs ativas atuais: Ricardo (15523/DF) + Leonardo (36129/DF)."""
     from notion_rpadv.services.dje_advogados import ADVOGADOS
     oabs_no_modulo = {a["oab"] for a in ADVOGADOS}
     assert oabs_no_modulo == set(OABS_ATIVAS), (
         f"OABs ativas inesperadas. esperado={set(OABS_ATIVAS)} "
         f"obtido={oabs_no_modulo}"
     )
-    # Cada entrada também tem nome e UF=DF preenchidos.
     for adv in ADVOGADOS:
         assert adv["uf"] == "DF"
         assert adv["nome"].strip()

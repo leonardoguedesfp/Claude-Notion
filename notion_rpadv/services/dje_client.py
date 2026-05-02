@@ -86,13 +86,53 @@ RETRY_DEFERRED_PAUSE_SECONDS: float = 30.0
 
 
 @dataclass
+class AdvogadoConsulta:
+    """Especificação de uma consulta a um advogado: o advogado e a
+    janela individual ``[data_inicio, data_fim]``.
+
+    Refator pós-Fase 3: ``fetch_all`` agora aceita uma lista dessas
+    consultas, permitindo janelas individuais por advogado. Crucial
+    pro modelo de cursor por advogado — Samantha pode estar em 02/05
+    e Ricardo em 15/03, varridos na MESMA execução com janelas
+    diferentes.
+    """
+
+    advogado: Advogado
+    data_inicio: date
+    data_fim: date
+
+
+@dataclass
 class AdvogadoResult:
-    """Resultado por advogado: items coletados + meta de execução."""
+    """Resultado por advogado: items coletados + meta de execução.
+
+    ``data_max_safe`` (Hotfix watermark integrity, 2026-05-02): última
+    data **inclusiva** até onde o advogado foi varrido com sucesso de
+    ponta-a-ponta. Calculada por ``fetch_all`` após o retry diferido,
+    com base nas sub-janelas que falharam.
+
+    - Sem nenhuma falha → ``data_max_safe = data_fim_do_advogado``
+      (cobriu toda a janela individual).
+    - Primeira sub-janela falhou → ``data_max_safe = data_inicio - 1d``
+      (nada captado com segurança).
+    - Falha em sub-janela ``k > 0`` → ``data_max_safe = fim da
+      sub-janela k-1`` (última sub-janela contígua completa antes do gap).
+
+    Worker (modo padrão) atualiza ``djen_advogado_state`` POR ADVOGADO
+    com ``data_max_safe``. Falha de um advogado não afeta cursor dos
+    outros — esse é o ponto central do refator.
+
+    ``sub_windows`` (refator): a lista de sub-janelas usadas pra esse
+    advogado, populada por ``fetch_all`` antes de iterar. Pode variar
+    entre advogados quando as janelas individuais são diferentes.
+    """
 
     advogado: Advogado
     items: list[dict[str, Any]] = field(default_factory=list)
     paginas: int = 0
     erro: str | None = None  # None = sucesso, string = mensagem de falha
+    data_max_safe: date | None = None  # populated by fetch_all
+    sub_windows: list[tuple[date, date]] = field(default_factory=list)
 
 
 @dataclass
@@ -311,83 +351,69 @@ class DJEClient:
 
     def fetch_all(
         self,
-        advogados: list[Advogado],
-        data_inicio: date,
-        data_fim: date,
+        consultas: list[AdvogadoConsulta],
         on_progress: Callable[[int, int, AdvogadoResult], None] | None = None,
         is_cancelled: Callable[[], bool] | None = None,
+        on_log_event: Callable[[str], None] | None = None,
     ) -> FetchSummary:
-        """Itera sobre todos os advogados sequencialmente, aplicando
-        rate limit entre cada chamada HTTP. Acumula em ``FetchSummary``.
+        """Itera sobre todas as consultas (advogado + janela individual),
+        aplicando rate limit entre cada chamada HTTP. Acumula em
+        ``FetchSummary``.
+
+        Refator pós-Fase 3: aceita ``list[AdvogadoConsulta]`` em vez de
+        ``advogados, data_inicio, data_fim`` global. Cada advogado pode
+        ter sua própria janela ``(di, df)``, refletindo o cursor
+        individual armazenado em ``djen_advogado_state``.
 
         ``on_progress(idx, total, result)`` é chamado após cada
-        advogado concluir TODAS as suas sub-janelas (sucesso ou erro
-        persistente em pelo menos uma sub-janela) — UI usa pra
-        atualizar barra de progresso e log.
+        advogado concluir TODAS as suas sub-janelas. Erros em advogados
+        individuais NÃO abortam a varredura.
 
-        Erros em advogados individuais NÃO abortam a varredura
-        (registrados em ``summary.errors`` e seguem).
+        **Split mensal por advogado**: a janela individual de cada
+        consulta (se > 31 dias) é dividida em sub-janelas mensais
+        calendar-aligned, registradas em ``AdvogadoResult.sub_windows``.
 
-        **Fase 2.2 — split de janela longa em sub-janelas mensais:**
-        Janelas > ``WINDOW_SPLIT_THRESHOLD_DAYS`` (default 31) são
-        divididas em sub-janelas calendar-aligned (jan/26, fev/26, ...)
-        pra reduzir paginação profunda no backend. Cada sub-janela é
-        consultada independentemente; items são agregados em uma única
-        ``AdvogadoResult`` por advogado.
+        **Retry diferido (Fase 2.2)**: dispara se QUALQUER advogado teve
+        sub-janela falhada E sua janela individual foi splitada. Pausa
+        ``RETRY_DEFERRED_PAUSE_SECONDS`` (30s) entre cada retry.
+        Sub-janelas recuperadas saem de ``failed_per_adv``; advogado
+        com todas recuperadas tem ``erro`` limpo.
 
-        **Fase 2.2 — retry diferido:** após a varredura principal, se
-        algum advogado teve falha persistente em alguma sub-janela
-        E a janela original foi splitada (>31 dias), reagendamos UMA
-        rodada adicional só nas sub-janelas que falharam, com pausa de
-        ``RETRY_DEFERRED_PAUSE_SECONDS`` (30s) entre cada — dá tempo
-        do backend recuperar bucket de rate limit. Se o retry
-        recuperar todas as falhas de um advogado, ``erro`` é limpo;
-        caso contrário, mantém como falha definitiva.
-
-        Retry diferido NÃO dispara em janelas curtas (≤ 31 dias) —
-        nessas, falha persistente é registrada e segue, comportamento
-        Fase 2.1 preservado. Decisão: H1 do diagnóstico Fase 2.2
-        identifica paginação profunda como trigger principal do 429
-        cascade; janelas curtas raramente atingem profundidade
-        problemática.
-
-        **Fase 2.2 — cancelamento:** ``is_cancelled`` é uma callable
-        opcional checada nos checkpoints (entre advogados, entre
-        sub-janelas e — via propagação ao ``fetch_advogado`` — entre
-        páginas). Quando True, varredura para de forma limpa,
-        ``summary.cancelled = True``, e items já coletados são
-        preservados pra exporter parcial. Cancelamento NÃO interrompe
-        request HTTP em retry.
+        **Cancelamento (Fase 2.2)**: ``is_cancelled`` checado nos
+        checkpoints (entre advogados, sub-janelas, páginas). Items já
+        coletados preservados; ``summary.cancelled = True``.
         """
         summary = FetchSummary()
-        sub_windows = _split_window_monthly(data_inicio, data_fim)
-        if len(sub_windows) > 1:
-            labels = [di.strftime("%b/%y") for di, _ in sub_windows]
-            logger.info(
-                "DJE: janela > %d dias dividida em %d sub-janelas: %s",
-                WINDOW_SPLIT_THRESHOLD_DAYS, len(sub_windows),
-                ", ".join(labels),
-            )
+        n_total = len(consultas)
 
-        total = len(advogados)
-        # Um AdvogadoResult agregado por advogado (acumula items de
-        # todas as sub-janelas).
-        aggs: list[AdvogadoResult] = [
-            AdvogadoResult(advogado=a) for a in advogados
-        ]
+        # Pré-computa sub-janelas POR advogado e cria aggs.
+        aggs: list[AdvogadoResult] = []
+        sub_windows_per_adv: list[list[tuple[date, date]]] = []
+        for c in consultas:
+            sw = _split_window_monthly(c.data_inicio, c.data_fim)
+            agg = AdvogadoResult(advogado=c.advogado, sub_windows=sw)
+            aggs.append(agg)
+            sub_windows_per_adv.append(sw)
+            if len(sw) > 1:
+                labels = [di.strftime("%b/%y") for di, _ in sw]
+                logger.info(
+                    "DJE: %s — janela > %d dias dividida em %d sub-janelas: %s",
+                    format_advogado_label(c.advogado),
+                    WINDOW_SPLIT_THRESHOLD_DAYS, len(sw),
+                    ", ".join(labels),
+                )
+
         # Sub-janelas que falharam, indexadas por advogado.
-        failed_per_adv: list[set[int]] = [set() for _ in advogados]
+        failed_per_adv: list[set[int]] = [set() for _ in consultas]
         first_request = True
 
-        # Varredura principal: cada advogado em todas as sub-janelas.
-        for adv_idx, adv in enumerate(advogados):
-            # Checkpoint de cancelamento ANTES de iniciar próximo advogado.
+        # Varredura principal: cada advogado em todas as suas sub-janelas.
+        for adv_idx, c in enumerate(consultas):
             if is_cancelled is not None and is_cancelled():
                 summary.cancelled = True
                 break
+            sub_windows = sub_windows_per_adv[adv_idx]
             for sub_idx, (sub_di, sub_df) in enumerate(sub_windows):
-                # Checkpoint de cancelamento ANTES de iniciar próxima
-                # sub-janela do mesmo advogado.
                 if is_cancelled is not None and is_cancelled():
                     summary.cancelled = True
                     break
@@ -395,65 +421,117 @@ class DJEClient:
                     self._sleep(RATE_LIMIT_SECONDS)
                 first_request = False
                 sub_result = self.fetch_advogado(
-                    adv, sub_di, sub_df, is_cancelled=is_cancelled,
+                    c.advogado, sub_di, sub_df, is_cancelled=is_cancelled,
                 )
                 aggs[adv_idx].items.extend(sub_result.items)
                 aggs[adv_idx].paginas += sub_result.paginas
                 if sub_result.erro is not None:
                     failed_per_adv[adv_idx].add(sub_idx)
                     aggs[adv_idx].erro = sub_result.erro
-                # Cancelamento detectado DENTRO de fetch_advogado precisa
-                # ser propagado pra summary.cancelled aqui — fetch_advogado
-                # não tem como sinalizar cancel via AdvogadoResult.
                 if is_cancelled is not None and is_cancelled():
                     summary.cancelled = True
                     break
             if on_progress is not None:
                 try:
-                    on_progress(adv_idx + 1, total, aggs[adv_idx])
+                    on_progress(adv_idx + 1, n_total, aggs[adv_idx])
                 except Exception:  # noqa: BLE001
-                    # Callback faulty não pode derrubar a varredura.
                     logger.exception("DJE: on_progress raised")
-            # Pós-iteração interna: se cancelado, sai do outer loop tb.
             if summary.cancelled:
                 break
 
-        # Retry diferido: só dispara em janelas splitadas E não cancelado.
+        # IMPORTANTE: snapshot do estado de falhas APÓS varredura
+        # principal e ANTES do retry diferido. ``data_max_safe`` é
+        # calculado a partir desse snapshot — cursor SÓ avança se a
+        # varredura principal completou com sucesso. Itens recuperados
+        # pelo retry diferido vão pro banco normalmente (dedup-inseridos
+        # pra reduzir trabalho da próxima execução), mas NÃO destrancam
+        # o cursor. Decisão pós-smoke real do refator watermark-por-
+        # advogado: usuário vê "FALHA: HTTP 429" no painel e espera que
+        # cursor não avance, independente de qualquer recuperação tardia.
+        failed_per_adv_main: list[set[int]] = [set(s) for s in failed_per_adv]
+
+        # Retry diferido: dispara se QUALQUER advogado tem sub-janela
+        # falhada E sua janela individual foi splitada. Detecção
+        # global pra emitir o log uma vez só.
+        any_split = any(len(sw) > 1 for sw in sub_windows_per_adv)
         if (
-            len(sub_windows) > 1
+            any_split
             and any(failed_per_adv)
             and not summary.cancelled
         ):
             n_failed = sum(len(f) for f in failed_per_adv)
-            logger.info(
-                "DJE: %d sub-janela(s) falharam → retry diferido com "
-                "pausa de %.0fs entre cada",
-                n_failed, RETRY_DEFERRED_PAUSE_SECONDS,
+            advs_falhados = sum(1 for f in failed_per_adv if f)
+            inicio_msg = (
+                f"Retry diferido começando: {n_failed} sub-janela(s) "
+                f"de {advs_falhados} advogado(s) com pausa de "
+                f"{RETRY_DEFERRED_PAUSE_SECONDS:.0f}s entre cada tentativa"
             )
+            logger.info("DJE: %s", inicio_msg)
+            if on_log_event is not None:
+                on_log_event(inicio_msg)
+            n_recuperadas = 0
             for adv_idx, fails in enumerate(failed_per_adv):
+                if len(sub_windows_per_adv[adv_idx]) <= 1:
+                    continue
+                if not fails:
+                    continue
+                label = format_advogado_label(consultas[adv_idx].advogado)
+                if on_log_event is not None:
+                    on_log_event(
+                        f"  Retry — {label}: tentando {len(fails)} sub-janela(s)…",
+                    )
                 for sub_idx in sorted(fails):
                     if is_cancelled is not None and is_cancelled():
                         summary.cancelled = True
                         break
                     self._sleep(RETRY_DEFERRED_PAUSE_SECONDS)
-                    sub_di, sub_df = sub_windows[sub_idx]
+                    sub_di, sub_df = sub_windows_per_adv[adv_idx][sub_idx]
                     sub_result = self.fetch_advogado(
-                        advogados[adv_idx], sub_di, sub_df,
+                        consultas[adv_idx].advogado, sub_di, sub_df,
                         is_cancelled=is_cancelled,
                     )
                     if sub_result.erro is None:
                         aggs[adv_idx].items.extend(sub_result.items)
                         aggs[adv_idx].paginas += sub_result.paginas
                         failed_per_adv[adv_idx].discard(sub_idx)
+                        n_recuperadas += 1
                 if summary.cancelled:
                     break
-            # Após retry: se TODAS as falhas de um advogado foram
-            # recuperadas, limpa o erro do agregado. Senão, mantém.
-            for adv_idx in range(len(advogados)):
-                if not failed_per_adv[adv_idx]:
-                    aggs[adv_idx].erro = None
+            # NOTA: NÃO limpamos ``aggs.erro`` aqui. Mesmo se retry
+            # recuperou todas as sub-janelas, ``aggs.erro`` permanece
+            # setado pra refletir o estado da varredura principal —
+            # banner final (modo padrão) e cálculo do cursor usam esse
+            # erro como sinal autoritativo. Itens recuperados ainda vão
+            # pro banco via dedup.
+            fim_msg = (
+                f"Retry diferido concluído: {n_recuperadas}/{n_failed} "
+                "sub-janela(s) recuperadas. Itens recuperados foram "
+                "inseridos no banco; cursor SÓ avança quando a varredura "
+                "principal completa sem falha."
+            )
+            logger.info("DJE: %s", fim_msg)
+            if on_log_event is not None:
+                on_log_event(fim_msg)
 
-        # Popular summary a partir dos agregados.
+        # Calcula data_max_safe POR ADVOGADO usando o SNAPSHOT pré-retry.
+        # Política conservadora: cursor avança SOMENTE se a varredura
+        # principal do advogado completou com sucesso (sem nenhuma
+        # sub-janela falhada). Retry diferido coleta dados mas NÃO
+        # destranca o cursor.
+        for adv_idx, c in enumerate(consultas):
+            fails = failed_per_adv_main[adv_idx]
+            sub_windows = sub_windows_per_adv[adv_idx]
+            if not fails:
+                aggs[adv_idx].data_max_safe = c.data_fim
+            else:
+                first_fail = min(fails)
+                if first_fail == 0:
+                    aggs[adv_idx].data_max_safe = (
+                        c.data_inicio - timedelta(days=1)
+                    )
+                else:
+                    aggs[adv_idx].data_max_safe = sub_windows[first_fail - 1][1]
+
         for agg in aggs:
             summary.by_advogado.append(agg)
             summary.rows.extend(agg.items)

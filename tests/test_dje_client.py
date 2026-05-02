@@ -10,12 +10,23 @@ from datetime import date
 from typing import Any
 from unittest.mock import MagicMock
 
-import pytest
 
 
 # ---------------------------------------------------------------------------
 # Helpers de mock
 # ---------------------------------------------------------------------------
+
+
+def _consultas(advogados, di, df):
+    """Helper pós-refator: ``fetch_all`` agora aceita ``list[AdvogadoConsulta]``
+    em vez de ``(advogados, data_inicio, data_fim)``. Esse helper constrói
+    a lista de consultas com a MESMA janela pra todos os advogados,
+    preservando a semântica antiga dos testes."""
+    from notion_rpadv.services.dje_client import AdvogadoConsulta
+    return [
+        AdvogadoConsulta(advogado=a, data_inicio=di, data_fim=df)
+        for a in advogados
+    ]
 
 
 def _mock_response(
@@ -217,7 +228,7 @@ def test_empilhamento_2_advogados_5_pubs_cada() -> None:
         {"nome": "Bob",   "oab": "2", "uf": "DF"},
     ]
     summary = client.fetch_all(
-        advogados, date(2026, 5, 1), date(2026, 5, 1),
+        _consultas(advogados, date(2026, 5, 1), date(2026, 5, 1)),
     )
     assert summary.total_items == 10
     # Cada advogado tem seu próprio result.
@@ -255,7 +266,7 @@ def test_erro_persistente_em_um_advogado_nao_derruba_demais() -> None:
         {"nome": "AdvC", "oab": "300", "uf": "DF"},
     ]
     summary = client.fetch_all(
-        advogados, date(2026, 5, 1), date(2026, 5, 1),
+        _consultas(advogados, date(2026, 5, 1), date(2026, 5, 1)),
     )
     # 2 sucessos × 1 item = 2 linhas
     assert summary.total_items == 2
@@ -438,11 +449,13 @@ def test_rate_limit_entre_advogados_e_paginas() -> None:
     sleeps: list[float] = []
     client = _make_client(session, sleep=sleeps.append)
     summary = client.fetch_all(
-        [
-            {"nome": "AdvA", "oab": "1", "uf": "DF"},
-            {"nome": "AdvB", "oab": "2", "uf": "DF"},
-        ],
-        date(2026, 5, 1), date(2026, 5, 1),
+        _consultas(
+            [
+                {"nome": "AdvA", "oab": "1", "uf": "DF"},
+                {"nome": "AdvB", "oab": "2", "uf": "DF"},
+            ],
+            date(2026, 5, 1), date(2026, 5, 1),
+        ),
     )
     # 1 sleep entre páginas do A + 1 sleep entre A e B = 2 sleeps de 1s.
     # Não há sleep antes da 1ª requisição (otimização — operador já
@@ -478,7 +491,7 @@ def test_on_progress_callback_chamado_por_advogado() -> None:
             (idx, total, result.advogado["nome"]),
         )
     summary = client.fetch_all(
-        advogados, date(2026, 5, 1), date(2026, 5, 1),
+        _consultas(advogados, date(2026, 5, 1), date(2026, 5, 1)),
         on_progress=cb,
     )
     assert progress_calls == [
@@ -506,7 +519,7 @@ def test_on_progress_exception_nao_aborta() -> None:
         raise RuntimeError("boom")
 
     summary = client.fetch_all(
-        advogados, date(2026, 5, 1), date(2026, 5, 1),
+        _consultas(advogados, date(2026, 5, 1), date(2026, 5, 1)),
         on_progress=bad_cb,
     )
     assert len(summary.by_advogado) == 2
@@ -527,12 +540,15 @@ def test_format_advogado_label() -> None:
 
 
 def test_advogados_lista_completa() -> None:
-    """Sanity: lista oficial atual tem os 6 advogados ativos com OAB DF.
+    """Sanity: lista oficial atual tem os 2 advogados ativos com OAB DF.
 
-    Fase 2.1 (2026-05-01): reduzida de 12 → 6 (6 desativados ficam
-    comentados em ``dje_advogados.py``)."""
+    Histórico:
+    - Fase 2.1: reduzida de 12 → 6.
+    - Pós-smoke do refator watermark-por-advogado (02/05/2026): reduzida
+      de 6 → 2 (Ricardo + Leonardo) por sobrecarga 429 da API DJEN.
+    """
     from notion_rpadv.services.dje_advogados import ADVOGADOS
-    assert len(ADVOGADOS) == 6
+    assert len(ADVOGADOS) == 2
     for a in ADVOGADOS:
         assert a["uf"] == "DF"
         assert a["oab"].isdigit()
@@ -772,7 +788,7 @@ def test_F22_09_fetch_all_janela_longa_chama_sub_janelas() -> None:
     client = _make_client(session)
     advogados = [{"nome": "X", "oab": "1", "uf": "DF"}]
     summary = client.fetch_all(
-        advogados, date(2026, 1, 1), date(2026, 5, 1),
+        _consultas(advogados, date(2026, 1, 1), date(2026, 5, 1)),
     )
     # 5 sub-janelas × 2 items = 10 items totais.
     assert summary.total_items == 10
@@ -783,22 +799,25 @@ def test_F22_09_fetch_all_janela_longa_chama_sub_janelas() -> None:
     assert session.get.call_count == 5
 
 
-def test_F22_10_retry_diferido_recupera_falha_em_sub_janela() -> None:
+def test_F22_10_retry_diferido_recupera_items_mas_mantem_erro() -> None:
     """Janela longa (split): 1 sub-janela falha persistente na 1ª
-    passada → retry diferido tenta de novo, sucesso → ``erro`` é
-    limpo no AdvogadoResult agregado."""
+    passada → retry diferido recupera items (vão pro banco), mas o
+    ``erro`` PERMANECE no AdvogadoResult agregado.
+
+    Decisão pós-smoke real do refator watermark-por-advogado
+    (2026-05-02): retry diferido coleta dados úteis, mas a UI mostrou
+    "FALHA" pra o advogado durante a varredura principal — semântica
+    conservadora exige que o cursor NÃO avance baseado em recuperação
+    silenciosa. ``data_max_safe`` é calculada a partir do snapshot
+    pré-retry; ``aggs.erro`` permanece setado.
+    """
     from notion_rpadv.services.dje_client import RETRY_DEFERRED_PAUSE_SECONDS
 
-    # Cenário: 4 sub-janelas (jan/fev/mar/abr/26 numa janela de 4 meses
-    # ajustada pra cair em 4). Janela 02/01 → 02/05 = 5 sub-janelas
-    # iremos usar 02/01 → 30/04 = 4 sub-janelas (jan/fev/mar/abr).
-    # Sub 0,1,2 ok; sub 3 (abr) falha 503 3x na 1ª passada;
-    # depois retry diferido: 1 chamada extra OK.
     responses = [
         _mock_response(json_payload={"items": [{"id": "j", "hash": "j"}]}),  # jan
         _mock_response(json_payload={"items": [{"id": "f", "hash": "f"}]}),  # fev
         _mock_response(json_payload={"items": [{"id": "m", "hash": "m"}]}),  # mar
-        # abr — 3 falhas (retry budget esgotado)
+        # abr — 3 falhas (retry budget esgotado na principal)
         _mock_response(status=503),
         _mock_response(status=503),
         _mock_response(status=503),
@@ -810,13 +829,17 @@ def test_F22_10_retry_diferido_recupera_falha_em_sub_janela() -> None:
     client = _make_client(session, sleep=sleeps.append)
     advogados = [{"nome": "X", "oab": "1", "uf": "DF"}]
     summary = client.fetch_all(
-        advogados, date(2026, 1, 2), date(2026, 4, 30),
+        _consultas(advogados, date(2026, 1, 2), date(2026, 4, 30)),
     )
-    # 4 sub-janelas × 1 item cada = 4 items totais (incluindo o recuperado).
+    # 4 sub-janelas × 1 item cada = 4 items totais (incluindo recuperado).
     assert summary.total_items == 4
-    # Sem erros: retry diferido recuperou.
-    assert summary.errors == []
-    # Pausa de retry diferido foi aplicada (≥ RETRY_DEFERRED_PAUSE_SECONDS).
+    # Erro PERMANECE setado mesmo com recuperação (semântica conservadora).
+    assert len(summary.errors) == 1
+    # data_max_safe é conservador: sub 3 (abr) falhou na principal,
+    # então cursor seguro = fim da sub 2 (mar) = 31/03/2026.
+    ar = summary.by_advogado[0]
+    assert ar.data_max_safe == date(2026, 3, 31)
+    # Pausa de retry diferido foi aplicada.
     assert RETRY_DEFERRED_PAUSE_SECONDS in sleeps
 
 
@@ -843,7 +866,7 @@ def test_F22_11_retry_diferido_falha_em_ambas_passadas_mantem_erro() -> None:
     client = _make_client(session)
     advogados = [{"nome": "X", "oab": "1", "uf": "DF"}]
     summary = client.fetch_all(
-        advogados, date(2026, 1, 2), date(2026, 4, 30),
+        _consultas(advogados, date(2026, 1, 2), date(2026, 4, 30)),
     )
     # 3 items das sub-janelas que sucederam (jan/fev/mar).
     assert summary.total_items == 3
@@ -878,7 +901,7 @@ def test_F22_12_cancelamento_entre_advogados_para_e_marca_cancelled() -> None:
         return session.get.call_count >= cancel_after_calls[0]
 
     summary = client.fetch_all(
-        advogados, date(2026, 5, 1), date(2026, 5, 1),
+        _consultas(advogados, date(2026, 5, 1), date(2026, 5, 1)),
         is_cancelled=is_cancelled,
     )
     assert summary.cancelled is True
@@ -907,7 +930,7 @@ def test_F22_13_cancelamento_entre_paginas_retorna_parcial() -> None:
         return session.get.call_count >= 2
 
     summary = client.fetch_all(
-        advogados, date(2026, 5, 1), date(2026, 5, 1),
+        _consultas(advogados, date(2026, 5, 1), date(2026, 5, 1)),
         is_cancelled=is_cancelled,
     )
     assert summary.cancelled is True

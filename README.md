@@ -52,12 +52,22 @@ smoke real em janela longa (01/01→30/04/2026) gerar 429 catastrófico em
 
 ### Como usar
 
-1. Abra o app, navegue na sidebar até **Leitor DJE** (entre "Exportar dados" e "Logs").
-2. Escolha **Data inicial** e **Data final** (default: ambas em ontem). Pode ser o mesmo dia.
-3. Clique **Baixar publicações**.
-4. Acompanhe o progresso na barra (6 etapas — uma por advogado) e na área de log abaixo.
-5. Ao terminar, clique **Abrir arquivo gerado** ou **Abrir pasta**.
-6. Pra interromper a varredura, clique **Cancelar** (botão aparece ao lado de "Baixar publicações" durante a execução). O arquivo parcial é salvo com o que já foi captado até o ponto do cancelamento.
+A aba abre em **modo padrão** (uso diário) e tem um link "Modo personalizado →" pra alternar.
+
+**Modo padrão** — captura só o delta desde a última execução:
+1. Abra o app, navegue na sidebar até **Leitor DJE**.
+2. Clique **Baixar publicações novas**.
+3. **Primeira execução:** modal pede confirmação pra fazer a carga inicial desde 01/01/2026 (15-20 minutos). Confirme.
+4. **Execuções seguintes:** o app lê o watermark do SQLite e varre só desde `cursor + 1 dia` até hoje.
+5. Acompanhe o progresso e clique **Abrir arquivo gerado** / **Abrir histórico completo** / **Abrir pasta** ao final.
+
+**Modo personalizado** (link superior direito) — período custom + subset de advogados:
+1. Escolha **Data inicial** e **Data final**.
+2. Marque/desmarque os 6 advogados do escritório (todos marcados por default).
+3. **Outras OABs**: clique **+ Adicionar OAB externa** e preencha nome, OAB e UF pra cada externa que quiser pesquisar.
+4. Clique **Baixar período personalizado**. Modo manual **não atualiza** o watermark (o cache continua do mesmo ponto que estava).
+
+**Cancelar**: botão aparece ao lado durante a varredura. Publicações já captadas são salvas no SQLite e no Excel parcial; watermark **só é atualizado em sucesso completo do modo padrão**.
 
 > **Janelas longas (> 31 dias)** são automaticamente divididas em
 > sub-janelas mensais (jan/26, fev/26, ...) pra reduzir paginação
@@ -81,16 +91,27 @@ smoke real em janela longa (01/01→30/04/2026) gerar 429 catastrófico em
 - Salva em `Publicacoes_DJEN_{dd.mm.aa_inicio}_a_{dd.mm.aa_fim}_v{N}.xlsx`.
   O `N` auto-incrementa pra nunca sobrescrever (rodar 2× = `v1` e `v2`).
 
-### Formato do arquivo (Fase 2)
+### Formato do arquivo (Fase 3)
 
-**1 linha por publicação única**, com **20 colunas em ordem fixa**:
+Cada execução gera/atualiza **dois Excel** na mesma pasta:
+
+- `Publicacoes_DJEN_{dd.mm.aa_inicio}_a_{dd.mm.aa_fim}_v{N}.xlsx` —
+  versionado, contém **só as publicações inseridas nesta execução**
+  (delta novo).
+- `Historico_DJEN_completo.xlsx` — **path fixo, sobrescrito atomicamente**
+  ao final de cada execução. Contém **tudo** que está no SQLite. Se você
+  abrir esse arquivo no Excel quando a varredura tentar regravar, o app
+  registra warning e segue (Excel-de-execução é gerado normalmente).
+
+Ambos seguem o mesmo schema canônico: **1 linha por publicação única**,
+**21 colunas em ordem fixa** (Fase 3):
 
 | # | Coluna | O que tem |
 |---|---|---|
-| 1 | `advogados_consultados` | Nomes dos advogados do escritório intimados naquela publicação, separados por `; ` em ordem alfabética. Em caso de litisconsórcio interno (Ricardo + Leonardo no mesmo processo), aparecem os dois aqui |
-| 2 | `observacoes` | **Vazio quando não há nada estranho.** Sinaliza anomalias: publicação inativa/cancelada, status fora do habitual, ausência de Ricardo (15523/DF) ou Leonardo (36129/DF) na lista de advogados intimados. Múltiplas mensagens unidas por `\| ` |
-| 3 | `id` | Chave numérica única no DJEN |
-| 4 | `hash` | Chave alternativa estável |
+| 1 | `advogados_consultados_escritorio` | Advogados do escritório intimados naquela publicação (renomeada de `advogados_consultados` na Fase 3 pra distinguir de externos). Separador `; `, ordem alfabética |
+| 2 | `observacoes` | **Vazio quando não há nada estranho.** Sinaliza anomalias: publicação inativa/cancelada, status fora do habitual, ausência de Ricardo (15523/DF) ou Leonardo (36129/DF). Múltiplas mensagens unidas por `\| ` |
+| 3 | `id` | Chave numérica única no DJEN (`djen_id` no SQLite) |
+| 4 | `hash` | Chave alternativa estável (UNIQUE no SQLite) |
 | 5 | `siglaTribunal` | TRT10, STF, STJ, TST, etc. |
 | 6 | `data_disponibilizacao` | ISO `2026-04-30` |
 | 7-9 | `numeroprocessocommascara`, `numero_processo`, `tipoComunicacao` | Identificação processual |
@@ -102,10 +123,14 @@ smoke real em janela longa (01/01→30/04/2026) gerar 429 catastrófico em
 | 17 | `link` | URL da publicação no portal do tribunal |
 | 18-19 | `destinatarios`, `destinatarioadvogados` | Partes e advogados (JSON string com acentos) |
 | 20 | `datadisponibilizacao` | Mesma data em formato BR `30/04/2026` |
+| 21 | `oabs_externas_consultadas` | **Fase 3, nova.** Advogados externos pesquisados (modo manual) que aparecem nesta publicação. Vazia em modo padrão |
 
 **Removidas em relação à F1**: `advogado_consultado` (singular, virou plural),
 `ativo`, `status`, `meio`, `meiocompleto`, `motivo_cancelamento`,
 `data_cancelamento` (qualquer divergência delas vai pra `observacoes`).
+
+**Renomeada na Fase 3**: `advogados_consultados` → `advogados_consultados_escritorio`.
+Excels antigos com o nome velho continuam legíveis pro humano; sem migração automática.
 
 **Ordenação final**: por `siglaTribunal` ASC, depois `data_disponibilizacao`
 DESC (mais recente primeiro dentro de cada tribunal).
@@ -144,13 +169,20 @@ unidas por ` | ` (Regra A primeiro, Regra B depois).
 
 - **Pasta de destino**: configurável via `QSettings` (`leitor_dje/output_dir`).
   Default: caminho do Leonardo no SharePoint do escritório
-  (`...\Reclamações Trabalhistas\Ferramentas\Leitor DJE`).
-  Se o caminho não existir/não puder ser criado no PC corrente, o app
-  abre `QFileDialog` no momento do export pra usuário escolher — a
-  escolha é persistida.
+  (`...\Reclamações Trabalhistas\Ferramentas\Leitor DJE`). Se o caminho
+  não existir/não puder ser criado, o app abre `QFileDialog` pra usuário
+  escolher — a escolha é persistida. Os 2 Excels (versionado + histórico)
+  ficam na mesma pasta.
+- **Sticky data inicial modo manual**: `QSettings`
+  (`leitor_dje/last_inicio_manual`) — preserva a última data inicial
+  usada por até 30 dias.
 - **Lista de advogados**: editar
   [notion_rpadv/services/dje_advogados.py](notion_rpadv/services/dje_advogados.py)
   (Python module). Sem UI de admin nesta fase.
+- **Banco SQLite**: criado lazily na primeira varredura em
+  `%APPDATA%\NotionRPADV\leitor_dje.db`. Não há configuração — caminho
+  é derivado do mesmo helper de `cache.db` (`get_cache_dir()` em
+  `notion_bulk_edit/config.py`).
 
 ### Tratamento de erros
 
@@ -198,10 +230,51 @@ unidas por ` | ` (Regra A primeiro, Regra B depois).
 - Divergência entre duplicatas de mesmo `id` (campos não-advogado) →
   warning no logger `dje.transform`, primeira ocorrência mantida.
 
-### Não-escopo (Fase 3+)
+### Cache local SQLite (Fase 3)
+
+A Fase 3 introduz um **cache persistente local** que torna a varredura
+incremental e elimina re-fetch de dados já baixados.
+
+**Localização**: `%APPDATA%\NotionRPADV\leitor_dje.db` (mesma pasta de
+`cache.db` e `audit.db`). Em Linux/Mac: `~/.notionrpadv/leitor_dje.db`.
+
+**Schema** (2 tabelas):
+
+- `djen_state` — singleton (1 linha):
+  - `ultimo_cursor`: data da última publicação completa captada para
+    qualquer advogado do escritório (watermark único).
+  - `last_run`: timestamp UTC da última execução em modo padrão.
+- `publicacoes` — todas as publicações já captadas:
+  - `djen_id` (PK), `hash` (UNIQUE), `oabs_escritorio`, `oabs_externas`,
+    `numero_processo`, `data_disponibilizacao`, `sigla_tribunal`,
+    `payload_json` (JSON do payload original), `captured_at`,
+    `captured_in_mode` (`padrao` | `manual`).
+- Índices em `data_disponibilizacao`, `numero_processo`, `oabs_escritorio`.
+- Pragmas: WAL, foreign_keys ON, synchronous=NORMAL.
+
+**Watermark e modos**:
+- **Modo padrão** atualiza `ultimo_cursor` somente quando a varredura
+  completa com sucesso (sem cancelamento e sem erro persistente em
+  advogado). A próxima execução varre `[cursor + 1 dia, hoje]`.
+- **Modo manual** NUNCA toca o cursor — é uma janela ad-hoc fora da
+  rotina (recuperar gap histórico, pesquisar OAB externa, etc).
+- Cancelamento ou erro em modo padrão **não regride o cursor** mas as
+  publicações já captadas entram no SQLite via `INSERT OR IGNORE` por
+  `djen_id`. Próxima execução naturalmente pega o resto.
+
+**Inspecionar o banco** (opcional): use uma ferramenta SQL externa
+(DB Browser for SQLite, sqlite3 CLI, DBeaver). O Excel
+`Historico_DJEN_completo.xlsx` é a vista oficial para uso humano.
+
+### Não-escopo (Fase 4+)
 
 - Carga das publicações no Notion (criação de tarefas).
 - Alertas por e-mail.
+- Captação automática em background (APScheduler / cron interno).
+- UI de admin pra gerenciar lista do escritório (continua editando
+  [dje_advogados.py](notion_rpadv/services/dje_advogados.py)).
+- Painel de visualização do banco SQLite dentro do app (use o
+  `Historico_DJEN_completo.xlsx` ou ferramenta SQL externa).
 - Classificação por relevância.
 - Busca por número de processo.
 - Captação de TJSP/STF (tribunais não cobertos pelo DJEN).
