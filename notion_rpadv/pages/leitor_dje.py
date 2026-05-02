@@ -1,8 +1,9 @@
-"""Página "Leitor DJE" — Fase 1.
+"""Página "Leitor DJE".
 
 Permite escolher um intervalo de datas (default: ontem) e baixar todas
-as publicações do DJEN dos 12 advogados do escritório, empilhando
-em um xlsx único na pasta configurada.
+as publicações do DJEN dos advogados do escritório (lista oficial em
+``dje_advogados.ADVOGADOS``), empilhando em um xlsx único na pasta
+configurada.
 
 Trabalho pesado (HTTP + xlsx) roda em QThread+worker pra não congelar
 a UI (mesmo padrão da ExportarPage do Round 4 e da DashboardPage).
@@ -236,9 +237,9 @@ class LeitorDJEPage(QWidget):
         root.addWidget(heading)
 
         sub = QLabel(
-            "Baixa publicações do DJEN no intervalo escolhido pros 12 "
-            "advogados do escritório (busca por OAB/DF) e gera um Excel "
-            "único empilhando todos os resultados.",
+            f"Baixa publicações do DJEN no intervalo escolhido pros "
+            f"{len(ADVOGADOS)} advogados do escritório (busca por OAB/DF) "
+            "e gera um Excel único empilhando todos os resultados.",
         )
         sub.setWordWrap(True)
         sub.setStyleSheet(

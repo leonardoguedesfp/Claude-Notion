@@ -527,9 +527,12 @@ def test_format_advogado_label() -> None:
 
 
 def test_advogados_lista_completa() -> None:
-    """Sanity: lista hardcoded tem os 12 advogados com OAB DF."""
+    """Sanity: lista oficial atual tem os 6 advogados ativos com OAB DF.
+
+    Fase 2.1 (2026-05-01): reduzida de 12 → 6 (6 desativados ficam
+    comentados em ``dje_advogados.py``)."""
     from notion_rpadv.services.dje_advogados import ADVOGADOS
-    assert len(ADVOGADOS) == 12
+    assert len(ADVOGADOS) == 6
     for a in ADVOGADOS:
         assert a["uf"] == "DF"
         assert a["oab"].isdigit()
