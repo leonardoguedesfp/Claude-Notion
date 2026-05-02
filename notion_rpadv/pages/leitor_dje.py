@@ -24,6 +24,7 @@ from __future__ import annotations
 import datetime as _dt
 import logging
 import sqlite3
+import threading
 from pathlib import Path
 
 from PySide6.QtCore import (
@@ -103,13 +104,14 @@ SKIPPED_LOG_CAP: int = 10  # Fase 2.1: cap de linhas puladas logadas individualm
 class _DJEWorker(QObject):
     """Worker que roda fetch_all + xlsx em thread separada. Emite logs
     e progresso pra UI. Em sucesso, devolve path, lista de advogados
-    que falharam, total de items captados, e contagem de linhas que
-    foram puladas pela defesa do exporter (Fase 2.1)."""
+    que falharam, total de items captados, contagem de linhas puladas
+    pelo exporter (Fase 2.1) e flag de cancelamento (Fase 2.2)."""
 
     log: Signal = Signal(str)                                # mensagem de log
     progress: Signal = Signal(int, int)                      # (idx, total)
-    # Fase 2.1: assinatura ganha 4º arg ``skipped_count`` pro banner UI.
-    finished: Signal = Signal(str, list, int, int)           # (path, errors, total_items, skipped_count)
+    # Fase 2.2: assinatura ganha 5º arg ``cancelled`` pro banner UI
+    # distinguir varredura completa de varredura interrompida pelo user.
+    finished: Signal = Signal(str, list, int, int, bool)     # (path, errors, total_items, skipped_count, cancelled)
     error: Signal = Signal(str)                              # erro fatal (não recuperável)
 
     def __init__(
@@ -125,6 +127,15 @@ class _DJEWorker(QObject):
         self._data_fim = data_fim
         self._output_dir = output_dir
         self._client: DJEClient | None = None
+        # Fase 2.2: Event thread-safe pra UI sinalizar cancelamento.
+        # Worker passa ``self._cancel_event.is_set`` pro client; client
+        # checa em checkpoints entre advogados/sub-janelas/páginas.
+        self._cancel_event = threading.Event()
+
+    def request_cancel(self) -> None:
+        """Sinaliza o worker pra parar entre o próximo checkpoint do
+        client. UI chama isso quando usuário clica 'Cancelar'."""
+        self._cancel_event.set()
 
     def run(self) -> None:
         try:
@@ -138,11 +149,19 @@ class _DJEWorker(QObject):
                 self._data_inicio,
                 self._data_fim,
                 on_progress=self._emit_progress,
+                is_cancelled=self._cancel_event.is_set,
             )
-            self.log.emit(
-                f"Varredura concluída — {summary.total_items} publicações "
-                f"coletadas no total.",
-            )
+            if summary.cancelled:
+                self.log.emit(
+                    f"⚠ Varredura cancelada pelo usuário — "
+                    f"{summary.total_items} publicações já captadas serão "
+                    "salvas no arquivo parcial.",
+                )
+            else:
+                self.log.emit(
+                    f"Varredura concluída — {summary.total_items} publicações "
+                    f"coletadas no total.",
+                )
             export = write_publicacoes_xlsx(
                 summary.rows,
                 self._output_dir,
@@ -158,7 +177,7 @@ class _DJEWorker(QObject):
             ]
             self.finished.emit(
                 str(export.path), errors, summary.total_items,
-                len(export.skipped),
+                len(export.skipped), summary.cancelled,
             )
         except Exception as exc:  # noqa: BLE001
             logger.exception("DJE: erro fatal no worker")
@@ -350,6 +369,35 @@ class LeitorDJEPage(QWidget):
         self._download_btn.clicked.connect(self._on_download_clicked)
         action_row.addWidget(self._download_btn)
 
+        # Fase 2.2: botão Cancelar oculto inicialmente; aparece quando
+        # varredura está em curso, vira "Cancelando..." após click,
+        # some quando varredura termina (sucesso, erro, ou cancel).
+        self._cancel_btn = QPushButton("Cancelar")
+        self._cancel_btn.setFixedHeight(36)
+        self._cancel_btn.setVisible(False)
+        self._cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._cancel_btn.setStyleSheet(
+            f"""
+            QPushButton {{
+                background-color: {p.app_panel};
+                color: {p.app_warning};
+                font-size: {FS_MD}px;
+                font-weight: {FW_BOLD};
+                border: 1px solid {p.app_warning};
+                border-radius: {RADIUS_MD}px;
+                padding: 0 {SP_4}px;
+            }}
+            QPushButton:hover {{ background-color: {p.app_warning_bg}; }}
+            QPushButton:disabled {{
+                background-color: {p.app_panel};
+                color: {p.app_fg_subtle};
+                border-color: {p.app_border};
+            }}
+            """,
+        )
+        self._cancel_btn.clicked.connect(self._on_cancel_clicked)
+        action_row.addWidget(self._cancel_btn)
+
         self._open_file_btn = QPushButton("Abrir arquivo gerado")
         self._open_file_btn.setVisible(False)
         self._open_file_btn.setStyleSheet(self._secondary_btn_css())
@@ -502,6 +550,10 @@ class LeitorDJEPage(QWidget):
         self._progress.setValue(0)
         self._progress.setRange(0, len(ADVOGADOS))
         self._download_btn.setEnabled(False)
+        # Fase 2.2: mostra botão Cancelar enquanto varredura está em curso.
+        self._cancel_btn.setVisible(True)
+        self._cancel_btn.setEnabled(True)
+        self._cancel_btn.setText("Cancelar")
 
         # Persiste última data inicial (sticky pra UX).
         self._settings.setValue(_KEY_LAST_INICIO, di.isoformat())
@@ -568,22 +620,42 @@ class LeitorDJEPage(QWidget):
             self._progress.setRange(0, total)
         self._progress.setValue(idx)
 
+    def _on_cancel_clicked(self) -> None:
+        """Sinaliza o worker pra parar entre o próximo checkpoint do
+        client. Não força stop imediato — varredura completa o ciclo
+        atual (HTTP em andamento, retry em curso) e para entre páginas
+        ou advogados. Detalhes em ``DJEClient.fetch_all`` Fase 2.2."""
+        if self._worker is None:
+            return
+        self._worker.request_cancel()
+        # Feedback visual: botão fica desabilitado com label "Cancelando..."
+        # até o worker chegar no checkpoint e emitir finished.
+        self._cancel_btn.setEnabled(False)
+        self._cancel_btn.setText("Cancelando...")
+
     def _on_finished(
         self, path: str, errors: list, total_items: int,
-        skipped_count: int,
+        skipped_count: int, cancelled: bool,
     ) -> None:
-        """Banner final composto (Fase 2.1) — combina o sucesso de
-        captação com 0..N avisos de:
+        """Banner final composto (Fase 2.2) — combina o resultado de
+        captação com 0..N avisos:
+        - varredura cancelada pelo usuário
         - falha persistente em advogado(s) (rate limit/rede)
         - linhas puladas pelo exporter (caractere inválido)
 
         Mensagem única evita pop-up empilhado e mantém o operador no
-        contexto. Toast acompanha tom da mensagem (success/warning).
-        """
+        contexto. Toast acompanha tom (success/warning/error)."""
         self._last_output_path = Path(path)
         self._open_file_btn.setVisible(True)
         self._open_dir_btn.setVisible(True)
-        partes = [f"Arquivo gerado: {total_items} publicações"]
+        if cancelled:
+            partes = [
+                f"Varredura cancelada pelo usuário. "
+                f"{total_items} publicações captadas até o ponto do "
+                f"cancelamento foram salvas",
+            ]
+        else:
+            partes = [f"Arquivo gerado: {total_items} publicações"]
         if errors:
             partes.append(
                 f"⚠ Falha em {len(errors)} advogado(s): "
@@ -594,20 +666,27 @@ class LeitorDJEPage(QWidget):
                 f"⚠ {skipped_count} linha(s) com caractere inválido "
                 "foram puladas",
             )
-        if errors or skipped_count:
+        if cancelled or errors or skipped_count:
             self._set_warning(". ".join(partes) + ".")
             toast_kind = "warning"
-            toast_msg = (
-                f"Snapshot DJE gerado com avisos "
-                f"({len(errors)} advogado(s), {skipped_count} linha(s) puladas)."
-                if errors and skipped_count
-                else (
-                    f"Snapshot DJE gerado com falha em {len(errors)} advogado(s)."
-                    if errors
-                    else f"Snapshot DJE gerado: {total_items} publicações "
-                         f"({skipped_count} linha(s) puladas)."
+            if cancelled:
+                toast_msg = (
+                    f"Varredura cancelada — {total_items} publicações salvas."
                 )
-            )
+            elif errors and skipped_count:
+                toast_msg = (
+                    f"Snapshot DJE gerado com avisos "
+                    f"({len(errors)} advogado(s), {skipped_count} linha(s) puladas)."
+                )
+            elif errors:
+                toast_msg = (
+                    f"Snapshot DJE gerado com falha em {len(errors)} advogado(s)."
+                )
+            else:  # skipped_count only
+                toast_msg = (
+                    f"Snapshot DJE gerado: {total_items} publicações "
+                    f"({skipped_count} linha(s) puladas)."
+                )
         else:
             toast_kind = "success"
             toast_msg = f"Snapshot DJE gerado: {total_items} publicações."
@@ -623,6 +702,10 @@ class LeitorDJEPage(QWidget):
         self._thread = None
         self._worker = None
         self._download_btn.setEnabled(True)
+        # Fase 2.2: esconde Cancelar e reseta label/state pro próximo run.
+        self._cancel_btn.setVisible(False)
+        self._cancel_btn.setEnabled(True)
+        self._cancel_btn.setText("Cancelar")
 
     def _set_warning(self, msg: str) -> None:
         self._warning_lbl.setText(msg)
