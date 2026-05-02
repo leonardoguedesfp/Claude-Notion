@@ -97,14 +97,19 @@ DEFAULT_OUTPUT_DIR: str = (
 # ---------------------------------------------------------------------------
 
 
+SKIPPED_LOG_CAP: int = 10  # Fase 2.1: cap de linhas puladas logadas individualmente
+
+
 class _DJEWorker(QObject):
     """Worker que roda fetch_all + xlsx em thread separada. Emite logs
-    e progresso pra UI. Em sucesso, devolve o path do arquivo gerado
-    e a lista de advogados que falharam (pode ser vazia)."""
+    e progresso pra UI. Em sucesso, devolve path, lista de advogados
+    que falharam, total de items captados, e contagem de linhas que
+    foram puladas pela defesa do exporter (Fase 2.1)."""
 
     log: Signal = Signal(str)                                # mensagem de log
     progress: Signal = Signal(int, int)                      # (idx, total)
-    finished: Signal = Signal(str, list, int)                # (path, errors, total_items)
+    # Fase 2.1: assinatura ganha 4º arg ``skipped_count`` pro banner UI.
+    finished: Signal = Signal(str, list, int, int)           # (path, errors, total_items, skipped_count)
     error: Signal = Signal(str)                              # erro fatal (não recuperável)
 
     def __init__(
@@ -138,20 +143,49 @@ class _DJEWorker(QObject):
                 f"Varredura concluída — {summary.total_items} publicações "
                 f"coletadas no total.",
             )
-            path = write_publicacoes_xlsx(
+            export = write_publicacoes_xlsx(
                 summary.rows,
                 self._output_dir,
                 self._data_inicio,
                 self._data_fim,
             )
-            self.log.emit(f"Arquivo salvo: {path}")
+            self.log.emit(f"Arquivo salvo: {export.path}")
+            # Fase 2.1: log de linhas puladas com cap em SKIPPED_LOG_CAP
+            # pra não inundar a área de log em janelas longas.
+            self._log_skipped(export.skipped)
             errors = [
                 format_advogado_label(r.advogado) for r in summary.errors
             ]
-            self.finished.emit(str(path), errors, summary.total_items)
+            self.finished.emit(
+                str(export.path), errors, summary.total_items,
+                len(export.skipped),
+            )
         except Exception as exc:  # noqa: BLE001
             logger.exception("DJE: erro fatal no worker")
             self.error.emit(f"{type(exc).__name__}: {exc}")
+
+    def _log_skipped(self, skipped: list) -> None:
+        """Loga as linhas puladas pelo exporter, com cap em
+        ``SKIPPED_LOG_CAP``. Acima do cap, loga as primeiras N + uma
+        linha-sumário pra evitar poluir a área de log do operador em
+        janelas longas."""
+        if not skipped:
+            return
+        n = len(skipped)
+        head = min(n, SKIPPED_LOG_CAP)
+        self.log.emit(
+            f"⚠ {n} linha(s) com caractere inválido foram puladas:",
+        )
+        for sk in skipped[:head]:
+            self.log.emit(
+                f"  [skipped] row_idx={sk.source_idx} id={sk.row_id} "
+                f"motivo={sk.error}",
+            )
+        if n > SKIPPED_LOG_CAP:
+            self.log.emit(
+                f"  ... e mais {n - SKIPPED_LOG_CAP} linha(s) puladas "
+                "(ver log do sistema/stderr)",
+            )
 
     def _emit_progress(
         self, idx: int, total: int, result: AdvogadoResult,
@@ -536,26 +570,48 @@ class LeitorDJEPage(QWidget):
 
     def _on_finished(
         self, path: str, errors: list, total_items: int,
+        skipped_count: int,
     ) -> None:
+        """Banner final composto (Fase 2.1) — combina o sucesso de
+        captação com 0..N avisos de:
+        - falha persistente em advogado(s) (rate limit/rede)
+        - linhas puladas pelo exporter (caractere inválido)
+
+        Mensagem única evita pop-up empilhado e mantém o operador no
+        contexto. Toast acompanha tom da mensagem (success/warning).
+        """
         self._last_output_path = Path(path)
         self._open_file_btn.setVisible(True)
         self._open_dir_btn.setVisible(True)
+        partes = [f"Arquivo gerado: {total_items} publicações"]
         if errors:
-            self._set_warning(
-                "Atenção: o arquivo foi gerado MAS está incompleto. "
-                f"Falha persistente em {len(errors)} advogado(s): "
-                + ", ".join(errors)
-                + ". Tente novamente mais tarde pra completar.",
+            partes.append(
+                f"⚠ Falha em {len(errors)} advogado(s): "
+                + ", ".join(errors),
             )
-            self.toast_requested.emit(
-                f"Snapshot DJE gerado com falha em {len(errors)} advogado(s).",
-                "warning",
+        if skipped_count:
+            partes.append(
+                f"⚠ {skipped_count} linha(s) com caractere inválido "
+                "foram puladas",
+            )
+        if errors or skipped_count:
+            self._set_warning(". ".join(partes) + ".")
+            toast_kind = "warning"
+            toast_msg = (
+                f"Snapshot DJE gerado com avisos "
+                f"({len(errors)} advogado(s), {skipped_count} linha(s) puladas)."
+                if errors and skipped_count
+                else (
+                    f"Snapshot DJE gerado com falha em {len(errors)} advogado(s)."
+                    if errors
+                    else f"Snapshot DJE gerado: {total_items} publicações "
+                         f"({skipped_count} linha(s) puladas)."
+                )
             )
         else:
-            self.toast_requested.emit(
-                f"Snapshot DJE gerado: {total_items} publicações.",
-                "success",
-            )
+            toast_kind = "success"
+            toast_msg = f"Snapshot DJE gerado: {total_items} publicações."
+        self.toast_requested.emit(toast_msg, toast_kind)
 
     def _on_error(self, msg: str) -> None:
         self._set_warning(f"Erro fatal: {msg}")

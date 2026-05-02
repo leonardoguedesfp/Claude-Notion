@@ -87,13 +87,13 @@ def test_xlsx_aba_chamada_publicacoes(tmp_path: Path) -> None:
     """Aba única se chama 'Publicacoes' (sem acento — coerência com
     o nome do arquivo)."""
     from notion_rpadv.services.dje_exporter import write_publicacoes_xlsx
-    path = write_publicacoes_xlsx(
+    result = write_publicacoes_xlsx(
         rows=[],
         output_dir=tmp_path,
         data_inicio=date(2026, 5, 1),
         data_fim=date(2026, 5, 1),
     )
-    wb = _read_back(path)
+    wb = _read_back(result.path)
     assert wb.sheetnames == ["Publicacoes"]
 
 
@@ -107,13 +107,13 @@ def test_xlsx_advogados_consultados_eh_primeira_coluna(tmp_path: Path) -> None:
         "id": 1, "hash": "abc", "texto": "publi 1",
         "advogado_consultado": "Leonardo (36129/DF)",
     }]
-    path = write_publicacoes_xlsx(
+    result = write_publicacoes_xlsx(
         rows=rows,
         output_dir=tmp_path,
         data_inicio=date(2026, 5, 1),
         data_fim=date(2026, 5, 1),
     )
-    wb = _read_back(path)
+    wb = _read_back(result.path)
     ws = wb["Publicacoes"]
     assert ws.cell(row=1, column=1).value == "advogados_consultados"
     # Valor da linha 2 col 1: nome do advogado (plural com 1 entrada).
@@ -124,10 +124,10 @@ def test_xlsx_header_em_negrito(tmp_path: Path) -> None:
     """Headers em bold pra destacar."""
     from notion_rpadv.services.dje_exporter import write_publicacoes_xlsx
     rows = [{"advogado_consultado": "X", "id": 1}]
-    path = write_publicacoes_xlsx(
+    result = write_publicacoes_xlsx(
         rows, tmp_path, date(2026, 5, 1), date(2026, 5, 1),
     )
-    wb = _read_back(path)
+    wb = _read_back(result.path)
     ws = wb["Publicacoes"]
     assert ws.cell(row=1, column=1).font.bold is True
 
@@ -148,10 +148,10 @@ def test_xlsx_serializa_arrays_como_json(tmp_path: Path) -> None:
             {"numero_oab": "12345", "uf_oab": "DF", "nome": "X"},
         ],
     }]
-    path = write_publicacoes_xlsx(
+    result = write_publicacoes_xlsx(
         rows, tmp_path, date(2026, 5, 1), date(2026, 5, 1),
     )
-    wb = _read_back(path)
+    wb = _read_back(result.path)
     ws = wb["Publicacoes"]
     headers = [
         ws.cell(row=1, column=c).value
@@ -188,10 +188,10 @@ def test_xlsx_schema_canonico_20_colunas_em_ordem_fixa(tmp_path: Path) -> None:
         "tipoDocumento": "Intimação",
         "advogado_consultado": "X (1/DF)",
     }]
-    path = write_publicacoes_xlsx(
+    result = write_publicacoes_xlsx(
         rows, tmp_path, date(2026, 5, 1), date(2026, 5, 1),
     )
-    wb = _read_back(path)
+    wb = _read_back(result.path)
     ws = wb["Publicacoes"]
     headers = [
         ws.cell(row=1, column=c).value
@@ -220,10 +220,10 @@ def test_xlsx_chaves_extras_no_payload_sao_ignoradas(tmp_path: Path) -> None:
     rows = [
         {"advogado_consultado": "X", "id": 1, "hash": "a", "extra_inesperado": "novo"},
     ]
-    path = write_publicacoes_xlsx(
+    result = write_publicacoes_xlsx(
         rows, tmp_path, date(2026, 5, 1), date(2026, 5, 1),
     )
-    wb = _read_back(path)
+    wb = _read_back(result.path)
     ws = wb["Publicacoes"]
     headers = [
         ws.cell(row=1, column=c).value
@@ -239,14 +239,15 @@ def test_xlsx_lista_vazia_gera_arquivo_so_com_header(tmp_path: Path) -> None:
     confundir com erro."""
     from notion_rpadv.services.dje_exporter import write_publicacoes_xlsx
     from notion_rpadv.services.dje_transform import CANONICAL_COLUMNS
-    path = write_publicacoes_xlsx(
+    result = write_publicacoes_xlsx(
         rows=[],
         output_dir=tmp_path,
         data_inicio=date(2026, 5, 1),
         data_fim=date(2026, 5, 1),
     )
-    assert path.exists()
-    wb = _read_back(path)
+    assert result.path.exists()
+    assert result.skipped == []
+    wb = _read_back(result.path)
     ws = wb["Publicacoes"]
     # F2: 1ª col é advogados_consultados (era advogado_consultado no F1)
     assert ws.cell(row=1, column=1).value == "advogados_consultados"
@@ -264,13 +265,13 @@ def test_xlsx_versionamento_em_2_runs_consecutivas(tmp_path: Path) -> None:
     """Round 7 spec case 6: rodar 2× o mesmo intervalo → v2 no segundo."""
     from notion_rpadv.services.dje_exporter import write_publicacoes_xlsx
     di, df = date(2026, 5, 1), date(2026, 5, 1)
-    p1 = write_publicacoes_xlsx([], tmp_path, di, df)
-    p2 = write_publicacoes_xlsx([], tmp_path, di, df)
-    assert p1.name.endswith("_v1.xlsx")
-    assert p2.name.endswith("_v2.xlsx")
+    r1 = write_publicacoes_xlsx([], tmp_path, di, df)
+    r2 = write_publicacoes_xlsx([], tmp_path, di, df)
+    assert r1.path.name.endswith("_v1.xlsx")
+    assert r2.path.name.endswith("_v2.xlsx")
     # Ambos sobrevivem (não sobrescreveu)
-    assert p1.exists()
-    assert p2.exists()
+    assert r1.path.exists()
+    assert r2.path.exists()
 
 
 def test_xlsx_cria_diretorio_se_nao_existir(tmp_path: Path) -> None:
@@ -296,13 +297,218 @@ def test_xlsx_none_em_campo_canonico_vira_celula_vazia(tmp_path: Path) -> None:
         "id": 1,
         "link": None,  # campo canônico mas com valor None
     }]
-    path = write_publicacoes_xlsx(
+    result = write_publicacoes_xlsx(
         rows, tmp_path, date(2026, 5, 1), date(2026, 5, 1),
     )
-    wb = _read_back(path)
+    wb = _read_back(result.path)
     ws = wb["Publicacoes"]
     headers = [
         ws.cell(row=1, column=c).value for c in range(1, ws.max_column + 1)
     ]
     idx = headers.index("link") + 1
     assert ws.cell(row=2, column=idx).value is None
+
+
+# ---------------------------------------------------------------------------
+# Fase 2.1 — exporter robusto a erro por linha (Bug B parte 2)
+# ---------------------------------------------------------------------------
+
+
+def test_F21_05_smoke_endtoend_com_u2426_em_texto_e_destinatarios(
+    tmp_path: Path,
+) -> None:
+    """End-to-end: row contém U+2426 SYMBOL FOR SUBSTITUTE FORM TWO no
+    campo ``texto`` E em ``destinatarios`` (lista de dicts) → arquivo
+    é gerado SEM erro. Defesa primária (transform) limpa ``texto``;
+    defesa secundária (exporter pós-JSON) limpa ``destinatarios``."""
+    from notion_rpadv.services.dje_exporter import write_publicacoes_xlsx
+    sujo = chr(0x2426)
+    rows = [{
+        "id": 1, "hash": "a", "siglaTribunal": "STJ",
+        "data_disponibilizacao": "2026-04-29",
+        "advogado_consultado": "X (1/DF)",
+        "texto": f"AREsp 2427258/DF {sujo} PREVI",
+        "destinatarios": [
+            {"nome": f"Polo {sujo} Ativo", "polo": "ATIVO"},
+        ],
+    }]
+    result = write_publicacoes_xlsx(
+        rows, tmp_path, date(2026, 4, 29), date(2026, 4, 29),
+    )
+    # Arquivo gerado; nenhuma linha pulada.
+    assert result.path.exists()
+    assert result.skipped == []
+    wb = _read_back(result.path)
+    ws = wb["Publicacoes"]
+    headers = [
+        ws.cell(row=1, column=c).value for c in range(1, ws.max_column + 1)
+    ]
+    texto_idx = headers.index("texto") + 1
+    dest_idx = headers.index("destinatarios") + 1
+    texto_value = ws.cell(row=2, column=texto_idx).value
+    dest_value = ws.cell(row=2, column=dest_idx).value
+    # Caractere ilegal removido em ambas as camadas.
+    assert sujo not in texto_value
+    assert sujo not in dest_value
+    # Conteúdo útil preservado.
+    assert "AREsp 2427258/DF" in texto_value
+    assert "Polo" in dest_value
+    assert "Ativo" in dest_value
+
+
+def test_F21_06_linha_com_erro_inesperado_eh_pulada_demais_escritas(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """Mock força ``ws.cell(...)`` a levantar quando o VALOR contém um
+    marker mágico → linha que tem esse marker em qualquer célula é
+    pulada (entry em ``result.skipped``); demais linhas permanecem no
+    arquivo (sem gaps).
+
+    Mock baseado em valor (não em row index) é determinístico: como o
+    exporter NÃO avança ``written_row_idx`` em falha, mockar por row
+    index faria as linhas seguintes baterem no mesmo slot e
+    aparentemente "também falharem"."""
+    from openpyxl import Workbook as _OrigWB
+    from openpyxl.utils.exceptions import IllegalCharacterError
+
+    from notion_rpadv.services.dje_exporter import write_publicacoes_xlsx
+    MAGIC = "FAIL_THIS_ROW"
+    rows = [
+        {"id": 100, "advogado_consultado": "A", "siglaTribunal": "X1",
+         "data_disponibilizacao": "2026-04-29", "texto": "linha1 ok"},
+        {"id": 200, "advogado_consultado": "B", "siglaTribunal": "X2",
+         "data_disponibilizacao": "2026-04-29", "texto": f"linha2 {MAGIC}"},
+        {"id": 300, "advogado_consultado": "C", "siglaTribunal": "X3",
+         "data_disponibilizacao": "2026-04-29", "texto": "linha3 ok"},
+    ]
+    orig_active = _OrigWB.active.fget
+
+    def _bad_active(self):
+        ws = orig_active(self)
+        original_cell = ws.cell
+
+        def patched(row=None, column=None, value=None):
+            if isinstance(value, str) and MAGIC in value:
+                raise IllegalCharacterError("fake fail magic")
+            return original_cell(row=row, column=column, value=value)
+
+        ws.cell = patched
+        return ws
+
+    monkeypatch.setattr(_OrigWB, "active", property(_bad_active))
+
+    result = write_publicacoes_xlsx(
+        rows, tmp_path, date(2026, 4, 29), date(2026, 4, 29),
+    )
+    # Desfaz patch antes de ler de volta (load_workbook usa Workbook.active
+    # como setter, que nosso patch não fornece — undoes restaura o original).
+    monkeypatch.undo()
+    # Exatamente 1 linha pulada (a do MAGIC).
+    assert len(result.skipped) == 1
+    sk = result.skipped[0]
+    # source_idx é 1-based no contexto pós-transform (deduped+sorted).
+    # ID 200 corresponde ao MAGIC.
+    assert sk.row_id == 200
+    assert "fake fail" in sk.error.lower()
+    # Arquivo existe e tem header + 2 linhas de dados (sem gaps).
+    wb = _read_back(result.path)
+    ws = wb["Publicacoes"]
+    assert ws.cell(row=2, column=1).value is not None
+    assert ws.cell(row=3, column=1).value is not None
+    # Linha 4 do xlsx é vazia (só foram escritas 2 de 3 source rows).
+    assert ws.cell(row=4, column=1).value is None
+
+
+def test_F21_07_multiplas_linhas_com_erro_todas_puladas_arquivo_gerado(
+    tmp_path: Path, monkeypatch, caplog,
+) -> None:
+    """Múltiplas linhas com marker mágico falham → todas puladas, log
+    warning emitido pra cada, arquivo gerado com as restantes."""
+    import logging as _logging
+
+    from openpyxl import Workbook as _OrigWB
+    from openpyxl.utils.exceptions import IllegalCharacterError
+
+    from notion_rpadv.services.dje_exporter import write_publicacoes_xlsx
+    MAGIC = "FAIL_THIS_ROW"
+    # 5 rows; ids 200 e 400 contêm MAGIC → falham.
+    rows = [
+        {"id": 100, "advogado_consultado": "A0", "siglaTribunal": "T0",
+         "data_disponibilizacao": "2026-04-29", "texto": "ok 0"},
+        {"id": 200, "advogado_consultado": "A1", "siglaTribunal": "T1",
+         "data_disponibilizacao": "2026-04-29", "texto": f"fail {MAGIC} 1"},
+        {"id": 300, "advogado_consultado": "A2", "siglaTribunal": "T2",
+         "data_disponibilizacao": "2026-04-29", "texto": "ok 2"},
+        {"id": 400, "advogado_consultado": "A3", "siglaTribunal": "T3",
+         "data_disponibilizacao": "2026-04-29", "texto": f"fail {MAGIC} 3"},
+        {"id": 500, "advogado_consultado": "A4", "siglaTribunal": "T4",
+         "data_disponibilizacao": "2026-04-29", "texto": "ok 4"},
+    ]
+    orig_active = _OrigWB.active.fget
+
+    def _bad_active(self):
+        ws = orig_active(self)
+        original_cell = ws.cell
+
+        def patched(row=None, column=None, value=None):
+            if isinstance(value, str) and MAGIC in value:
+                raise IllegalCharacterError("fake fail magic")
+            return original_cell(row=row, column=column, value=value)
+
+        ws.cell = patched
+        return ws
+
+    monkeypatch.setattr(_OrigWB, "active", property(_bad_active))
+
+    with caplog.at_level(_logging.WARNING, logger="dje.exporter"):
+        result = write_publicacoes_xlsx(
+            rows, tmp_path, date(2026, 4, 29), date(2026, 4, 29),
+        )
+    # Undo do patch antes de _read_back (load_workbook precisa do setter).
+    monkeypatch.undo()
+    # 2 linhas puladas (ids 200 e 400).
+    assert len(result.skipped) == 2
+    skipped_ids = {sk.row_id for sk in result.skipped}
+    assert skipped_ids == {200, 400}
+    # Log warning emitido pra cada uma (mensagem contém "linha pulada").
+    warn_msgs = [
+        r.getMessage() for r in caplog.records
+        if r.levelno == _logging.WARNING and r.name == "dje.exporter"
+    ]
+    pulada_count = sum("linha pulada" in m for m in warn_msgs)
+    assert pulada_count == 2, (
+        f"esperava 2 warnings 'linha pulada', got {pulada_count}: {warn_msgs!r}"
+    )
+    # Arquivo gerado com 3 linhas de dados (5 source - 2 puladas).
+    assert result.path.exists()
+    wb = _read_back(result.path)
+    ws = wb["Publicacoes"]
+    # rows 2, 3, 4 têm dados; row 5 vazia.
+    assert ws.cell(row=2, column=1).value is not None
+    assert ws.cell(row=3, column=1).value is not None
+    assert ws.cell(row=4, column=1).value is not None
+    assert ws.cell(row=5, column=1).value is None
+
+
+def test_F21_08_zero_linhas_com_erro_skipped_eh_lista_vazia(
+    tmp_path: Path,
+) -> None:
+    """Sem nenhum erro de escrita → ``result.skipped == []`` (lista
+    vazia, não None) e comportamento idêntico ao F2 anterior."""
+    from notion_rpadv.services.dje_exporter import write_publicacoes_xlsx
+    rows = [{
+        "id": 1, "advogado_consultado": "X (1/DF)",
+        "siglaTribunal": "TRT10",
+        "data_disponibilizacao": "2026-04-29",
+        "texto": "publicação normal sem lixo",
+    }]
+    result = write_publicacoes_xlsx(
+        rows, tmp_path, date(2026, 4, 29), date(2026, 4, 29),
+    )
+    assert result.skipped == []
+    assert isinstance(result.skipped, list)
+    # Arquivo OK com 1 linha de dados.
+    wb = _read_back(result.path)
+    ws = wb["Publicacoes"]
+    assert ws.cell(row=2, column=1).value is not None  # advogados_consultados
+    assert ws.cell(row=3, column=1).value is None      # sem 2ª linha
