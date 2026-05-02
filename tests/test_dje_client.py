@@ -527,9 +527,12 @@ def test_format_advogado_label() -> None:
 
 
 def test_advogados_lista_completa() -> None:
-    """Sanity: lista hardcoded tem os 12 advogados com OAB DF."""
+    """Sanity: lista oficial atual tem os 6 advogados ativos com OAB DF.
+
+    Fase 2.1 (2026-05-01): reduzida de 12 → 6 (6 desativados ficam
+    comentados em ``dje_advogados.py``)."""
     from notion_rpadv.services.dje_advogados import ADVOGADOS
-    assert len(ADVOGADOS) == 12
+    assert len(ADVOGADOS) == 6
     for a in ADVOGADOS:
         assert a["uf"] == "DF"
         assert a["oab"].isdigit()
@@ -547,3 +550,96 @@ def test_default_session_has_user_agent_header() -> None:
     client = DJEClient()
     # Acessa via internal — teste de smoke; não chama API.
     assert client._session.headers["User-Agent"] == USER_AGENT  # noqa: SLF001
+
+
+# ---------------------------------------------------------------------------
+# Fase 2.1 — Rate limit + Retry-After (Bug A do hotfix)
+# ---------------------------------------------------------------------------
+
+
+def test_F21_09_rate_limit_constant_eh_2_segundos() -> None:
+    """Pausa entre TODAS as requisições subiu de 1.0 → 2.0s na Fase 2.1
+    (smoke real em janela longa quebrou com 1s)."""
+    from notion_rpadv.services.dje_client import RATE_LIMIT_SECONDS
+    assert RATE_LIMIT_SECONDS == 2.0
+
+
+def test_F21_10_retry_after_inteiro_no_429_eh_honrado() -> None:
+    """429 com header ``Retry-After: 5`` → cliente espera 5s antes do
+    retry, em vez de aplicar o backoff fixo (2s/8s)."""
+    sleeps: list[float] = []
+    # 1ª tentativa: 429 com Retry-After=5; 2ª tentativa: 200 com items.
+    resp_429 = _mock_response(status=429)
+    resp_429.headers = {"Retry-After": "5"}
+    resp_ok = _mock_response(json_payload={"items": []})
+    session = _make_session([resp_429, resp_ok])
+    client = _make_client(session, sleep=sleeps.append)
+    advogado = {"nome": "X", "oab": "1", "uf": "DF"}
+    result = client.fetch_advogado(
+        advogado, date(2026, 5, 1), date(2026, 5, 1),
+    )
+    # Sucesso — 2ª tentativa retornou 0 items.
+    assert result.erro is None
+    # 1ª espera (entre 429 e retry): 5s do header, NÃO 2s do backoff.
+    assert sleeps[0] == 5.0
+
+
+def test_F21_11_retry_after_ausente_usa_backoff_atual() -> None:
+    """429 sem header ``Retry-After`` → fallback no backoff (2s na 1ª
+    espera entre tentativas, 8s na 2ª)."""
+    from notion_rpadv.services.dje_client import RETRY_BACKOFFS
+    sleeps: list[float] = []
+    # 1ª e 2ª tentativas: 429 sem header; 3ª: 200.
+    resp_429a = _mock_response(status=429)
+    resp_429a.headers = {}
+    resp_429b = _mock_response(status=429)
+    resp_429b.headers = {}
+    resp_ok = _mock_response(json_payload={"items": []})
+    session = _make_session([resp_429a, resp_429b, resp_ok])
+    client = _make_client(session, sleep=sleeps.append)
+    advogado = {"nome": "X", "oab": "1", "uf": "DF"}
+    result = client.fetch_advogado(
+        advogado, date(2026, 5, 1), date(2026, 5, 1),
+    )
+    assert result.erro is None
+    # 1ª espera = backoff[0] (2s), 2ª espera = backoff[1] (8s).
+    assert sleeps[0] == RETRY_BACKOFFS[0]
+    assert sleeps[1] == RETRY_BACKOFFS[1]
+
+
+def test_F21_12_retry_after_malformado_usa_backoff_atual() -> None:
+    """Header ``Retry-After`` com valor não-numérico (e.g. HTTP-date
+    RFC 7231 ou texto solto) → fallback no backoff atual, sem crash."""
+    from notion_rpadv.services.dje_client import RETRY_BACKOFFS
+    sleeps: list[float] = []
+    resp_429 = _mock_response(status=429)
+    resp_429.headers = {"Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"}
+    resp_ok = _mock_response(json_payload={"items": []})
+    session = _make_session([resp_429, resp_ok])
+    client = _make_client(session, sleep=sleeps.append)
+    advogado = {"nome": "X", "oab": "1", "uf": "DF"}
+    result = client.fetch_advogado(
+        advogado, date(2026, 5, 1), date(2026, 5, 1),
+    )
+    assert result.erro is None
+    # Espera caiu no backoff (não no header malformado).
+    assert sleeps[0] == RETRY_BACKOFFS[0]
+
+
+def test_F21_12cap_retry_after_acima_do_cap_eh_capado_em_60s() -> None:
+    """Header ``Retry-After: 600`` → espera capa em 60s (não trava o
+    thread por 10min). Decisão de design Fase 2.1."""
+    from notion_rpadv.services.dje_client import RETRY_AFTER_CAP_SECONDS
+    sleeps: list[float] = []
+    resp_429 = _mock_response(status=429)
+    resp_429.headers = {"Retry-After": "600"}
+    resp_ok = _mock_response(json_payload={"items": []})
+    session = _make_session([resp_429, resp_ok])
+    client = _make_client(session, sleep=sleeps.append)
+    advogado = {"nome": "X", "oab": "1", "uf": "DF"}
+    result = client.fetch_advogado(
+        advogado, date(2026, 5, 1), date(2026, 5, 1),
+    )
+    assert result.erro is None
+    # Cap em 60s (default em Fase 2.1).
+    assert sleeps[0] == RETRY_AFTER_CAP_SECONDS == 60.0

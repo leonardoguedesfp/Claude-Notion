@@ -315,8 +315,9 @@ class MainWindow(QMainWindow):
         exportar.toast_requested.connect(self._push_toast)
         self._add_page(_PAGE_EXPORTAR, exportar)
 
-        # Round 7 — Leitor DJE Fase 1: baixa publicações DJEN dos
-        # 12 advogados do escritório e empilha em xlsx.
+        # Round 7 — Leitor DJE: baixa publicações DJEN dos advogados
+        # do escritório (lista oficial em ``dje_advogados.ADVOGADOS``)
+        # e empilha em xlsx.
         leitor_dje = LeitorDJEPage(
             conn=self._conn, token=self._token, user=self._user_id,
             audit_conn=self._audit_conn,

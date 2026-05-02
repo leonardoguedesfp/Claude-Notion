@@ -36,8 +36,8 @@ def test_R7_leitor_dje_page_initial_state() -> None:
     _date_inicio E _date_fim com o mesmo valor sticky, não só
     _date_inicio. Aceitamos o sticky em ambos os pickers.).
 
-    Outros invariants do estado inicial: log vazio, progresso 0/12,
-    botão habilitado, botões 'abrir' ocultos."""
+    Outros invariants do estado inicial: log vazio, progresso 0/N
+    (N = len(ADVOGADOS)), botão habilitado, botões 'abrir' ocultos."""
     _qapp()
     from notion_rpadv.pages.leitor_dje import LeitorDJEPage
     from notion_rpadv.services.dje_advogados import ADVOGADOS
@@ -57,7 +57,7 @@ def test_R7_leitor_dje_page_initial_state() -> None:
     )
     # Log vazio
     assert page._log_area.toPlainText() == ""  # noqa: SLF001
-    # Progresso vai de 0 a len(ADVOGADOS) = 12
+    # Progresso vai de 0 a len(ADVOGADOS) (Fase 2.1: 6 advogados ativos).
     assert page._progress.maximum() == len(ADVOGADOS)  # noqa: SLF001
     assert page._progress.value() == 0  # noqa: SLF001
     # Botão de download habilitado

@@ -31,19 +31,41 @@ The design medium is **HTML/CSS/JS** — these are prototypes, not production co
 
 Aba do app que baixa publicações do **DJEN — Diário de Justiça Eletrônico
 Nacional** (API pública `comunicaapi.pje.jus.br/api/v1/comunicacao`) pros
-12 advogados do escritório e gera um `.xlsx` consolidado.
+6 advogados do escritório (Fase 2.1) e gera um `.xlsx` consolidado.
+
+### Advogados consultados (Fase 2.1, 2026-05-01)
+
+| Advogado | OAB |
+|---|---|
+| Ricardo Luiz Rodrigues da Fonseca Passos | 15523/DF |
+| Leonardo Guedes da Fonseca Passos | 36129/DF |
+| Vitor Guedes da Fonseca Passos | 48468/DF |
+| Cecília Maria Lapetina Chiaratto | 20120/DF |
+| Samantha Lais Soares Mickievicz | 38809/DF |
+| Deborah Nascimento de Castro | 75799/DF |
+
+A lista anterior (12 advogados) foi reduzida para 6 em 2026-05-01 após
+smoke real em janela longa (01/01→30/04/2026) gerar 429 catastrófico em
+7 dos 12. Os 6 desativados ficam comentados em
+[notion_rpadv/services/dje_advogados.py](notion_rpadv/services/dje_advogados.py)
+— para reativar um deles, descomentar a linha correspondente.
 
 ### Como usar
 
 1. Abra o app, navegue na sidebar até **Leitor DJE** (entre "Exportar dados" e "Logs").
 2. Escolha **Data inicial** e **Data final** (default: ambas em ontem). Pode ser o mesmo dia.
 3. Clique **Baixar publicações**.
-4. Acompanhe o progresso na barra (12 etapas) e na área de log abaixo.
+4. Acompanhe o progresso na barra (6 etapas — uma por advogado) e na área de log abaixo.
 5. Ao terminar, clique **Abrir arquivo gerado** ou **Abrir pasta**.
+
+> **Janelas longas (> 30 dias)** podem demorar vários minutos por
+> advogado. A pausa entre requisições é de 2s (Fase 2.1, era 1s) e o
+> cliente honra o header `Retry-After` quando o servidor pede uma espera
+> explícita no 429 (cap em 60s pra evitar travar a UI por minutos).
 
 ### O que ele faz
 
-- Para cada um dos 12 advogados (lista hardcoded em
+- Para cada um dos 6 advogados ativos (lista hardcoded em
   [notion_rpadv/services/dje_advogados.py](notion_rpadv/services/dje_advogados.py)),
   busca por OAB/DF no DJEN.
 - Pagina até esgotar (até 100 itens por página).
@@ -117,14 +139,27 @@ unidas por ` | ` (Regra A primeiro, Regra B depois).
 
 ### Tratamento de erros
 
-- Rate limit: **1 req/s** entre todas as requisições (incluindo entre
-  páginas do mesmo advogado).
+- Rate limit: **2 req/s** entre todas as requisições (Fase 2.1, era 1s),
+  incluindo entre páginas do mesmo advogado.
 - Retry para HTTP 429/503/timeout/erro de rede: **3 tentativas totais**
   com esperas de **2s e 8s**. Última falha → registra no log da UI e
   segue pro próximo advogado (varredura inteira não aborta).
+- 429 com header `Retry-After: <segundos>` → cliente honra o valor do
+  servidor em vez do backoff fixo, capado em **60s** pra evitar travar
+  a UI (Fase 2.1).
 - HTTP 4xx (≠ 429) → registra corpo da resposta e segue (sem retry).
 - Falha em ≥ 1 advogado → arquivo é gerado mesmo assim (incompleto), com
   banner amarelo listando os advogados afetados.
+- Caracteres de controle Unicode (incluindo o bloco "Control Pictures"
+  U+2400–U+243F) são **removidos automaticamente** antes da escrita
+  (Fase 2.1) — defesa contra mojibake do upstream que travava o exporter
+  com `IllegalCharacterError`. Defesa em 2 camadas: sanitize no transform
+  + try/except por linha no exporter.
+- Linhas que ainda assim falhem na escrita são **puladas individualmente**
+  (não derrubam o arquivo inteiro) e contabilizadas no banner final
+  ("M linha(s) com caractere inválido foram puladas"). Detalhes (até 10
+  linhas) aparecem na área de log da UI; acima do cap, log do sistema
+  guarda o resto.
 - Divergência entre duplicatas de mesmo `id` (campos não-advogado) →
   warning no logger `dje.transform`, primeira ocorrência mantida.
 

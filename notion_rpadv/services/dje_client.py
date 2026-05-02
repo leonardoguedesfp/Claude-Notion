@@ -52,13 +52,21 @@ USER_AGENT: str = (
 )
 TIMEOUT_SECONDS: float = 15.0
 PAGE_SIZE: int = 100
-RATE_LIMIT_SECONDS: float = 1.0  # entre TODAS as requisições
+# Pausa entre TODAS as requisições. Fase 2.1 (2026-05-01): 1.0 → 2.0
+# após smoke real em janela longa (01/01→30/04/2026) gerar 429
+# catastrófico em 7 de 12 advogados.
+RATE_LIMIT_SECONDS: float = 2.0
 
 # 3 tentativas totais, 2 esperas entre elas (2s e 8s).
 RETRY_BACKOFFS: tuple[float, ...] = (2.0, 8.0)
 
 # Status HTTP que disparam retry (transientes).
 _RETRY_STATUS: frozenset[int] = frozenset({429, 503})
+
+# Cap superior pro header ``Retry-After``. Servidor que pede uma espera
+# absurda (e.g. 600s) não trava o thread por minutos — capamos em 60s
+# e logamos. 60s (e não 30s) pra reduzir risco de cair no mesmo 429.
+RETRY_AFTER_CAP_SECONDS: float = 60.0
 
 
 # ---------------------------------------------------------------------------
@@ -291,7 +299,16 @@ class DJEClient:
                     attempt, attempts, status,
                 )
                 if attempt < attempts:
-                    self._sleep(RETRY_BACKOFFS[attempt - 1])
+                    backoff = RETRY_BACKOFFS[attempt - 1]
+                    # Fase 2.1: 429 com header ``Retry-After`` honrado
+                    # quando inteiro (segundos). Formato HTTP-date da
+                    # RFC 7231 NÃO suportado intencionalmente — cai no
+                    # backoff atual. Cap superior em ``RETRY_AFTER_CAP_SECONDS``.
+                    if status == 429:
+                        backoff = _resolve_retry_after_seconds(
+                            response, fallback=backoff,
+                        )
+                    self._sleep(backoff)
                     continue
                 break
             # 4xx ≠ 429 → request mal formado; retry não consertaria.
@@ -318,3 +335,39 @@ def _extract_items(payload: Any) -> list[dict[str, Any]]:
     if not isinstance(items, list):
         return []
     return [it for it in items if isinstance(it, dict)]
+
+
+def _resolve_retry_after_seconds(
+    response: Any, fallback: float,
+) -> float:
+    """Lê o header ``Retry-After`` de uma resposta 429 e devolve a
+    espera em segundos.
+
+    - Header ausente ou vazio → ``fallback`` (backoff atual).
+    - Header em segundos inteiros (``"5"``) → valor convertido,
+      capado em ``RETRY_AFTER_CAP_SECONDS`` (com warning quando
+      capa).
+    - Header em qualquer outro formato (HTTP-date RFC 7231,
+      string não-numérica, etc.) → ``fallback``. Decisão deliberada:
+      DJEN historicamente só envia inteiro; suporte a HTTP-date
+      adicionaria parsing/timezones sem ganho prático.
+    """
+    headers = getattr(response, "headers", None) or {}
+    raw = headers.get("Retry-After")
+    if raw is None:
+        return fallback
+    raw_str = str(raw).strip()
+    if not raw_str.isdigit():
+        logger.warning(
+            "DJE: Retry-After=%r não-numérico, usando fallback %.1fs",
+            raw, fallback,
+        )
+        return fallback
+    seconds = float(int(raw_str))
+    if seconds > RETRY_AFTER_CAP_SECONDS:
+        logger.warning(
+            "DJE: Retry-After=%ds recebido, capando em %.0fs",
+            int(seconds), RETRY_AFTER_CAP_SECONDS,
+        )
+        return RETRY_AFTER_CAP_SECONDS
+    return seconds

@@ -617,3 +617,86 @@ def test_descstr_equality() -> None:
     assert a == b
     assert a != c
     assert a != "x"  # tipo diferente
+
+
+# ---------------------------------------------------------------------------
+# Fase 2.1 — sanitize_for_xlsx (Bug B do hotfix)
+#
+# Caso real do smoke 01/01→30/04/2026: AREsp 2427258/DF (STJ) trazia
+# U+2426 SYMBOL FOR SUBSTITUTE FORM TWO no campo ``texto``, derrubando
+# o exporter inteiro (IllegalCharacterError). Esta seção exercita a
+# defesa primária — função pura aplicada em todo campo string da linha
+# antes da escrita. Defesa secundária (try/except por linha + sanitize
+# pós-JSON) está em ``dje_exporter`` e tem testes próprios (F21-05/06/07/08).
+# ---------------------------------------------------------------------------
+
+
+def test_F21_01_sanitize_remove_u2426_preservando_resto() -> None:
+    """U+2426 SYMBOL FOR SUBSTITUTE FORM TWO no meio do texto é removido,
+    resto do conteúdo intacto."""
+    from notion_rpadv.services.dje_transform import sanitize_for_xlsx
+    entrada = "AREsp 2427258/DF " + chr(0x2426) + " PREVI"
+    saida = sanitize_for_xlsx(entrada)
+    assert chr(0x2426) not in saida
+    assert saida == "AREsp 2427258/DF  PREVI"  # U+2426 sumiu, espaço fica
+
+
+def test_F21_02_sanitize_remove_controle_baixo_preservando_tab_newline() -> None:
+    """Mistura de controle ASCII baixo + texto + \\n + \\t: control chars
+    removidos, \\n e \\t preservados (fora do range proibido)."""
+    from notion_rpadv.services.dje_transform import sanitize_for_xlsx
+    entrada = "A\x00B\x07C\nD\tE\x1FF"
+    saida = sanitize_for_xlsx(entrada)
+    # 0x00 (NULL), 0x07 (BEL), 0x1F (US) removidos
+    assert "\x00" not in saida
+    assert "\x07" not in saida
+    assert "\x1f" not in saida
+    # \n (0x0A) e \t (0x09) preservados
+    assert "\n" in saida
+    assert "\t" in saida
+    assert saida == "ABC\nD\tEF"
+
+
+def test_F21_03_sanitize_aplicado_em_todos_os_campos_string_da_linha() -> None:
+    """``transform_rows`` aplica ``sanitize_for_xlsx`` em TODOS os
+    campos string da linha — não só ``texto``. Cobre ``nomeOrgao``,
+    ``tipoDocumento``, e um campo arbitrário não-canônico (defesa
+    contra futuras chaves novas no payload do DJEN)."""
+    from notion_rpadv.services.dje_transform import transform_rows
+    sujo = chr(0x2426)
+    raw = [{
+        "id": 1,
+        "advogado_consultado": "X (1/DF)",
+        "siglaTribunal": "STJ",
+        "data_disponibilizacao": "2026-04-29",
+        "texto": f"corpo {sujo} aqui",
+        "nomeOrgao": f"PRIMEIRA TURMA {sujo}",
+        "tipoDocumento": f"{sujo}Intimação",
+        # Campo arbitrário fora do CANONICAL_COLUMNS — sanitize ainda
+        # passa, mesmo que o exporter o filtre depois.
+        "campo_inventado": f"valor {sujo} novo",
+    }]
+    rows, _cols = transform_rows(raw)
+    assert len(rows) == 1
+    r = rows[0]
+    for field in ("texto", "nomeOrgao", "tipoDocumento", "campo_inventado"):
+        assert sujo not in r[field], (
+            f"sujo ainda em {field}: {r[field]!r}"
+        )
+
+
+def test_F21_04_sanitize_passa_intacto_em_none_e_nao_string() -> None:
+    """Campo ``None``, ``int``, ``list``, ``dict`` passa intacto pela
+    função sem levantar — defesa pra usar no pipeline sobre dicts
+    heterogêneos."""
+    from notion_rpadv.services.dje_transform import sanitize_for_xlsx
+    assert sanitize_for_xlsx(None) is None
+    assert sanitize_for_xlsx(42) == 42
+    assert sanitize_for_xlsx(3.14) == 3.14
+    assert sanitize_for_xlsx(True) is True
+    # Listas e dicts NÃO são percorridos recursivamente — passam direto
+    # (defesa secundária no exporter via JSON serialize).
+    lista_com_lixo = ["A" + chr(0x2426) + "B"]
+    assert sanitize_for_xlsx(lista_com_lixo) is lista_com_lixo
+    dict_com_lixo = {"k": "A" + chr(0x2426) + "B"}
+    assert sanitize_for_xlsx(dict_com_lixo) is dict_com_lixo

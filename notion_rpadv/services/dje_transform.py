@@ -35,6 +35,13 @@ Após o transform, as 6 colunas redundantes (`ativo`, `status`, `meio`,
 `meiocompleto`, `motivo_cancelamento`, `data_cancelamento`) **são
 removidas** do output — qualquer anomalia delas já está em
 ``observacoes``.
+
+7. **Sanitização Unicode (Fase 2.1)**: ``sanitize_for_xlsx`` remove
+   caracteres de controle Unicode (incluindo o bloco "Control Pictures"
+   U+2400–U+243F) que o openpyxl recusa com ``IllegalCharacterError``.
+   Caso real do smoke 01/01→30/04/2026: AREsp 2427258/DF (STJ) trazia
+   U+2426 SYMBOL FOR SUBSTITUTE FORM TWO no campo ``texto``, derrubando
+   o exporter inteiro. Aplicada em todos os campos string da linha.
 """
 from __future__ import annotations
 
@@ -125,6 +132,40 @@ _UPPERCASE_RATIO_THRESHOLD: Final[float] = 0.70
 _NORMALIZE_ENCODING_FIELDS: Final[tuple[str, ...]] = (
     "nomeOrgao", "nomeClasse", "tipoDocumento",
 )
+
+
+# ---------------------------------------------------------------------------
+# Sanitização Unicode (Fase 2.1)
+# ---------------------------------------------------------------------------
+
+
+# Caracteres de controle Unicode que openpyxl recusa.
+# Inclui controle ASCII (0x00-0x1F exceto \t \n \r) e o bloco "Control
+# Pictures" (U+2400–U+243F). U+2426 SYMBOL FOR SUBSTITUTE FORM TWO foi
+# o caractere encontrado no smoke real (STJ AREsp 2427258/DF) que
+# levantou ``IllegalCharacterError`` no exporter.
+ILLEGAL_XLSX_CHARS_RE: Final = re.compile(
+    r"[\x00-\x08\x0B\x0C\x0E-\x1F␀-␿]",
+)
+
+
+def sanitize_for_xlsx(s: Any) -> Any:
+    """Remove caracteres de controle Unicode incompatíveis com openpyxl.
+
+    Preserva ``\\t`` (0x09), ``\\n`` (0x0A) e ``\\r`` (0x0D). Tudo mais
+    do bloco de controle ASCII baixo é removido. O bloco
+    U+2400–U+243F ("Control Pictures") também é removido — mojibake
+    upstream do DJEN.
+
+    Entrada não-string (None, int, list, dict, etc.) passa direto sem
+    levantar — defesa pra usar no pipeline sobre dicts heterogêneos.
+    Listas e dicts NÃO são percorridos recursivamente; nestes casos a
+    defesa secundária está no ``dje_exporter._serialize_cell`` que
+    sanitiza a string final pós-JSON.
+    """
+    if not isinstance(s, str):
+        return s
+    return ILLEGAL_XLSX_CHARS_RE.sub("", s)
 
 
 def strip_html(s: str | None) -> str | None:
@@ -387,6 +428,7 @@ def _enrich_row(row: dict[str, Any]) -> dict[str, Any]:
     3. ``nomeOrgao``/``nomeClasse``/``tipoDocumento`` normalização de
        encoding misto
     4. drop das 6 colunas redundantes (cobertas por ``observacoes``)
+    5. ``sanitize_for_xlsx`` em TODOS os campos string da linha (Fase 2.1)
     """
     out = dict(row)
     out["observacoes"] = make_observacoes(row)
@@ -404,6 +446,14 @@ def _enrich_row(row: dict[str, Any]) -> dict[str, Any]:
 
     for col in DROPPED_COLUMNS:
         out.pop(col, None)
+
+    # Fase 2.1: passada final de sanitização. Aplica em TODOS os campos
+    # string top-level (None, int, list, dict passam intactos — sanitize
+    # é defensivo). Listas/dicts aninhados ficam pra defesa secundária
+    # no exporter via JSON serialize.
+    for key, value in list(out.items()):
+        if isinstance(value, str):
+            out[key] = sanitize_for_xlsx(value)
 
     return out
 
