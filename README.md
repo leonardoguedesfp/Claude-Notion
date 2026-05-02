@@ -27,11 +27,11 @@ The design medium is **HTML/CSS/JS** — these are prototypes, not production co
 
 ---
 
-## Leitor DJE (Round 7 — Fase 1)
+## Leitor DJE (Round 7)
 
 Aba do app que baixa publicações do **DJEN — Diário de Justiça Eletrônico
 Nacional** (API pública `comunicaapi.pje.jus.br/api/v1/comunicacao`) pros
-12 advogados do escritório e empilha tudo num único `.xlsx`.
+12 advogados do escritório e gera um `.xlsx` consolidado.
 
 ### Como usar
 
@@ -47,14 +47,61 @@ Nacional** (API pública `comunicaapi.pje.jus.br/api/v1/comunicacao`) pros
   [notion_rpadv/services/dje_advogados.py](notion_rpadv/services/dje_advogados.py)),
   busca por OAB/DF no DJEN.
 - Pagina até esgotar (até 100 itens por página).
-- Empilha tudo num xlsx em
-  `Publicacoes_DJEN_{dd.mm.aa_inicio}_a_{dd.mm.aa_fim}_v{N}.xlsx`.
+- Aplica pipeline de transformação ([notion_rpadv/services/dje_transform.py](notion_rpadv/services/dje_transform.py)):
+  dedup por `id`, enriquecimento com coluna `observacoes`, strip de HTML
+  no campo `texto`, normalização de encoding misto, drop de colunas
+  redundantes, ordenação por tribunal+data.
+- Salva em `Publicacoes_DJEN_{dd.mm.aa_inicio}_a_{dd.mm.aa_fim}_v{N}.xlsx`.
   O `N` auto-incrementa pra nunca sobrescrever (rodar 2× = `v1` e `v2`).
-- Coluna `advogado_consultado` é injetada como **primeira coluna** —
-  identifica de qual advogado do escritório veio cada publicação
-  (mesma publicação aparece N vezes em casos de litisconsórcio interno).
-- Demais colunas vêm na ordem do JSON da API DJEN, sem renomear nem
-  traduzir. Arrays viram JSON string com acentos preservados.
+
+### Formato do arquivo (Fase 2)
+
+**1 linha por publicação única**, com **20 colunas em ordem fixa**:
+
+| # | Coluna | O que tem |
+|---|---|---|
+| 1 | `advogados_consultados` | Nomes dos advogados do escritório intimados naquela publicação, separados por `; ` em ordem alfabética. Em caso de litisconsórcio interno (Ricardo + Leonardo no mesmo processo), aparecem os dois aqui |
+| 2 | `observacoes` | **Vazio quando não há nada estranho.** Sinaliza anomalias: publicação inativa/cancelada, status fora do habitual, ausência de Ricardo (15523/DF) ou Leonardo (36129/DF) na lista de advogados intimados. Múltiplas mensagens unidas por `\| ` |
+| 3 | `id` | Chave numérica única no DJEN |
+| 4 | `hash` | Chave alternativa estável |
+| 5 | `siglaTribunal` | TRT10, STF, STJ, TST, etc. |
+| 6 | `data_disponibilizacao` | ISO `2026-04-30` |
+| 7-9 | `numeroprocessocommascara`, `numero_processo`, `tipoComunicacao` | Identificação processual |
+| 10 | `tipoDocumento` | Despacho, Intimação, etc. |
+| 11-12 | `nomeOrgao`, `idOrgao` | Vara/turma onde tramita |
+| 13-14 | `nomeClasse`, `codigoClasse` | Tipo de ação |
+| 15 | `numeroComunicacao` | Sequência interna do tribunal |
+| 16 | `texto` | Corpo da publicação **sem HTML** (Fase 2 limpa `<br>`/`<a>`/tabelas) |
+| 17 | `link` | URL da publicação no portal do tribunal |
+| 18-19 | `destinatarios`, `destinatarioadvogados` | Partes e advogados (JSON string com acentos) |
+| 20 | `datadisponibilizacao` | Mesma data em formato BR `30/04/2026` |
+
+**Removidas em relação à F1**: `advogado_consultado` (singular, virou plural),
+`ativo`, `status`, `meio`, `meiocompleto`, `motivo_cancelamento`,
+`data_cancelamento` (qualquer divergência delas vai pra `observacoes`).
+
+**Ordenação final**: por `siglaTribunal` ASC, depois `data_disponibilizacao`
+DESC (mais recente primeiro dentro de cada tribunal).
+
+### Coluna `observacoes` — quando dispara
+
+A coluna sinaliza dois grupos de anomalia:
+
+**Regra A — campos que costumam ser constantes mas variaram:**
+- `Publicação inativa (ativo=False) — verificar se foi cancelada ou substituída`
+- `Status diferente do habitual: 'C' (esperado: 'P' = publicada)`
+- `Meio diferente do habitual: 'X' (esperado: 'D' = diário)`
+- `Meio completo diferente do habitual: '<valor>'`
+- `Motivo de cancelamento informado: <texto>`
+- `Data de cancelamento informada: <data>`
+
+**Regra B — sócios fundadores ausentes** (Ricardo OAB 15523/DF, Leonardo OAB 36129/DF):
+- `Leonardo (36129/DF) não consta entre os advogados intimados`
+- `Ricardo (15523/DF) não consta entre os advogados intimados`
+- `Nem Ricardo (15523/DF) nem Leonardo (36129/DF) constam entre os advogados intimados`
+
+Linhas sem anomalia → `observacoes` é string vazia. Múltiplas mensagens
+unidas por ` | ` (Regra A primeiro, Regra B depois).
 
 ### Configuração
 
@@ -78,14 +125,13 @@ Nacional** (API pública `comunicaapi.pje.jus.br/api/v1/comunicacao`) pros
 - HTTP 4xx (≠ 429) → registra corpo da resposta e segue (sem retry).
 - Falha em ≥ 1 advogado → arquivo é gerado mesmo assim (incompleto), com
   banner amarelo listando os advogados afetados.
+- Divergência entre duplicatas de mesmo `id` (campos não-advogado) →
+  warning no logger `dje.transform`, primeira ocorrência mantida.
 
-### Limitações desta fase
+### Não-escopo (Fase 3+)
 
-- Não trata o campo `texto` (mantém HTML/escapes brutos).
-- Não cria tarefas no Notion.
-- Não envia e-mail de alerta.
-- Não classifica por relevância.
-- Não busca por número de processo (só por OAB).
-- Não deduplica — publicações com litisconsórcio interno do escritório
-  aparecem N vezes (uma por advogado consultado). A coluna `hash` da
-  resposta é a chave única estável; Fase 2 vai deduplicar via ela.
+- Carga das publicações no Notion (criação de tarefas).
+- Alertas por e-mail.
+- Classificação por relevância.
+- Busca por número de processo.
+- Captação de TJSP/STF (tribunais não cobertos pelo DJEN).
