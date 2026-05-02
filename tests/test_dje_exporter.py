@@ -97,9 +97,11 @@ def test_xlsx_aba_chamada_publicacoes(tmp_path: Path) -> None:
     assert wb.sheetnames == ["Publicacoes"]
 
 
-def test_xlsx_advogado_consultado_eh_primeira_coluna(tmp_path: Path) -> None:
-    """Round 7 spec: ``advogado_consultado`` é a 1ª coluna, mesmo
-    sendo injetada por nós depois das chaves do JSON da API."""
+def test_xlsx_advogados_consultados_eh_primeira_coluna(tmp_path: Path) -> None:
+    """Round 7 Fase 2: ``advogados_consultados`` (plural) é a 1ª coluna
+    do schema canônico. F1 era ``advogado_consultado`` (singular) — F2
+    rebatizou via dedup pra plural com lista de nomes do escritório
+    intimados na mesma publicação."""
     from notion_rpadv.services.dje_exporter import write_publicacoes_xlsx
     rows = [{
         "id": 1, "hash": "abc", "texto": "publi 1",
@@ -113,7 +115,9 @@ def test_xlsx_advogado_consultado_eh_primeira_coluna(tmp_path: Path) -> None:
     )
     wb = _read_back(path)
     ws = wb["Publicacoes"]
-    assert ws.cell(row=1, column=1).value == "advogado_consultado"
+    assert ws.cell(row=1, column=1).value == "advogados_consultados"
+    # Valor da linha 2 col 1: nome do advogado (plural com 1 entrada).
+    assert ws.cell(row=2, column=1).value == "Leonardo (36129/DF)"
 
 
 def test_xlsx_header_em_negrito(tmp_path: Path) -> None:
@@ -130,7 +134,8 @@ def test_xlsx_header_em_negrito(tmp_path: Path) -> None:
 
 def test_xlsx_serializa_arrays_como_json(tmp_path: Path) -> None:
     """Round 7 spec: arrays (destinatarios, destinatarioadvogados)
-    viram JSON string com ensure_ascii=False (acentos preservados)."""
+    viram JSON string com ensure_ascii=False (acentos preservados).
+    F2: agora dentro do schema canônico (cols 18 e 19)."""
     from notion_rpadv.services.dje_exporter import write_publicacoes_xlsx
     rows = [{
         "advogado_consultado": "X",
@@ -139,7 +144,9 @@ def test_xlsx_serializa_arrays_como_json(tmp_path: Path) -> None:
             {"nome": "Luís Fernando", "polo": "ATIVO"},
             {"nome": "Mariana Souza", "polo": "PASSIVO"},
         ],
-        "destinatarioadvogados": ["12345/DF", "67890/SP"],
+        "destinatarioadvogados": [
+            {"numero_oab": "12345", "uf_oab": "DF", "nome": "X"},
+        ],
     }]
     path = write_publicacoes_xlsx(
         rows, tmp_path, date(2026, 5, 1), date(2026, 5, 1),
@@ -158,21 +165,28 @@ def test_xlsx_serializa_arrays_como_json(tmp_path: Path) -> None:
     parsed_dest = json.loads(dest_value)
     parsed_advs = json.loads(advs_value)
     assert parsed_dest[0]["nome"] == "Luís Fernando"
-    assert parsed_advs == ["12345/DF", "67890/SP"]
-    # ensure_ascii=False — acentos literais (não ú).
+    assert parsed_advs[0]["numero_oab"] == "12345"
+    # ensure_ascii=False — acentos literais (não \\u).
     assert "Luís" in dest_value
 
 
-def test_xlsx_preserva_ordem_colunas_do_primeiro_item(tmp_path: Path) -> None:
-    """Round 7 spec: colunas seguem a ordem do JSON do PRIMEIRO item
-    retornado, com ``advogado_consultado`` à frente."""
+def test_xlsx_schema_canonico_20_colunas_em_ordem_fixa(tmp_path: Path) -> None:
+    """Round 7 Fase 2: schema canônico de 20 colunas em ordem fixa
+    (CANONICAL_COLUMNS), independente do payload de entrada.
+
+    Substitui o teste F1 ``test_xlsx_preserva_ordem_colunas_do_primeiro_item``
+    que assertava schema-agnóstico. F2 trava o contrato: caller passa
+    rows brutos do client, exporter aplica transform e escreve as 20
+    colunas em ordem fixa.
+    """
     from notion_rpadv.services.dje_exporter import write_publicacoes_xlsx
+    from notion_rpadv.services.dje_transform import CANONICAL_COLUMNS
     rows = [{
         "id":            1,
         "hash":          "abc",
         "siglaTribunal": "TRT10",
         "tipoDocumento": "Intimação",
-        "advogado_consultado": "X (1/DF)",  # injetado, vai pra frente
+        "advogado_consultado": "X (1/DF)",
     }]
     path = write_publicacoes_xlsx(
         rows, tmp_path, date(2026, 5, 1), date(2026, 5, 1),
@@ -183,19 +197,28 @@ def test_xlsx_preserva_ordem_colunas_do_primeiro_item(tmp_path: Path) -> None:
         ws.cell(row=1, column=c).value
         for c in range(1, ws.max_column + 1)
     ]
-    # Primeira coluna sempre é a anotação.
-    assert headers[0] == "advogado_consultado"
-    # Restante na ordem do JSON original (id, hash, sigla, tipo).
-    assert headers[1:] == ["id", "hash", "siglaTribunal", "tipoDocumento"]
+    # 20 colunas exatas, na ordem do schema canônico.
+    assert headers == CANONICAL_COLUMNS
+    # Garantia: ``advogados_consultados`` e ``observacoes`` são as 2
+    # primeiras (adições da Fase 2).
+    assert headers[0] == "advogados_consultados"
+    assert headers[1] == "observacoes"
 
 
-def test_xlsx_chaves_novas_em_items_subsequentes(tmp_path: Path) -> None:
-    """Defesa: se item N tem chave que item 1 não tinha, ela vai pro
-    final da lista de colunas (não some)."""
+def test_xlsx_chaves_extras_no_payload_sao_ignoradas(tmp_path: Path) -> None:
+    """Round 7 Fase 2: schema canônico filtra chaves novas que possam
+    aparecer no payload do DJEN — só as 20 do CANONICAL_COLUMNS entram
+    no xlsx.
+
+    Substitui o teste F1 ``test_xlsx_chaves_novas_em_items_subsequentes``
+    que validava o oposto (auto-include de chaves novas) — comportamento
+    desejado da F1 mas explícito como anti-padrão na F2 (schema é
+    contrato).
+    """
     from notion_rpadv.services.dje_exporter import write_publicacoes_xlsx
+    from notion_rpadv.services.dje_transform import CANONICAL_COLUMNS
     rows = [
-        {"advogado_consultado": "X", "id": 1, "hash": "a"},
-        {"advogado_consultado": "X", "id": 2, "hash": "b", "extra": "novo"},
+        {"advogado_consultado": "X", "id": 1, "hash": "a", "extra_inesperado": "novo"},
     ]
     path = write_publicacoes_xlsx(
         rows, tmp_path, date(2026, 5, 1), date(2026, 5, 1),
@@ -206,19 +229,16 @@ def test_xlsx_chaves_novas_em_items_subsequentes(tmp_path: Path) -> None:
         ws.cell(row=1, column=c).value
         for c in range(1, ws.max_column + 1)
     ]
-    assert "extra" in headers
-    # Linha 1 (item original): coluna 'extra' fica vazia
-    extra_idx = headers.index("extra") + 1
-    assert ws.cell(row=2, column=extra_idx).value is None
-    # Linha 2 (item novo): coluna 'extra' tem o valor
-    assert ws.cell(row=3, column=extra_idx).value == "novo"
+    assert headers == CANONICAL_COLUMNS
+    assert "extra_inesperado" not in headers
 
 
 def test_xlsx_lista_vazia_gera_arquivo_so_com_header(tmp_path: Path) -> None:
-    """0 publicações → arquivo gerado mesmo assim com só o header
-    ``advogado_consultado``. Operador vê que rodou, sem confundir
-    com erro."""
+    """0 publicações → arquivo gerado mesmo assim com header completo
+    (20 colunas do schema canônico F2). Operador vê que rodou, sem
+    confundir com erro."""
     from notion_rpadv.services.dje_exporter import write_publicacoes_xlsx
+    from notion_rpadv.services.dje_transform import CANONICAL_COLUMNS
     path = write_publicacoes_xlsx(
         rows=[],
         output_dir=tmp_path,
@@ -228,7 +248,14 @@ def test_xlsx_lista_vazia_gera_arquivo_so_com_header(tmp_path: Path) -> None:
     assert path.exists()
     wb = _read_back(path)
     ws = wb["Publicacoes"]
-    assert ws.cell(row=1, column=1).value == "advogado_consultado"
+    # F2: 1ª col é advogados_consultados (era advogado_consultado no F1)
+    assert ws.cell(row=1, column=1).value == "advogados_consultados"
+    # Header completo do schema canônico.
+    headers = [
+        ws.cell(row=1, column=c).value
+        for c in range(1, ws.max_column + 1)
+    ]
+    assert headers == CANONICAL_COLUMNS
     # Sem linhas de dados.
     assert ws.cell(row=2, column=1).value is None
 
@@ -258,13 +285,16 @@ def test_xlsx_cria_diretorio_se_nao_existir(tmp_path: Path) -> None:
     assert target.exists()
 
 
-def test_xlsx_none_vira_celula_vazia(tmp_path: Path) -> None:
-    """Valor None no JSON original vira célula vazia (não 'None' string)."""
+def test_xlsx_none_em_campo_canonico_vira_celula_vazia(tmp_path: Path) -> None:
+    """Valor None em campo do schema canônico vira célula vazia (não
+    string 'None'). F2: testa via campo ``link`` que está no schema
+    canônico (col 17) — F1 testava com chave fora do schema (que agora
+    seria filtrada pelo transform)."""
     from notion_rpadv.services.dje_exporter import write_publicacoes_xlsx
     rows = [{
         "advogado_consultado": "X",
         "id": 1,
-        "campo_opcional": None,
+        "link": None,  # campo canônico mas com valor None
     }]
     path = write_publicacoes_xlsx(
         rows, tmp_path, date(2026, 5, 1), date(2026, 5, 1),
@@ -274,5 +304,5 @@ def test_xlsx_none_vira_celula_vazia(tmp_path: Path) -> None:
     headers = [
         ws.cell(row=1, column=c).value for c in range(1, ws.max_column + 1)
     ]
-    idx = headers.index("campo_opcional") + 1
+    idx = headers.index("link") + 1
     assert ws.cell(row=2, column=idx).value is None

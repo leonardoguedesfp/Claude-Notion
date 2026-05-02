@@ -31,21 +31,30 @@ def test_R7_leitor_dje_page_imports() -> None:
 
 
 def test_R7_leitor_dje_page_initial_state() -> None:
-    """Estado inicial: date pickers em ontem, log vazio, progresso 0/12,
+    """Estado inicial: date pickers em ontem (ou sticky até 7 dias atrás
+    — Round 7 F2 hotfix de teste flaky: a página inicializa
+    _date_inicio E _date_fim com o mesmo valor sticky, não só
+    _date_inicio. Aceitamos o sticky em ambos os pickers.).
+
+    Outros invariants do estado inicial: log vazio, progresso 0/12,
     botão habilitado, botões 'abrir' ocultos."""
     _qapp()
     from notion_rpadv.pages.leitor_dje import LeitorDJEPage
     from notion_rpadv.services.dje_advogados import ADVOGADOS
 
     page = LeitorDJEPage(conn=MagicMock(), token="dummy", user="leo")
-    # Date pickers default = ontem
-    ontem = _dt.date.today() - _dt.timedelta(days=1)
+    # Date pickers default: ontem com sticky window de 7 dias.
     di = page._date_inicio.date().toPython()  # noqa: SLF001
     df = page._date_fim.date().toPython()  # noqa: SLF001
-    # Permitimos um override sticky de até 7 dias atrás (UX) — então
-    # a comparação aqui é >= ontem - 7d e <= hoje.
-    assert (_dt.date.today() - di).days <= 7
-    assert df == ontem
+    today = _dt.date.today()
+    assert 1 <= (today - di).days <= 7, (
+        f"_date_inicio fora da janela [today-7d, today-1d]: {di}"
+    )
+    # _date_fim pode ter o mesmo sticky de _date_inicio (UX: ambos
+    # iniciam iguais, operador ajusta o intervalo manualmente).
+    assert 1 <= (today - df).days <= 7, (
+        f"_date_fim fora da janela [today-7d, today-1d]: {df}"
+    )
     # Log vazio
     assert page._log_area.toPlainText() == ""  # noqa: SLF001
     # Progresso vai de 0 a len(ADVOGADOS) = 12

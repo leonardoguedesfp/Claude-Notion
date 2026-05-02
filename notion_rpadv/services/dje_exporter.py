@@ -1,9 +1,14 @@
 """Writer xlsx pras publicações DJEN coletadas pelo ``dje_client``.
 
-Fase 1: empilha todas as linhas em uma única aba ``Publicacoes``.
-Não deduplica, não traduz nomes de coluna, não converte tipos.
-Arrays viram JSON string com ``ensure_ascii=False`` (preserva acentos
-em destinatários, advogados de outros polos, etc.).
+Fase 2: pipeline ``dje_transform.transform_rows`` é aplicado ANTES da
+escrita — dedup por id, observacoes derivadas das regras A+B, strip
+de HTML em ``texto``, normalização de encoding misto em campos
+all-caps, drop de 6 colunas redundantes, sort por tribunal+data,
+schema canônico de 20 colunas em ordem fixa.
+
+Caller (UI page) continua passando rows brutos do client (formato F1
+com ``advogado_consultado`` singular por linha) — toda transformação
+é interna ao writer.
 
 Naming: ``Publicacoes_DJEN_{dd.mm.aa_inicio}_a_{dd.mm.aa_fim}_v{N}.xlsx``.
 Versão auto-incrementa pra nunca sobrescrever — útil quando o operador
@@ -96,7 +101,16 @@ def write_publicacoes_xlsx(
     fallback de QFileDialog quando ``output_dir`` é inacessível,
     deve ter resolvido isso ANTES de chamar — esta função só faz
     mkdir simples, sem prompt).
+
+    Fase 2: aplica ``dje_transform.transform_rows`` antes de escrever
+    — dedup por id, observacoes A+B, strip HTML, normalização de
+    encoding, drop de colunas redundantes, sort, schema canônico de
+    20 colunas. Caller continua passando rows brutos do client.
     """
+    # Round 7 Fase 2: pipeline de transform aplicado antes da escrita.
+    from notion_rpadv.services.dje_transform import transform_rows
+    processed_rows, columns = transform_rows(rows)
+
     output_dir.mkdir(parents=True, exist_ok=True)
     version = next_version(output_dir, data_inicio, data_fim)
     path = output_dir / format_filename(data_inicio, data_fim, version)
@@ -105,16 +119,15 @@ def write_publicacoes_xlsx(
     ws = wb.active
     ws.title = SHEET_NAME
 
-    columns = _resolve_columns(rows)
-
-    # Header em negrito
+    # Header em negrito (schema canônico do F2: 20 colunas em ordem fixa)
     bold = Font(bold=True)
     for col_idx, name in enumerate(columns, start=1):
         cell = ws.cell(row=1, column=col_idx, value=name)
         cell.font = bold
 
-    # Data rows
-    for row_idx, row in enumerate(rows, start=2):
+    # Data rows — só campos do schema canônico (chaves extras nas rows
+    # processadas são ignoradas; defesa contra payload variante).
+    for row_idx, row in enumerate(processed_rows, start=2):
         for col_idx, key in enumerate(columns, start=1):
             value = _serialize_cell(row.get(key))
             if value is not None:
@@ -122,7 +135,9 @@ def write_publicacoes_xlsx(
 
     wb.save(path)
     logger.info(
-        "DJE: xlsx salvo em %s (%d linhas, %d colunas)",
-        path, len(rows), len(columns),
+        "DJE: xlsx salvo em %s (%d linhas, %d colunas) — "
+        "raw=%d → deduped=%d",
+        path, len(processed_rows), len(columns),
+        len(rows), len(processed_rows),
     )
     return path
