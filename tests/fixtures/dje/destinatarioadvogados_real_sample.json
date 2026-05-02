@@ -1,0 +1,392 @@
+{
+  "ricardo_e_leonardo": [
+    {
+      "id": 1089999183,
+      "comunicacao_id": 597288005,
+      "advogado": {
+        "id": 3985864,
+        "nome": "MARIANA KNOFEL JAGUARIBE",
+        "numero_oab": "25200A",
+        "uf_oab": "DF"
+      }
+    },
+    {
+      "id": 1089999176,
+      "comunicacao_id": 597288005,
+      "advogado": {
+        "id": 1262995,
+        "nome": "GABRIEL ANDRADE RIBEIRO",
+        "numero_oab": "72795",
+        "uf_oab": "DF"
+      }
+    },
+    {
+      "id": 1089999171,
+      "comunicacao_id": 597288005,
+      "advogado": {
+        "id": 1822395,
+        "nome": "MARCUS FLAVIO HORTA CALDEIRA",
+        "numero_oab": "13418",
+        "uf_oab": "DF"
+      }
+    },
+    {
+      "id": 1089999175,
+      "comunicacao_id": 597288005,
+      "advogado": {
+        "id": 1494463,
+        "nome": "LUIS WENDELL OLIVEIRA DA SILVA",
+        "numero_oab": "52805",
+        "uf_oab": "DF"
+      }
+    },
+    {
+      "id": 1089999178,
+      "comunicacao_id": 597288005,
+      "advogado": {
+        "id": 567841,
+        "nome": "SERGIO HENRIQUE DE OLIVEIRA GOMES",
+        "numero_oab": "17844",
+        "uf_oab": "DF"
+      }
+    },
+    {
+      "id": 1089999182,
+      "comunicacao_id": 597288005,
+      "advogado": {
+        "id": 911048,
+        "nome": "ANTONIO CARLOS DA ROSA PELLEGRIN",
+        "numero_oab": "15672",
+        "uf_oab": "SC"
+      }
+    },
+    {
+      "id": 1089999170,
+      "comunicacao_id": 597288005,
+      "advogado": {
+        "id": 3634232,
+        "nome": "LEONARDO GUEDES DA FONSECA PASSOS",
+        "numero_oab": "36129",
+        "uf_oab": "DF"
+      }
+    },
+    {
+      "id": 1089999174,
+      "comunicacao_id": 597288005,
+      "advogado": {
+        "id": 1535685,
+        "nome": "BRUNA SHEYLLA DE OLIVINDO",
+        "numero_oab": "32682",
+        "uf_oab": "DF"
+      }
+    },
+    {
+      "id": 1089999173,
+      "comunicacao_id": 597288005,
+      "advogado": {
+        "id": 1494462,
+        "nome": "MARCOS VINICIUS BARROS OTTONI",
+        "numero_oab": "16785",
+        "uf_oab": "DF"
+      }
+    },
+    {
+      "id": 1089999168,
+      "comunicacao_id": 597288005,
+      "advogado": {
+        "id": 1494138,
+        "nome": "RICARDO LUIZ RODRIGUES DA FONSECA PASSOS",
+        "numero_oab": "15523",
+        "uf_oab": "DF"
+      }
+    },
+    {
+      "id": 1089999172,
+      "comunicacao_id": 597288005,
+      "advogado": {
+        "id": 1515708,
+        "nome": "RENATO LOBO GUIMARAES",
+        "numero_oab": "14517",
+        "uf_oab": "DF"
+      }
+    },
+    {
+      "id": 1089999177,
+      "comunicacao_id": 597288005,
+      "advogado": {
+        "id": 1290958,
+        "nome": "KIN MODESTO SUGAI",
+        "numero_oab": "76628",
+        "uf_oab": "DF"
+      }
+    },
+    {
+      "id": 1089999179,
+      "comunicacao_id": 597288005,
+      "advogado": {
+        "id": 3734595,
+        "nome": "MÁRCIO CASTRO KAIK SIQUEIRA",
+        "numero_oab": "200874",
+        "uf_oab": "SP"
+      }
+    }
+  ],
+  "so_ricardo": [
+    {
+      "id": 982410380,
+      "comunicacao_id": 546823392,
+      "advogado": {
+        "id": 907464,
+        "nome": "MIGUEL FRANCISCO SILVA",
+        "numero_oab": "38543",
+        "uf_oab": "DF"
+      }
+    },
+    {
+      "id": 982410379,
+      "comunicacao_id": 546823392,
+      "advogado": {
+        "id": 1535685,
+        "nome": "BRUNA SHEYLLA DE OLIVINDO",
+        "numero_oab": "32682",
+        "uf_oab": "DF"
+      }
+    },
+    {
+      "id": 982410381,
+      "comunicacao_id": 546823392,
+      "advogado": {
+        "id": 1494138,
+        "nome": "RICARDO LUIZ RODRIGUES DA FONSECA PASSOS",
+        "numero_oab": "15523",
+        "uf_oab": "DF"
+      }
+    }
+  ],
+  "so_leonardo": [
+    {
+      "id": 933281831,
+      "comunicacao_id": 524081021,
+      "advogado": {
+        "id": 3634232,
+        "nome": "LEONARDO GUEDES DA FONSECA PASSOS",
+        "numero_oab": "36129",
+        "uf_oab": "DF"
+      }
+    },
+    {
+      "id": 933281829,
+      "comunicacao_id": 524081021,
+      "advogado": {
+        "id": 1494462,
+        "nome": "MARCOS VINICIUS BARROS OTTONI",
+        "numero_oab": "16785",
+        "uf_oab": "DF"
+      }
+    },
+    {
+      "id": 933281828,
+      "comunicacao_id": 524081021,
+      "advogado": {
+        "id": 1580307,
+        "nome": "MARIANA OLIVEIRA KNOFEL",
+        "numero_oab": "25200",
+        "uf_oab": "DF"
+      }
+    },
+    {
+      "id": 933281834,
+      "comunicacao_id": 524081021,
+      "advogado": {
+        "id": 1494539,
+        "nome": "SAMANTHA LAIS SOARES MICKIEVICZ",
+        "numero_oab": "38809",
+        "uf_oab": "DF"
+      }
+    },
+    {
+      "id": 933281832,
+      "comunicacao_id": 524081021,
+      "advogado": {
+        "id": 2264339,
+        "nome": "CECILIA MARIA LAPETINA CHIARATTO",
+        "numero_oab": "20120",
+        "uf_oab": "DF"
+      }
+    },
+    {
+      "id": 933281830,
+      "comunicacao_id": 524081021,
+      "advogado": {
+        "id": 1044500,
+        "nome": "GIOVANNA EMILIA DE PAIVA CORA",
+        "numero_oab": "72888",
+        "uf_oab": "DF"
+      }
+    },
+    {
+      "id": 933281833,
+      "comunicacao_id": 524081021,
+      "advogado": {
+        "id": 1494135,
+        "nome": "VITOR GUEDES DA FONSECA PASSOS",
+        "numero_oab": "48468",
+        "uf_oab": "DF"
+      }
+    }
+  ],
+  "nem_ricardo_nem_leonardo": [
+    {
+      "id": 940021780,
+      "comunicacao_id": 527169963,
+      "advogado": {
+        "id": 3771251,
+        "nome": "CECILIA MARIA LAPETINA CHIARATTO AGUILERA",
+        "numero_oab": "20120",
+        "uf_oab": "DF"
+      }
+    },
+    {
+      "id": 940021779,
+      "comunicacao_id": 527169963,
+      "advogado": {
+        "id": 1494135,
+        "nome": "VITOR GUEDES DA FONSECA PASSOS",
+        "numero_oab": "48468",
+        "uf_oab": "DF"
+      }
+    }
+  ],
+  "com_mariana_sufixo_25200A": [
+    {
+      "id": 1089999183,
+      "comunicacao_id": 597288005,
+      "advogado": {
+        "id": 3985864,
+        "nome": "MARIANA KNOFEL JAGUARIBE",
+        "numero_oab": "25200A",
+        "uf_oab": "DF"
+      }
+    },
+    {
+      "id": 1089999176,
+      "comunicacao_id": 597288005,
+      "advogado": {
+        "id": 1262995,
+        "nome": "GABRIEL ANDRADE RIBEIRO",
+        "numero_oab": "72795",
+        "uf_oab": "DF"
+      }
+    },
+    {
+      "id": 1089999171,
+      "comunicacao_id": 597288005,
+      "advogado": {
+        "id": 1822395,
+        "nome": "MARCUS FLAVIO HORTA CALDEIRA",
+        "numero_oab": "13418",
+        "uf_oab": "DF"
+      }
+    },
+    {
+      "id": 1089999175,
+      "comunicacao_id": 597288005,
+      "advogado": {
+        "id": 1494463,
+        "nome": "LUIS WENDELL OLIVEIRA DA SILVA",
+        "numero_oab": "52805",
+        "uf_oab": "DF"
+      }
+    },
+    {
+      "id": 1089999178,
+      "comunicacao_id": 597288005,
+      "advogado": {
+        "id": 567841,
+        "nome": "SERGIO HENRIQUE DE OLIVEIRA GOMES",
+        "numero_oab": "17844",
+        "uf_oab": "DF"
+      }
+    },
+    {
+      "id": 1089999182,
+      "comunicacao_id": 597288005,
+      "advogado": {
+        "id": 911048,
+        "nome": "ANTONIO CARLOS DA ROSA PELLEGRIN",
+        "numero_oab": "15672",
+        "uf_oab": "SC"
+      }
+    },
+    {
+      "id": 1089999170,
+      "comunicacao_id": 597288005,
+      "advogado": {
+        "id": 3634232,
+        "nome": "LEONARDO GUEDES DA FONSECA PASSOS",
+        "numero_oab": "36129",
+        "uf_oab": "DF"
+      }
+    },
+    {
+      "id": 1089999174,
+      "comunicacao_id": 597288005,
+      "advogado": {
+        "id": 1535685,
+        "nome": "BRUNA SHEYLLA DE OLIVINDO",
+        "numero_oab": "32682",
+        "uf_oab": "DF"
+      }
+    },
+    {
+      "id": 1089999173,
+      "comunicacao_id": 597288005,
+      "advogado": {
+        "id": 1494462,
+        "nome": "MARCOS VINICIUS BARROS OTTONI",
+        "numero_oab": "16785",
+        "uf_oab": "DF"
+      }
+    },
+    {
+      "id": 1089999168,
+      "comunicacao_id": 597288005,
+      "advogado": {
+        "id": 1494138,
+        "nome": "RICARDO LUIZ RODRIGUES DA FONSECA PASSOS",
+        "numero_oab": "15523",
+        "uf_oab": "DF"
+      }
+    },
+    {
+      "id": 1089999172,
+      "comunicacao_id": 597288005,
+      "advogado": {
+        "id": 1515708,
+        "nome": "RENATO LOBO GUIMARAES",
+        "numero_oab": "14517",
+        "uf_oab": "DF"
+      }
+    },
+    {
+      "id": 1089999177,
+      "comunicacao_id": 597288005,
+      "advogado": {
+        "id": 1290958,
+        "nome": "KIN MODESTO SUGAI",
+        "numero_oab": "76628",
+        "uf_oab": "DF"
+      }
+    },
+    {
+      "id": 1089999179,
+      "comunicacao_id": 597288005,
+      "advogado": {
+        "id": 3734595,
+        "nome": "MÁRCIO CASTRO KAIK SIQUEIRA",
+        "numero_oab": "200874",
+        "uf_oab": "SP"
+      }
+    }
+  ]
+}

@@ -270,24 +270,49 @@ def _socios_presentes(
     destinatarioadvogados: Any,
 ) -> tuple[bool, bool]:
     """Inspeciona ``destinatarioadvogados`` e retorna ``(tem_ricardo,
-    tem_leonardo)``. Critério literal: ``oab == numero AND uf == DF``.
+    tem_leonardo)``. Critério: ``oab == numero AND uf == DF``.
 
-    Aceita lista de dicts (formato real do DJEN) ou lista vazia/None
-    (defesa contra payload variante)."""
+    Estrutura real do DJEN tem ``numero_oab``/``uf_oab`` ANINHADOS no
+    sub-dict ``advogado`` (descoberto no smoke da Fase 2.2 contra dado
+    real)::
+
+        {
+          "id": ..., "comunicacao_id": ..., "advogado_id": ...,
+          "advogado": {
+              "id": ..., "nome": "...",
+              "numero_oab": "36129", "uf_oab": "DF",
+          }
+        }
+
+    Fase 2.1 lia do nível raiz da entry — bug que devolvia (False, False)
+    em 100% das publicações reais. Fase 2.2 desce em ``entry["advogado"]``
+    com fallback no nível raiz pra preservar compat com fixtures legacy
+    e qualquer payload variante futuro.
+
+    Tolerância a sufixo de letra na OAB (``"25200A"`` da Mariana Knofel
+    Jaguaribe é exemplo real): comparamos só os dígitos, então se um
+    sócio futuro vier com sufixo (``"15523A"``), ainda matcheia.
+    """
     has_r = False
     has_l = False
     if not isinstance(destinatarioadvogados, list):
         return has_r, has_l
-    for adv in destinatarioadvogados:
-        if not isinstance(adv, dict):
+    for entry in destinatarioadvogados:
+        if not isinstance(entry, dict):
             continue
-        oab = str(adv.get("numero_oab") or "").strip()
+        # Formato real: campos dentro de ``advogado``. Fallback no
+        # nível raiz pra fixtures legacy e payload variante.
+        adv = entry.get("advogado") if isinstance(
+            entry.get("advogado"), dict,
+        ) else entry
         uf = str(adv.get("uf_oab") or "").strip().upper()
         if uf != SOCIOS_UF:
             continue
-        if oab == RICARDO_OAB:
+        oab_raw = str(adv.get("numero_oab") or "").strip()
+        oab_digits = "".join(c for c in oab_raw if c.isdigit())
+        if oab_digits == RICARDO_OAB:
             has_r = True
-        elif oab == LEONARDO_OAB:
+        elif oab_digits == LEONARDO_OAB:
             has_l = True
     return has_r, has_l
 
