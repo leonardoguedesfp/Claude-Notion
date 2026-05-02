@@ -54,9 +54,10 @@ _MAIN_NAV: list[tuple[str, str, str | None]] = [
 ]
 
 _DADOS_NAV: list[tuple[str, str, str | None]] = [
-    ("importar", "Importar planilha", None),
-    ("exportar", "Exportar dados",    None),
-    ("logs",     "Logs",              None),
+    ("importar",   "Importar planilha", None),
+    ("exportar",   "Exportar dados",    None),
+    ("leitor_dje", "Leitor DJE",        None),
+    ("logs",       "Logs",              None),
 ]
 
 _BOTTOM_NAV: list[tuple[str, str, str | None]] = [
@@ -65,15 +66,16 @@ _BOTTOM_NAV: list[tuple[str, str, str | None]] = [
 
 # Unicode icon per page_id
 _ICONS: dict[str, str] = {
-    "dashboard": "⊞",
-    "processos": "⚖",
-    "clientes":  "👥",
-    "tarefas":   "✓",
-    "catalogo":  "📋",
-    "importar":  "↑",
-    "exportar":  "↓",
-    "logs":      "📝",
-    "config":    "⚙",
+    "dashboard":  "⊞",
+    "processos":  "⚖",
+    "clientes":   "👥",
+    "tarefas":    "✓",
+    "catalogo":   "📋",
+    "importar":   "↑",
+    "exportar":   "↓",
+    "leitor_dje": "🔍",
+    "logs":       "📝",
+    "config":     "⚙",
 }
 
 
