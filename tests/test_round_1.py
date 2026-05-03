@@ -31,6 +31,10 @@ from notion_rpadv.services.dje_notion_mappings import (
     mapear_tipo_documento,
     tinha_destinatarios_advogados,
 )
+from notion_rpadv.services.dje_text_pipeline import (
+    preprocessar_texto_djen,
+    truncar_texto_inline,
+)
 
 
 # ===========================================================================
@@ -229,3 +233,121 @@ def test_R1_3_formato_dos_rotulos_e_consistente() -> None:
         assert pattern.match(rotulo), (
             f"Rótulo {rotulo!r} (chave {chave!r}) fora do padrão canônico"
         )
+
+
+# ===========================================================================
+# 1.7 — Pré-processador HTML
+# ===========================================================================
+
+
+def test_R1_7_html_unescape_basico() -> None:
+    """``html.unescape`` cobre as entities mais comuns do DJEN."""
+    assert preprocessar_texto_djen("&amp;") == "&"
+    # &nbsp; vira espaço (após normalização)
+    assert preprocessar_texto_djen("a&nbsp;b") == "a b"
+
+
+def test_R1_7_br_vira_quebra_de_linha() -> None:
+    assert preprocessar_texto_djen("linha1<br>linha2") == "linha1\nlinha2"
+    assert preprocessar_texto_djen("linha1<br />linha2") == "linha1\nlinha2"
+    assert preprocessar_texto_djen("linha1<BR/>linha2") == "linha1\nlinha2"
+
+
+def test_R1_7_link_simplificado_quando_texto_eh_url() -> None:
+    """``<a href="X">X</a>`` → ``"X"`` (sem duplicar)."""
+    s = preprocessar_texto_djen('<a href="https://x.com">https://x.com</a>')
+    assert s == "https://x.com"
+
+
+def test_R1_7_link_com_texto_diferente() -> None:
+    """``<a href="X">Y</a>`` → ``"Y (X)"``."""
+    s = preprocessar_texto_djen('<a href="https://x.com">clique aqui</a>')
+    assert s == "clique aqui (https://x.com)"
+
+
+def test_R1_7_escape_duplo_desfeito() -> None:
+    """DJEN às vezes serializa ``\\<br\\>`` por dupla camada de escape;
+    preprocessador desfaz pra que o BR seja interpretado."""
+    assert preprocessar_texto_djen("a\\<br\\>b") == "a\nb"
+
+
+def test_R1_7_tags_residuais_removidas() -> None:
+    s = preprocessar_texto_djen('<p><strong>Atenção</strong>: aviso</p>')
+    assert s == "Atenção: aviso"
+
+
+def test_R1_7_normaliza_espacos_e_quebras() -> None:
+    """Múltiplos espaços colapsam pra 1; 3+ quebras viram 2."""
+    s = preprocessar_texto_djen("a    b\n\n\n\nc")
+    assert s == "a b\n\nc"
+
+
+def test_R1_7_none_e_vazio_devolvem_string_vazia() -> None:
+    assert preprocessar_texto_djen(None) == ""
+    assert preprocessar_texto_djen("") == ""
+    assert preprocessar_texto_djen("   ") == ""
+
+
+def test_R1_7_publicacao_dje_real_pattern() -> None:
+    """Padrão real visto em pautas TJDFT em produção (HTML cru com
+    span+br+nbsp)."""
+    bruto = (
+        '<p><span style="font-size: medium;">VITOR GUEDES DA FONSECA PASSOS '
+        '- DF48468-A<br />LEONARDO GUEDES DA FONSECA PASSOS - DF36129</span></p>'
+    )
+    s = preprocessar_texto_djen(bruto)
+    assert "VITOR GUEDES" in s
+    assert "DF48468-A" in s
+    assert "DF36129" in s
+    # BR virou \n entre os dois nomes
+    assert "VITOR GUEDES DA FONSECA PASSOS - DF48468-A\nLEONARDO" in s
+
+
+def test_R1_7_idempotente_em_texto_limpo() -> None:
+    """Texto sem HTML passa intacto (modulo stripping/normalization)."""
+    limpo = "Texto puro sem HTML."
+    assert preprocessar_texto_djen(limpo) == limpo
+
+
+# ===========================================================================
+# 1.8 — Truncamento limpo do campo Texto inline
+# ===========================================================================
+
+
+def test_R1_8_curto_passa_intacto() -> None:
+    assert truncar_texto_inline("texto curto") == "texto curto"
+    assert truncar_texto_inline("a" * 2000, limite=2000) == "a" * 2000
+
+
+def test_R1_8_corta_em_palavra() -> None:
+    """Não termina no meio da palavra — busca último espaço dentro de janela."""
+    texto = "Embargos de declaração conhecidos e parcialmente acolhidos para " * 100
+    truncado = truncar_texto_inline(texto, limite=100)
+    assert len(truncado) <= 100
+    # Termina com o marcador
+    assert truncado.endswith(" […]")
+    # Não corta no meio de uma palavra
+    assert not truncado[: -len(" […]")].rstrip().endswith(("parcialme", "decla", "Embar"))
+
+
+def test_R1_8_marcador_conta_no_limite() -> None:
+    """Output total ≤ limite (marcador entra na conta)."""
+    out = truncar_texto_inline("a " * 5000, limite=50)
+    assert len(out) <= 50
+
+
+def test_R1_8_none_e_vazio_devolvem_string_vazia() -> None:
+    assert truncar_texto_inline(None) == ""
+    assert truncar_texto_inline("") == ""
+
+
+def test_R1_8_marcador_customizado() -> None:
+    out = truncar_texto_inline("palavras " * 200, limite=50, marcador="...")
+    assert out.endswith("...")
+    assert len(out) <= 50
+
+
+def test_R1_8_sem_espacos_corta_cru() -> None:
+    """Texto sem espaços (cenário patológico) corta no meio mesmo."""
+    out = truncar_texto_inline("a" * 5000, limite=20)
+    assert len(out) <= 20
