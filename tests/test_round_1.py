@@ -671,3 +671,510 @@ def test_R1_5_pauta_tst_grande_cai_no_caso_b() -> None:
     )
     assert len(corpo) <= LIMITE_TRUNCAMENTO_BYTES
     assert len(callouts) == 1
+
+
+# ===========================================================================
+# 1.6 — Detector de duplicatas + propriedade "Duplicatas suprimidas"
+# ===========================================================================
+
+
+from unittest.mock import MagicMock
+
+from notion_rpadv.services import dje_db
+from notion_rpadv.services.dje_dedup import (
+    FlushOutcome,
+    ResultadoDedup,
+    TipoDestino,
+    _merge_advogados,
+    _merge_partes,
+    calcular_chave_canonica,
+    calcular_chave_para_publicacao,
+    determinar_destino,
+    flush_atualizacoes_canonicas,
+    marcar_como_canonica,
+    marcar_como_duplicata,
+)
+
+
+@pytest.fixture
+def dedup_dje_conn(tmp_path: Path):
+    """Conexão SQLite isolada por teste, schema migrado."""
+    db = tmp_path / "leitor_dje.db"
+    conn = dje_db.get_connection(db)
+    yield conn
+    conn.close()
+
+
+def _seed_canonical_publicacao(
+    conn,
+    *,
+    djen_id: int,
+    cnj: str = "0000338-82.2024.5.10.0016",
+    data: str = "2026-02-10",
+    tribunal: str = "TRT10",
+    tipo: str = "Acórdão",
+    texto: str = "Texto canônico " * 50,
+    advogados: list[dict] | None = None,
+    notion_page_id: str | None = None,
+    chave: str | None = None,
+) -> None:
+    """Insere uma publicação direto via API do dje_db, e opcionalmente
+    marca como já-enviada-ao-Notion (canônica)."""
+    payload = {
+        "id": djen_id,
+        "hash": f"hash-{djen_id}",
+        "siglaTribunal": tribunal,
+        "data_disponibilizacao": data,
+        "numeroprocessocommascara": cnj,
+        "tipoDocumento": tipo,
+        "tipoComunicacao": "Intimação",
+        "texto": texto,
+        "destinatarios": [{"nome": "BANCO X", "polo": "PASSIVO"}],
+        "destinatarioadvogados": advogados or [
+            {"advogado": {"numero_oab": "15523", "uf_oab": "DF"}},
+        ],
+    }
+    dje_db.insert_publicacao(
+        conn,
+        djen_id=djen_id,
+        hash_=f"hash-{djen_id}",
+        oabs_escritorio="Ricardo (15523/DF)",
+        oabs_externas="",
+        numero_processo=cnj,
+        data_disponibilizacao=data,
+        sigla_tribunal=tribunal,
+        payload=payload,
+        mode=dje_db.CAPTURE_MODE_PADRAO,
+    )
+    if notion_page_id:
+        dje_db.mark_publicacao_sent_to_notion(conn, djen_id, notion_page_id)
+    if chave:
+        dje_db.mark_publicacao_dup_chave(conn, djen_id, chave)
+
+
+def test_R1_6_chave_canonica_estavel() -> None:
+    """Mesmos inputs → mesma chave SHA-256 (determinismo)."""
+    args = dict(
+        numero_processo="0001234-56.2024.5.10.0001",
+        data_disponibilizacao="2026-02-10",
+        tribunal="TRT10",
+        tipo_documento_canonico="Acórdão",
+        texto_pre_processado="texto " * 100,
+    )
+    assert calcular_chave_canonica(**args) == calcular_chave_canonica(**args)
+
+
+def test_R1_6_chave_canonica_cnj_nulo_devolve_none() -> None:
+    """D-2: CNJ ausente → chave None → não deduplica."""
+    assert calcular_chave_canonica(
+        numero_processo=None,
+        data_disponibilizacao="2026-02-10",
+        tribunal="TRT10",
+        tipo_documento_canonico="Acórdão",
+        texto_pre_processado="x",
+    ) is None
+    assert calcular_chave_canonica(
+        numero_processo="",
+        data_disponibilizacao="2026-02-10",
+        tribunal="TRT10",
+        tipo_documento_canonico="Acórdão",
+        texto_pre_processado="x",
+    ) is None
+
+
+def test_R1_6_chave_diferente_quando_qualquer_componente_muda() -> None:
+    base = dict(
+        numero_processo="000-0",
+        data_disponibilizacao="2026-02-10",
+        tribunal="TRT10",
+        tipo_documento_canonico="Acórdão",
+        texto_pre_processado="texto",
+    )
+    chave_base = calcular_chave_canonica(**base)
+    # CNJ diferente
+    assert calcular_chave_canonica(**{**base, "numero_processo": "001-0"}) != chave_base
+    # Data diferente
+    assert calcular_chave_canonica(**{**base, "data_disponibilizacao": "2026-02-11"}) != chave_base
+    # Tribunal diferente
+    assert calcular_chave_canonica(**{**base, "tribunal": "TJDFT"}) != chave_base
+    # Tipo diferente
+    assert calcular_chave_canonica(**{**base, "tipo_documento_canonico": "Despacho"}) != chave_base
+    # Texto diferente
+    assert calcular_chave_canonica(**{**base, "texto_pre_processado": "outro"}) != chave_base
+
+
+def test_R1_6_chave_para_publicacao_aplica_pipeline_internamente() -> None:
+    """Helper aplica preprocess HTML + mapping de tipo internamente."""
+    from notion_rpadv.services.dje_text_pipeline import preprocessar_texto_djen
+
+    pub = {
+        "id": 1,
+        "numeroprocessocommascara": "0001234-56.2024.5.10.0001",
+        "data_disponibilizacao": "2026-02-10",
+        "siglaTribunal": "TRT10",
+        "tipoDocumento": "ACORDAO",  # variante mapeada pra "Acórdão"
+        "texto": "<p>Texto com <br>HTML</p>",
+    }
+    chave1 = calcular_chave_para_publicacao(pub)
+    # Chave equivalente computada manualmente — usa o resultado real do
+    # preprocessador (não a forma idealizada).
+    texto_pre_real = preprocessar_texto_djen(pub["texto"])
+    chave2 = calcular_chave_canonica(
+        numero_processo="0001234-56.2024.5.10.0001",
+        data_disponibilizacao="2026-02-10",
+        tribunal="TRT10",
+        tipo_documento_canonico="Acórdão",
+        texto_pre_processado=texto_pre_real,
+    )
+    assert chave1 == chave2
+
+
+def test_R1_6_dedup_migration_idempotente(tmp_path: Path) -> None:
+    """Schema migration roda 2x sem erro (init_db é chamado de novo na
+    re-conexão)."""
+    db = tmp_path / "leitor_dje.db"
+    conn1 = dje_db.get_connection(db)
+    cols1 = {r["name"] for r in conn1.execute("PRAGMA table_info(publicacoes)")}
+    conn1.close()
+    conn2 = dje_db.get_connection(db)
+    cols2 = {r["name"] for r in conn2.execute("PRAGMA table_info(publicacoes)")}
+    conn2.close()
+    assert cols1 == cols2
+    assert "dup_chave" in cols1
+    assert "dup_canonical_djen_id" in cols1
+
+
+def test_R1_6_dup_pendentes_table_existe(dedup_dje_conn) -> None:
+    """Migration cria a tabela dup_pendentes."""
+    rows = list(dedup_dje_conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='dup_pendentes'"
+    ))
+    assert len(rows) == 1
+
+
+def test_R1_6_determinar_destino_sem_dedup_sem_cnj(dedup_dje_conn) -> None:
+    """D-2: pub sem CNJ → SEM_DEDUP."""
+    pub = {"id": 1, "siglaTribunal": "TRT10", "tipoDocumento": "Acórdão"}
+    res = determinar_destino(pub, dedup_dje_conn)
+    assert res.tipo == TipoDestino.SEM_DEDUP
+    assert res.chave is None
+
+
+def test_R1_6_determinar_destino_nova_canonica_quando_chave_inedita(
+    dedup_dje_conn,
+) -> None:
+    """1ª pub do grupo → NOVA_CANONICA, chave gerada."""
+    pub = {
+        "id": 1,
+        "numeroprocessocommascara": "0001234-56.2024.5.10.0001",
+        "data_disponibilizacao": "2026-02-10",
+        "siglaTribunal": "TRT10",
+        "tipoDocumento": "Acórdão",
+        "texto": "Texto da pub.",
+    }
+    res = determinar_destino(pub, dedup_dje_conn)
+    assert res.tipo == TipoDestino.NOVA_CANONICA
+    assert res.chave is not None
+    assert res.canonica is None
+
+
+def test_R1_6_determinar_destino_duplicata_quando_canonica_ja_no_banco(
+    dedup_dje_conn,
+) -> None:
+    """2ª pub do grupo c/ mesma chave + canônica já enviada → DUPLICATA_DE."""
+    # Calcula chave que vai ser usada
+    pub_canonica = {
+        "id": 100,
+        "numeroprocessocommascara": "0001234-56.2024.5.10.0001",
+        "data_disponibilizacao": "2026-02-10",
+        "siglaTribunal": "TRT10",
+        "tipoDocumento": "Acórdão",
+        "texto": "Texto da pub.",
+    }
+    chave = calcular_chave_para_publicacao(pub_canonica)
+    _seed_canonical_publicacao(
+        dedup_dje_conn, djen_id=100,
+        cnj="0001234-56.2024.5.10.0001", texto="Texto da pub.",
+        notion_page_id="page-uuid-canonica", chave=chave,
+    )
+    # Pub 101: mesmo CNJ + data + tribunal + tipo + prefix de texto
+    pub_dup = {**pub_canonica, "id": 101}
+    res = determinar_destino(pub_dup, dedup_dje_conn)
+    assert res.tipo == TipoDestino.DUPLICATA_DE
+    assert res.chave == chave
+    assert res.canonica is not None
+    assert res.canonica["djen_id"] == 100
+    assert res.canonica["notion_page_id"] == "page-uuid-canonica"
+
+
+def test_R1_6_canonica_skipped_nao_e_canonica(dedup_dje_conn) -> None:
+    """Pub com notion_page_id == SKIPPED não conta como canônica
+    (não tem página real no Notion)."""
+    pub = {
+        "id": 100,
+        "numeroprocessocommascara": "0001234-56.2024.5.10.0001",
+        "data_disponibilizacao": "2026-02-10",
+        "siglaTribunal": "TRT10",
+        "tipoDocumento": "Acórdão",
+        "texto": "x",
+    }
+    chave = calcular_chave_para_publicacao(pub)
+    _seed_canonical_publicacao(
+        dedup_dje_conn, djen_id=100,
+        cnj="0001234-56.2024.5.10.0001", texto="x",
+        notion_page_id=dje_db.NOTION_SKIPPED_SENTINEL,
+        chave=chave,
+    )
+    pub_dup = {**pub, "id": 101}
+    res = determinar_destino(pub_dup, dedup_dje_conn)
+    # SKIPPED não conta — vai como NOVA_CANONICA
+    assert res.tipo == TipoDestino.NOVA_CANONICA
+
+
+def test_R1_6_marcar_como_canonica_persiste_chave(dedup_dje_conn) -> None:
+    _seed_canonical_publicacao(
+        dedup_dje_conn, djen_id=100,
+        notion_page_id="page-uuid", chave=None,
+    )
+    marcar_como_canonica(dedup_dje_conn, djen_id=100, chave="abc")
+    row = dedup_dje_conn.execute(
+        "SELECT dup_chave FROM publicacoes WHERE djen_id=100"
+    ).fetchone()
+    assert row["dup_chave"] == "abc"
+
+
+def test_R1_6_marcar_como_duplicata_atualiza_pub_e_insere_pendente(
+    dedup_dje_conn,
+) -> None:
+    """Marcar como duplicata: atualiza colunas + insere em dup_pendentes."""
+    _seed_canonical_publicacao(
+        dedup_dje_conn, djen_id=100,
+        notion_page_id="page-uuid-canon", chave="chave-X",
+    )
+    _seed_canonical_publicacao(
+        dedup_dje_conn, djen_id=101, notion_page_id=None,
+    )
+
+    pub_dup = {
+        "id": 101,
+        "numeroprocessocommascara": "0001234-56.2024.5.10.0001",
+        "destinatarios": [{"nome": "ACME LTDA", "polo": "ATIVO"}],
+        "destinatarioadvogados": [
+            {"advogado": {"numero_oab": "36129", "uf_oab": "DF"}},
+        ],
+    }
+    canonica_row = dict(dedup_dje_conn.execute(
+        "SELECT * FROM publicacoes WHERE djen_id=100"
+    ).fetchone())
+
+    marcar_como_duplicata(
+        dedup_dje_conn,
+        publicacao_duplicata=pub_dup,
+        canonica_row=canonica_row,
+        chave="chave-X",
+    )
+
+    # Pub 101 atualizada
+    row = dedup_dje_conn.execute(
+        "SELECT dup_chave, dup_canonical_djen_id, notion_page_id "
+        "FROM publicacoes WHERE djen_id=101"
+    ).fetchone()
+    assert row["dup_chave"] == "chave-X"
+    assert row["dup_canonical_djen_id"] == 100
+    assert row["notion_page_id"] == "page-uuid-canon"
+
+    # Pendente inserido
+    pendentes = dje_db.fetch_dup_pendentes_for_canonical(dedup_dje_conn, 100)
+    assert len(pendentes) == 1
+    p = pendentes[0]
+    assert p["duplicata_djen_id"] == 101
+    assert "Leonardo (36129/DF)" in p["duplicata_destinatario"]
+    assert "ACME LTDA" in p["duplicata_destinatario"]
+
+
+def test_R1_6_par_real_trt10_detectado(dedup_dje_conn) -> None:
+    """Par real TRT10 djen=527365047 e djen=527365146 (mesmo CNJ, mesma
+    data, mesmo tipo, mesmo prefixo texto) → 2ª é detectada como
+    duplicata da 1ª."""
+    cnj = "00003388220245100016"
+    data = "2026-02-10"
+    tribunal = "TRT10"
+    tipo = "Acórdão"
+    texto = "PODER JUDICIÁRIO JUSTIÇA DO TRABALHO TRIBUNAL REGIONAL " * 30
+
+    # Seed canônica (527365047) já enviada
+    pub_canon = {
+        "id": 527365047,
+        "numeroprocessocommascara": cnj,
+        "data_disponibilizacao": data,
+        "siglaTribunal": tribunal,
+        "tipoDocumento": tipo,
+        "texto": texto,
+    }
+    chave = calcular_chave_para_publicacao(pub_canon)
+    _seed_canonical_publicacao(
+        dedup_dje_conn, djen_id=527365047,
+        cnj=cnj, data=data, tribunal=tribunal, tipo=tipo, texto=texto,
+        notion_page_id="page-canonica-uuid", chave=chave,
+    )
+
+    # Detecta 527365146 como duplicata
+    pub_dup = {**pub_canon, "id": 527365146}
+    res = determinar_destino(pub_dup, dedup_dje_conn)
+    assert res.tipo == TipoDestino.DUPLICATA_DE
+    assert res.canonica["djen_id"] == 527365047
+
+
+def test_R1_6_merge_partes_dedup_por_nome() -> None:
+    j1 = json.dumps([{"nome": "ACME", "polo": "ATIVO"}])
+    j2 = json.dumps([{"nome": "acme", "polo": "ATIVO"}, {"nome": "OUTRO"}])
+    out = json.loads(_merge_partes(j1, [j2]))
+    nomes = [p["nome"] for p in out]
+    # Dedup case-insensitive: ACME aparece 1x; OUTRO entra
+    assert len(nomes) == 2
+    assert "ACME" in nomes
+    assert "OUTRO" in nomes
+
+
+def test_R1_6_merge_advogados_uniao_ordenada() -> None:
+    """D-5 A: união dos multi-select da canônica + duplicatas, ordem alfabética."""
+    canon_payload = json.dumps({
+        "destinatarioadvogados": [
+            {"advogado": {"numero_oab": "15523", "uf_oab": "DF"}},
+        ]
+    })
+    dup_jsons = [
+        json.dumps(["Leonardo (36129/DF)"]),
+        json.dumps(["Vitor (48468/DF)"]),
+    ]
+    out = _merge_advogados(canon_payload, dup_jsons)
+    assert out == [
+        "Leonardo (36129/DF)",
+        "Ricardo (15523/DF)",
+        "Vitor (48468/DF)",
+    ]
+
+
+def test_R1_6_flush_chama_update_page_e_limpa_pendentes(
+    dedup_dje_conn,
+) -> None:
+    """Flush bem-sucedido: PATCH /pages/{id} com Partes + Advogados +
+    Duplicatas suprimidas (se schema permite); pendentes apagados."""
+    _seed_canonical_publicacao(
+        dedup_dje_conn, djen_id=100,
+        notion_page_id="page-uuid-100", chave="k1",
+    )
+    _seed_canonical_publicacao(
+        dedup_dje_conn, djen_id=101,
+    )
+    canonica_row = dict(dedup_dje_conn.execute(
+        "SELECT * FROM publicacoes WHERE djen_id=100"
+    ).fetchone())
+    pub_dup = {
+        "id": 101,
+        "destinatarios": [{"nome": "ACME"}],
+        "destinatarioadvogados": [
+            {"advogado": {"numero_oab": "36129", "uf_oab": "DF"}}
+        ],
+    }
+    marcar_como_duplicata(
+        dedup_dje_conn,
+        publicacao_duplicata=pub_dup,
+        canonica_row=canonica_row,
+        chave="k1",
+    )
+    # 1 pendente esperada
+    assert dje_db.count_dup_pendentes(dedup_dje_conn) == 1
+
+    client = MagicMock()
+    client.update_page.return_value = {"id": "page-uuid-100"}
+
+    outcome = flush_atualizacoes_canonicas(
+        client=client, conn=dedup_dje_conn,
+        schema_tem_duplicatas_suprimidas=True,
+    )
+    assert outcome.canonicas_atualizadas == 1
+    assert outcome.canonicas_404 == 0
+
+    # Notion update_page chamado com page_id correto e schemas esperados
+    client.update_page.assert_called_once()
+    args, kwargs = client.update_page.call_args
+    assert args[0] == "page-uuid-100"
+    props = args[1]
+    assert "Partes" in props
+    assert "Advogados intimados" in props
+    # D-4: Status NÃO sobrescrito
+    assert "Status" not in props
+    assert "Duplicatas suprimidas" in props
+
+    # Pendentes apagados após sucesso
+    assert dje_db.count_dup_pendentes(dedup_dje_conn) == 0
+
+
+def test_R1_6_flush_404_descarta_pendentes_d8(dedup_dje_conn) -> None:
+    """D-8: canônica deletada manualmente do Notion → 404 → descarta
+    pendentes silenciosamente + warning, sem bloquear outras canônicas."""
+    _seed_canonical_publicacao(
+        dedup_dje_conn, djen_id=100,
+        notion_page_id="page-deletada", chave="k1",
+    )
+    _seed_canonical_publicacao(
+        dedup_dje_conn, djen_id=101,
+    )
+    canonica_row = dict(dedup_dje_conn.execute(
+        "SELECT * FROM publicacoes WHERE djen_id=100"
+    ).fetchone())
+    marcar_como_duplicata(
+        dedup_dje_conn,
+        publicacao_duplicata={"id": 101, "destinatarios": [], "destinatarioadvogados": []},
+        canonica_row=canonica_row, chave="k1",
+    )
+
+    from notion_bulk_edit.notion_api import NotionAPIError
+    client = MagicMock()
+    client.update_page.side_effect = NotionAPIError(404, "page not found")
+
+    outcome = flush_atualizacoes_canonicas(client=client, conn=dedup_dje_conn)
+    assert outcome.canonicas_404 == 1
+    assert outcome.canonicas_atualizadas == 0
+    # Pendentes limpos mesmo no 404
+    assert dje_db.count_dup_pendentes(dedup_dje_conn) == 0
+
+
+def test_R1_6_flush_sem_pendentes_nao_chama_api(dedup_dje_conn) -> None:
+    client = MagicMock()
+    outcome = flush_atualizacoes_canonicas(client=client, conn=dedup_dje_conn)
+    assert outcome.canonicas_atualizadas == 0
+    client.update_page.assert_not_called()
+
+
+def test_R1_6_flush_omite_duplicatas_suprimidas_se_schema_nao_tem(
+    dedup_dje_conn,
+) -> None:
+    """Se schema_tem_duplicatas_suprimidas=False, property NÃO entra no
+    payload (evita 400 da Notion API)."""
+    _seed_canonical_publicacao(
+        dedup_dje_conn, djen_id=100,
+        notion_page_id="page-uuid", chave="k1",
+    )
+    _seed_canonical_publicacao(dedup_dje_conn, djen_id=101)
+    canonica_row = dict(dedup_dje_conn.execute(
+        "SELECT * FROM publicacoes WHERE djen_id=100"
+    ).fetchone())
+    marcar_como_duplicata(
+        dedup_dje_conn,
+        publicacao_duplicata={"id": 101, "destinatarios": [], "destinatarioadvogados": []},
+        canonica_row=canonica_row, chave="k1",
+    )
+    client = MagicMock()
+    client.update_page.return_value = {"id": "page-uuid"}
+    flush_atualizacoes_canonicas(
+        client=client, conn=dedup_dje_conn,
+        schema_tem_duplicatas_suprimidas=False,
+    )
+    args, _ = client.update_page.call_args
+    props = args[1]
+    assert "Duplicatas suprimidas" not in props
+    # Mas Partes e Advogados sim
+    assert "Partes" in props
+    assert "Advogados intimados" in props
