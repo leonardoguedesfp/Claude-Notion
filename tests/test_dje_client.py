@@ -540,15 +540,18 @@ def test_format_advogado_label() -> None:
 
 
 def test_advogados_lista_completa() -> None:
-    """Sanity: lista oficial atual tem os 2 advogados ativos com OAB DF.
+    """Sanity: lista oficial atual tem os 6 advogados ativos com OAB DF.
 
     Histórico:
     - Fase 2.1: reduzida de 12 → 6.
     - Pós-smoke do refator watermark-por-advogado (02/05/2026): reduzida
       de 6 → 2 (Ricardo + Leonardo) por sobrecarga 429 da API DJEN.
+    - Pós-Fase 3 (2026-05-02): reativada pra 6 (Ricardo + Leonardo +
+      Vitor + Cecília + Samantha + Deborah). Modal one-shot da UI lida
+      com cursores falsos.
     """
     from notion_rpadv.services.dje_advogados import ADVOGADOS
-    assert len(ADVOGADOS) == 2
+    assert len(ADVOGADOS) == 6
     for a in ADVOGADOS:
         assert a["uf"] == "DF"
         assert a["oab"].isdigit()
@@ -942,3 +945,133 @@ def test_F22_13_cancelamento_entre_paginas_retorna_parcial() -> None:
     assert len(summary.by_advogado[0].items) == 200
     # erro = None (cancelamento ≠ erro).
     assert summary.by_advogado[0].erro is None
+
+
+# ---------------------------------------------------------------------------
+# Pós-Fase 3 (2026-05-02) — eixo CNJ
+# ---------------------------------------------------------------------------
+
+
+def test_build_query_params_processo_envia_numero_processo_com_mascara() -> None:
+    """Eixo CNJ: query string usa ``numeroProcesso=<cnj com máscara>``,
+    sem ``numeroOab``/``ufOab``."""
+    from notion_rpadv.services.dje_client import build_query_params_processo
+    params = build_query_params_processo(
+        cnj="0123456-78.2024.1.23.4567",
+        data_inicio=date(2026, 5, 1),
+        data_fim=date(2026, 5, 5),
+        pagina=1,
+    )
+    assert params["numeroProcesso"] == "0123456-78.2024.1.23.4567"
+    assert params["dataDisponibilizacaoInicio"] == "2026-05-01"
+    assert params["dataDisponibilizacaoFim"] == "2026-05-05"
+    assert "numeroOab" not in params
+    assert "ufOab" not in params
+
+
+def test_fetch_processo_anota_cnj_consultado_em_cada_item() -> None:
+    """Items retornados pela API têm ``cnj_consultado=<cnj>`` injetado
+    pra que a UI/exporter saiba qual processo originou cada publicação."""
+    session = _make_session([
+        _mock_response(json_payload={"items": [
+            {"id": 1, "hash": "h1", "siglaTribunal": "STJ"},
+            {"id": 2, "hash": "h2", "siglaTribunal": "STJ"},
+        ]}),
+    ])
+    client = _make_client(session)
+    result = client.fetch_processo(
+        cnj="0001234-56.2025.5.10.0001",
+        data_inicio=date(2026, 5, 1),
+        data_fim=date(2026, 5, 5),
+    )
+    assert result.cnj == "0001234-56.2025.5.10.0001"
+    assert result.erro is None
+    assert len(result.items) == 2
+    assert all(
+        it["cnj_consultado"] == "0001234-56.2025.5.10.0001"
+        for it in result.items
+    )
+
+
+def test_fetch_processo_falha_persistente_nao_levanta() -> None:
+    """3 tentativas com 429 → ``erro`` populado, items vazios, sem raise."""
+    session = _make_session([
+        _mock_response(status=429),
+        _mock_response(status=429),
+        _mock_response(status=429),
+    ])
+    client = _make_client(session)
+    result = client.fetch_processo(
+        cnj="0001234-56.2025.5.10.0001",
+        data_inicio=date(2026, 5, 1),
+        data_fim=date(2026, 5, 5),
+    )
+    assert "429" in (result.erro or "")
+    assert result.items == []
+
+
+def test_fetch_all_processos_acumula_e_emite_progress() -> None:
+    """``fetch_all_processos`` itera, acumula em ``ProcessoFetchSummary``,
+    chama ``on_progress`` por processo, NÃO interrompe em falha."""
+    from notion_rpadv.services.dje_client import ProcessoConsulta
+    session = _make_session([
+        _mock_response(json_payload={"items": [{"id": 1, "hash": "h1"}]}),
+        _mock_response(status=429),  # tentativa 1
+        _mock_response(status=429),  # tentativa 2
+        _mock_response(status=429),  # tentativa 3
+        _mock_response(json_payload={"items": [{"id": 2, "hash": "h2"}]}),
+    ])
+    client = _make_client(session)
+    consultas = [
+        ProcessoConsulta(
+            cnj="0000001-11.2024.1.00.0001",
+            data_inicio=date(2026, 5, 1), data_fim=date(2026, 5, 5),
+        ),
+        ProcessoConsulta(
+            cnj="0000002-22.2024.1.00.0002",
+            data_inicio=date(2026, 5, 1), data_fim=date(2026, 5, 5),
+        ),
+        ProcessoConsulta(
+            cnj="0000003-33.2024.1.00.0003",
+            data_inicio=date(2026, 5, 1), data_fim=date(2026, 5, 5),
+        ),
+    ]
+    progress_calls: list = []
+    summary = client.fetch_all_processos(
+        consultas,
+        on_progress=lambda i, t, r: progress_calls.append((i, t)),
+    )
+    # 3 progressos chamados.
+    assert progress_calls == [(1, 3), (2, 3), (3, 3)]
+    # 3 results no summary; 1 com erro (o do meio).
+    assert len(summary.by_processo) == 3
+    assert summary.by_processo[0].erro is None
+    assert "429" in (summary.by_processo[1].erro or "")
+    assert summary.by_processo[2].erro is None
+    # 2 items no rows agregado (do 1º e 3º processos).
+    assert summary.total_items == 2
+
+
+def test_fetch_all_processos_cancelamento_para_entre_processos() -> None:
+    """``is_cancelled()`` retornando True faz parar entre processos —
+    ``cancelled=True`` no summary, items já coletados preservados."""
+    from notion_rpadv.services.dje_client import ProcessoConsulta
+    session = _make_session([
+        _mock_response(json_payload={"items": [{"id": 1, "hash": "h1"}]}),
+        _mock_response(json_payload={"items": [{"id": 2, "hash": "h2"}]}),
+    ])
+    client = _make_client(session)
+    consultas = [
+        ProcessoConsulta(
+            cnj=f"000000{i}-00.2024.1.00.0001",
+            data_inicio=date(2026, 5, 1), data_fim=date(2026, 5, 5),
+        )
+        for i in range(1, 5)  # 4 processos
+    ]
+    # Cancela após 1 chamada — ou seja, antes do 2º processo.
+    def is_cancelled():
+        return session.get.call_count >= 1
+
+    summary = client.fetch_all_processos(consultas, is_cancelled=is_cancelled)
+    assert summary.cancelled is True
+    assert session.get.call_count == 1

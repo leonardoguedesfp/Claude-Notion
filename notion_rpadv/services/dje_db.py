@@ -97,7 +97,23 @@ CREATE TABLE IF NOT EXISTS publicacoes (
 CREATE INDEX IF NOT EXISTS idx_pub_data ON publicacoes(data_disponibilizacao);
 CREATE INDEX IF NOT EXISTS idx_pub_processo ON publicacoes(numero_processo);
 CREATE INDEX IF NOT EXISTS idx_pub_oabs_escritorio ON publicacoes(oabs_escritorio);
+
+-- Pós-Fase 3 (2026-05-02): flags arbitrárias one-shot pra eventos
+-- operacionais que não pertencem a um schema mais estruturado.
+-- Caso de uso inicial: marcar que o modal de "reativação dos 4
+-- advogados de 2026-05-02" já foi tratado nesta máquina (sim ou não),
+-- pra não recorrer toda execução. Chave estável → valor texto livre.
+CREATE TABLE IF NOT EXISTS app_flags (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    set_at TEXT NOT NULL
+);
 """
+
+# Flag key: marca que o modal de reativação dos 4 advogados de
+# 2026-05-02 já foi tratado (independentemente da resposta do usuário).
+# Bumpe esta string se for preciso re-mostrar o modal (improvável).
+FLAG_REATIVACAO_2026_05_02: str = "reativacao_4_advogados_2026_05_02_treated"
 
 
 # ---------------------------------------------------------------------------
@@ -300,6 +316,37 @@ def clear_legacy_state_and_publicacoes(conn: sqlite3.Connection) -> None:
     logger.info(
         "DJE: migração legada executada — djen_state e publicacoes zeradas",
     )
+
+
+# ---------------------------------------------------------------------------
+# Flags arbitrárias (one-shot)
+# ---------------------------------------------------------------------------
+
+
+def read_flag(conn: sqlite3.Connection, key: str) -> str | None:
+    """Lê o valor de uma flag em ``app_flags``. ``None`` se não existe."""
+    row = conn.execute(
+        "SELECT value FROM app_flags WHERE key = ?",
+        (key,),
+    ).fetchone()
+    if row is None:
+        return None
+    return str(row["value"])
+
+
+def set_flag(conn: sqlite3.Connection, key: str, value: str) -> None:
+    """Upsert numa flag de ``app_flags``. ``value`` é texto livre."""
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    conn.execute(
+        """
+        INSERT INTO app_flags (key, value, set_at) VALUES (?, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET
+            value = excluded.value,
+            set_at = excluded.set_at
+        """,
+        (key, value, ts),
+    )
+    conn.commit()
 
 
 def fetch_publicacoes_by_ids(

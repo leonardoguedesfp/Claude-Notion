@@ -158,6 +158,49 @@ def read_all_advogados_state(
     return out
 
 
+def reset_advogado_cursores(
+    conn: sqlite3.Connection,
+    oabs_uf: list[tuple[str, str]],
+) -> int:
+    """Zera o cursor (``ultimo_cursor=NULL``) e o ``last_run`` (=NULL)
+    dos advogados listados em ``oabs_uf`` (lista de tuplas ``(oab, uf)``).
+
+    Pós-Fase 3 (2026-05-02): usado pelo modal de reativação dos 4
+    advogados — quando o usuário confirma "Sim, resetar", os cursores
+    falsos (em 02/05/2026 sem histórico de captura real) viram NULL,
+    fazendo a próxima execução partir naturalmente de 31/12/2025
+    (= ``DEFAULT_CURSOR_VAZIO``) e cobrir desde 01/01/2026.
+
+    NÃO apaga publicações em ``publicacoes`` — só os watermarks. As
+    publicações já capturadas são mantidas e re-deduplicadas via
+    ``ON CONFLICT(djen_id) DO NOTHING`` na próxima varredura.
+
+    Retorna o número de linhas afetadas (pode ser menor que ``len(oabs_uf)``
+    se algum advogado não tinha estado armazenado ainda).
+    """
+    if not oabs_uf:
+        return 0
+    placeholders = ",".join("(?, ?)" for _ in oabs_uf)
+    flat: list[str] = []
+    for oab, uf in oabs_uf:
+        flat.extend([oab, uf])
+    cur = conn.execute(
+        f"""
+        UPDATE djen_advogado_state
+        SET ultimo_cursor = NULL, last_run = NULL
+        WHERE (numero_oab, uf_oab) IN (VALUES {placeholders})
+        """,
+        flat,
+    )
+    conn.commit()
+    affected = cur.rowcount
+    logger.info(
+        "DJE: reset_advogado_cursores em %d advogados (rowcount=%d): %s",
+        len(oabs_uf), affected, oabs_uf,
+    )
+    return affected
+
+
 def compute_advogado_window(
     conn: sqlite3.Connection,
     advogado: dict,

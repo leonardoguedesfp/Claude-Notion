@@ -29,17 +29,27 @@ class Advogado(TypedDict):
 # Lista oficial de advogados consultados.
 # OAB sem ponto (a API do DJEN exige dígitos puros).
 # Para reativar um desativado, descomentar a linha desejada.
+#
+# 2026-05-02 (pós-Fase 3): reativação dos 4 desativados (Vitor, Cecília,
+# Samantha, Deborah). Os cursores deles em ``djen_advogado_state`` estavam
+# em 02/05/2026 mas eram FALSOS (não houve smoke de sucesso pra eles); a
+# UI agora detecta essa condição na 1ª execução pós-reativação e oferece
+# modal de reset dos cursores (zera pra NULL → janela natural reconstrói
+# desde 01/01/2026). Ver ``leitor_dje._check_and_offer_reactivation_reset``.
+REACTIVATED_2026_05_02_OABS: Final[tuple[tuple[str, str], ...]] = (
+    ("48468", "DF"),  # Vitor Guedes da Fonseca Passos
+    ("20120", "DF"),  # Cecília Maria Lapetina Chiaratto
+    ("38809", "DF"),  # Samantha Lais Soares Mickievicz
+    ("75799", "DF"),  # Deborah Nascimento de Castro
+)
+
 ADVOGADOS: Final[list[Advogado]] = [
     {"nome": "Ricardo Luiz Rodrigues da Fonseca Passos", "oab": "15523", "uf": "DF"},
     {"nome": "Leonardo Guedes da Fonseca Passos",        "oab": "36129", "uf": "DF"},
-    # Desativados temporariamente em 02/05/2026 por sobrecarga 429 da
-    # API DJEN em janelas longas durante carga inicial. Reativar quando:
-    # - Watermark por advogado estiver consolidado em produção
-    # - Volume diário (1-2 dias) estabilizado, sem 429
-    # {"nome": "Vitor Guedes da Fonseca Passos",           "oab": "48468", "uf": "DF"},
-    # {"nome": "Cecília Maria Lapetina Chiaratto",         "oab": "20120", "uf": "DF"},
-    # {"nome": "Samantha Lais Soares Mickievicz",          "oab": "38809", "uf": "DF"},
-    # {"nome": "Deborah Nascimento de Castro",             "oab": "75799", "uf": "DF"},
+    {"nome": "Vitor Guedes da Fonseca Passos",           "oab": "48468", "uf": "DF"},
+    {"nome": "Cecília Maria Lapetina Chiaratto",         "oab": "20120", "uf": "DF"},
+    {"nome": "Samantha Lais Soares Mickievicz",          "oab": "38809", "uf": "DF"},
+    {"nome": "Deborah Nascimento de Castro",             "oab": "75799", "uf": "DF"},
     # ---
     # Desativados antes (Fase 2.1, 2026-05-01).
     # {"nome": "Juliana Vieira Gomes",                     "oab": "65089", "uf": "DF"},

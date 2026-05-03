@@ -58,41 +58,69 @@ logger = logging.getLogger("dje.transform")
 # ---------------------------------------------------------------------------
 
 
-# Ordem editorial das 21 colunas no xlsx final (Fase 3).
+# Ordem editorial das 20 colunas no xlsx final (pós-Fase 3, 2026-05-02).
 # Fonte única do contrato — bumpe esta lista conjuntamente com testes que
 # asseguram a ordem.
 #
-# Diferenças vs Fase 2 (era 20 colunas):
-# - ``advogados_consultados`` → renomeada pra ``advogados_consultados_escritorio``
-#   (clareza: lista só os advogados do escritório, não os externos).
-# - ``oabs_externas_consultadas`` (nova, última posição): preenchida em modo
-#   manual quando o usuário pesquisa OABs fora da lista oficial; vazia em
-#   modo padrão.
+# Diferenças vs Fase 3 anterior (era 21 colunas):
+# - ``data_disponibilizacao`` (com underscore) eliminada — duplicata da
+#   ``datadisponibilizacao`` (sem underscore) que já vinha da API DJEN.
+# - Nova ordem editorial: 9 visíveis no início (datadisponibilizacao,
+#   siglaTribunal, numeroprocessocommascara, nomeOrgao, tipoComunicacao,
+#   tipoDocumento, nomeClasse, texto, link), depois 11 ocultas (incluindo
+#   metadados internos como hash, id, advogados consultados, e payload
+#   bruto do DJEN como destinatarios/destinatarioadvogados).
+# - ``HIDDEN_COLUMNS`` abaixo lista quais ficam com ``column_dimension.hidden``
+#   no .xlsx (ainda exportadas, mas escondidas por default no Excel).
 CANONICAL_COLUMNS: Final[list[str]] = [
+    # --- Visíveis (9) ---
+    "datadisponibilizacao",
+    "siglaTribunal",
+    "numeroprocessocommascara",
+    "nomeOrgao",
+    "tipoComunicacao",
+    "tipoDocumento",
+    "nomeClasse",
+    "texto",
+    "link",
+    # --- Ocultas (11) ---
     "advogados_consultados_escritorio",
     "observacoes",
     "id",
     "hash",
-    "siglaTribunal",
-    "data_disponibilizacao",
-    "numeroprocessocommascara",
     "numero_processo",
-    "tipoComunicacao",
-    "tipoDocumento",
-    "nomeOrgao",
     "idOrgao",
-    "nomeClasse",
     "codigoClasse",
     "numeroComunicacao",
-    "texto",
-    "link",
     "destinatarios",
     "destinatarioadvogados",
-    "datadisponibilizacao",
     "oabs_externas_consultadas",
 ]
 
+# Colunas que ficam com ``column_dimension.hidden = True`` no xlsx final.
+# Continuam exportadas (cabeçalho + valores), mas o Excel não as mostra
+# por default — usuário pode "Mostrar" via menu se precisar inspecionar.
+HIDDEN_COLUMNS: Final[frozenset[str]] = frozenset({
+    "advogados_consultados_escritorio",
+    "observacoes",
+    "id",
+    "hash",
+    "numero_processo",
+    "idOrgao",
+    "codigoClasse",
+    "numeroComunicacao",
+    "destinatarios",
+    "destinatarioadvogados",
+    "oabs_externas_consultadas",
+})
+
 # Colunas removidas do output F2 (cobertas pela ``observacoes``).
+# Note: ``data_disponibilizacao`` (com underscore, formato ISO) saiu do
+# ``CANONICAL_COLUMNS`` mas NÃO entra aqui — ainda é usada internamente
+# pelo ``sort_rows`` (formato ISO ordena lexicograficamente como data) e
+# pelo SQLite (schema ``publicacoes.data_disponibilizacao``). Apenas o
+# Excel deixa de mostrá-la, pra eliminar a redundância visual com
+# ``datadisponibilizacao`` (formato BR ``DD/MM/AAAA``).
 DROPPED_COLUMNS: Final[frozenset[str]] = frozenset({
     "ativo",
     "status",

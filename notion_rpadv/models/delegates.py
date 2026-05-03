@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 from notion_bulk_edit.config import NOTION_USERS
 from notion_bulk_edit.schemas import PropSpec, get_prop
 from notion_rpadv.theme.tokens import LIGHT, parse_color, resolve_chip_color
+from notion_rpadv.widgets.calendar_date_edit import CalendarDateEdit
 from notion_rpadv.widgets.multi_select_editor import MultiSelectEditor
 
 # Types that cannot be edited via a delegate.
@@ -148,8 +149,10 @@ class PropDelegate(QStyledItemDelegate):
             )
 
         if tipo == "date":
-            de = QDateEdit(parent)
-            de.setCalendarPopup(True)
+            # 2026-05-03: ``CalendarDateEdit`` em vez de ``QDateEdit`` —
+            # popup do calendário abre em qualquer clique do mouse, não
+            # apenas na seta dropdown (ver A9).
+            de = CalendarDateEdit(parent)
             de.setDisplayFormat("dd/MM/yyyy")
             return de
 
