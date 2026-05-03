@@ -21,34 +21,16 @@ from notion_rpadv.services.dje_notion_constants import (
     NOTION_BLOCK_TEXT_LIMIT,
     NOTION_TEXTO_INLINE_LIMIT,
 )
+from notion_rpadv.services.dje_notion_mappings import (
+    ADVOGADOS_ESCRITORIO as _OABS_ESCRITORIO_TAGS,
+    formatar_advogados_intimados,
+    mapear_tipo_comunicacao,
+    mapear_tipo_documento,
+    tinha_destinatarios_advogados,
+)
 from notion_rpadv.services.dje_processos import _normaliza_cnj
 
 logger = logging.getLogger("dje.notion.mapper")
-
-
-# ---------------------------------------------------------------------------
-# Lista canônica das OABs do escritório (12 — 6 ativas + 6 desativadas).
-# Fase 5: o multi-select "Advogados intimados" da database aceita TAGS pré-
-# criadas no Notion. Cruzamos com TODAS as 12 (não só as ativas) porque
-# publicações antigas no banco podem conter advogados desativados.
-# ---------------------------------------------------------------------------
-
-
-_OABS_ESCRITORIO_TAGS: dict[str, str] = {
-    # OAB normalizada → tag exibida no multi-select do Notion (primeiro nome).
-    "15523/DF": "Ricardo",
-    "36129/DF": "Leonardo",
-    "48468/DF": "Vitor",
-    "20120/DF": "Cecília",
-    "38809/DF": "Samantha",
-    "75799/DF": "Deborah",
-    "65089/DF": "Juliana Vieira",
-    "81225/DF": "Juliana Chiaratto",
-    "37654/DF": "Shirley",
-    "39857/DF": "Erika",
-    "84703/DF": "Maria Isabel",
-    "79658/DF": "Cristiane",
-}
 
 
 # ---------------------------------------------------------------------------
@@ -247,51 +229,17 @@ def lookup_processo_page_id(
 
 # ---------------------------------------------------------------------------
 # Cruzamento de advogados do escritório → tags
+#
+# Round 1 (2026-05-03): movido pra ``dje_notion_mappings``. Os aliases
+# abaixo preservam compatibilidade com testes/legacy callers que
+# importavam os nomes privados originais. Use as funções públicas
+# ``formatar_advogados_intimados`` / ``tinha_destinatarios_advogados``
+# em código novo.
 # ---------------------------------------------------------------------------
 
 
-def _advogados_escritorio_em_destinatarios(
-    destinatarioadvogados: Any,
-) -> list[str]:
-    """Retorna a lista de tags (nomes do escritório) que aparecem em
-    ``destinatarioadvogados`` da publicação. Externos são desprezados.
-
-    A estrutura real do DJEN tem ``numero_oab``/``uf_oab`` aninhados em
-    ``entry["advogado"]`` (descoberta do smoke da Fase 2.2); aqui
-    fazemos lookup com fallback no nível raiz pra fixtures legacy."""
-    tags: list[str] = []
-    if not isinstance(destinatarioadvogados, list):
-        return tags
-    seen: set[str] = set()
-    for entry in destinatarioadvogados:
-        if not isinstance(entry, dict):
-            continue
-        adv = (
-            entry.get("advogado")
-            if isinstance(entry.get("advogado"), dict)
-            else entry
-        )
-        oab_raw = str(adv.get("numero_oab") or "").strip()
-        oab_digits = "".join(c for c in oab_raw if c.isdigit())
-        uf = str(adv.get("uf_oab") or "").strip().upper()
-        if not oab_digits or not uf:
-            continue
-        oab_uf = f"{oab_digits}/{uf}"
-        if oab_uf in _OABS_ESCRITORIO_TAGS and oab_uf not in seen:
-            seen.add(oab_uf)
-            tags.append(_OABS_ESCRITORIO_TAGS[oab_uf])
-    return tags
-
-
-def _tem_advogados_no_payload(destinatarioadvogados: Any) -> bool:
-    """``destinatarioadvogados`` é lista não-vazia de dicts? Usado pra
-    distinguir "lista de destinatários vazia" (não marca checkbox) de
-    "tinha lista mas só com externos" (marca checkbox).
-    """
-    return (
-        isinstance(destinatarioadvogados, list)
-        and any(isinstance(e, dict) for e in destinatarioadvogados)
-    )
+_advogados_escritorio_em_destinatarios = formatar_advogados_intimados
+_tem_advogados_no_payload = tinha_destinatarios_advogados
 
 
 # ---------------------------------------------------------------------------
@@ -329,10 +277,10 @@ def montar_payload_publicacao(
     processo_page_id = lookup_processo_page_id(cache_conn, numero_processo)
     processo_nao_cadastrado = processo_page_id is None
 
-    advogados_tags = _advogados_escritorio_em_destinatarios(
+    advogados_tags = formatar_advogados_intimados(
         publicacao.get("destinatarioadvogados"),
     )
-    tinha_destinatarios = _tem_advogados_no_payload(
+    tinha_destinatarios = tinha_destinatarios_advogados(
         publicacao.get("destinatarioadvogados"),
     )
     # "Advogados não cadastrados" só dispara quando havia destinatários
@@ -360,8 +308,12 @@ def montar_payload_publicacao(
             [processo_page_id] if processo_page_id else [],
         ),
         "Órgão": _rich_text_prop(publicacao.get("nomeOrgao")),
-        "Tipo de comunicação": _select_prop(publicacao.get("tipoComunicacao")),
-        "Tipo de documento": _select_prop(publicacao.get("tipoDocumento")),
+        "Tipo de comunicação": _select_prop(
+            mapear_tipo_comunicacao(publicacao.get("tipoComunicacao")),
+        ),
+        "Tipo de documento": _select_prop(
+            mapear_tipo_documento(publicacao.get("tipoDocumento")),
+        ),
         "Classe": _rich_text_prop(publicacao.get("nomeClasse")),
         "Texto": _rich_text_prop(publicacao.get("texto")),
         "Link": _url_prop(publicacao.get("link")),

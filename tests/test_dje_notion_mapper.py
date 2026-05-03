@@ -140,8 +140,8 @@ def test_advogados_escritorio_em_destinatarios_so_internos() -> None:
         {"advogado": {"numero_oab": "36129", "uf_oab": "DF", "nome": "Z"}},
     ]
     tags = _advogados_escritorio_em_destinatarios(destinatarios)
-    assert "Ricardo" in tags
-    assert "Leonardo" in tags
+    assert "Ricardo (15523/DF)" in tags
+    assert "Leonardo (36129/DF)" in tags
     assert len(tags) == 2  # externo (99999/SP) descartado
 
 
@@ -158,7 +158,7 @@ def test_advogados_escritorio_dedup_quando_mesma_oab_aparece_2x() -> None:
         {"advogado": {"numero_oab": "15523", "uf_oab": "DF", "nome": "X"}},
     ]
     tags = _advogados_escritorio_em_destinatarios(destinatarios)
-    assert tags == ["Ricardo"]
+    assert tags == ["Ricardo (15523/DF)"]
 
 
 # ---------------------------------------------------------------------------
@@ -277,7 +277,7 @@ def test_payload_happy_path_18_propriedades(dje_conn, cache_conn) -> None:
     assert props["Processo"]["relation"] == [{"id": "page-proc-1"}]
     # Multi-select com Ricardo
     nomes = [t["name"] for t in props["Advogados intimados"]["multi_select"]]
-    assert nomes == ["Ricardo"]
+    assert nomes == ["Ricardo (15523/DF)"]
     # Status sempre "Nova"
     assert props["Status"]["select"]["name"] == "Nova"
     # Children não-vazio
