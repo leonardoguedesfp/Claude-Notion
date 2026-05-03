@@ -74,6 +74,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from notion_bulk_edit.notion_api import NotionClient
 from notion_rpadv.services import dje_db, dje_state
 from notion_rpadv.services.dje_advogados import (
     ADVOGADOS,
@@ -93,6 +94,9 @@ from notion_rpadv.services.dje_exporter import (
     format_filename_cnj,
     write_historico_completo_xlsx,
     write_publicacoes_xlsx_from_processed,
+)
+from notion_rpadv.services.dje_notion_sync import (
+    sincronizar_pendentes,
 )
 from notion_rpadv.services.dje_processos import listar_cnjs_do_escritorio
 from notion_rpadv.services.dje_transform import (
@@ -224,6 +228,14 @@ class WorkerOutcome:
     cancelled: bool = False
     state_map_apos: dict = field(default_factory=dict)
     mode: str = MODE_PADRAO
+    # Pós-Fase 5 (2026-05-03) — sumário do envio Notion. Preenchido pelo
+    # worker após chamar ``sincronizar_pendentes`` se o flow gravou no
+    # banco (oab_novas, cnj_novas). Em flows transient (oab_periodo,
+    # manual, cnj_periodo) fica zerado.
+    notion_sent: int = 0
+    notion_failed: int = 0
+    notion_stuck_after: int = 0
+    notion_skipped: bool = False  # True = sync nem foi tentada (transient)
 
 
 class _DJEWorker(QObject):
@@ -256,6 +268,11 @@ class _DJEWorker(QObject):
         oabs_escritorio_marcadas: set[str],
         oabs_externas_pesquisadas: set[str],
         dje_conn: sqlite3.Connection,
+        # Pós-Fase 5 (2026-05-03): credenciais + cache pra Notion sync.
+        # Quando ``token`` é vazio/None, sync é pulada silenciosamente
+        # (ambiente sem credenciais).
+        notion_token: str = "",
+        cache_conn: sqlite3.Connection | None = None,
     ) -> None:
         super().__init__()
         self._flow = flow
@@ -265,6 +282,8 @@ class _DJEWorker(QObject):
         self._oabs_marcadas = oabs_escritorio_marcadas
         self._oabs_externas = oabs_externas_pesquisadas
         self._dje_conn = dje_conn
+        self._notion_token = notion_token or ""
+        self._cache_conn = cache_conn
         self._client: DJEClient | None = None
         self._cancel_event = threading.Event()
         # Refator: log persistido pra aba "Log" do Excel.
@@ -355,6 +374,7 @@ class _DJEWorker(QObject):
             outcome = self._finalize_padrao(summary, splitted)
         else:  # FLOW_OAB_PERIODO ou FLOW_MANUAL — ambos transient (b)
             outcome = self._finalize_manual(summary, splitted)
+        outcome = self._run_notion_sync_if_applicable(outcome)
         self.finished.emit(outcome)
 
     def _run_inner_cnj(self) -> None:
@@ -403,6 +423,7 @@ class _DJEWorker(QObject):
         )
 
         outcome = self._finalize_cnj_novas(summary, splitted)
+        outcome = self._run_notion_sync_if_applicable(outcome)
         self.finished.emit(outcome)
 
     def _finalize_padrao(self, summary, splitted) -> "WorkerOutcome":
@@ -692,6 +713,58 @@ class _DJEWorker(QObject):
             mode=MODE_PADRAO,
         )
 
+    def _run_notion_sync_if_applicable(
+        self, outcome: "WorkerOutcome",
+    ) -> "WorkerOutcome":
+        """Pós-Fase 5 (2026-05-03): após cada captura DJEN, dispara
+        sincronização das pendentes pra Notion.
+
+        Pulada quando:
+        - flow == FLOW_MANUAL (modo personalizado, OABs externas — não
+          é uso oficial do escritório, não popula banco).
+        - sem token Notion (ambiente sem credenciais).
+        - sem cache_conn (ambiente sem cache populado).
+
+        Erros (NotionAuthError, network, etc) são logados mas NÃO
+        derrubam a captura DJEN — outcome volta com ``notion_failed``
+        marcado e o caller decide como exibir.
+        """
+        if self._flow == FLOW_MANUAL:
+            outcome.notion_skipped = True
+            return outcome
+        if not self._notion_token or self._cache_conn is None:
+            outcome.notion_skipped = True
+            self._emit_log(
+                "Notion: sincronização pulada (sem token/cache disponível).",
+            )
+            return outcome
+        try:
+            client = NotionClient(self._notion_token)
+        except Exception as exc:  # noqa: BLE001
+            self._emit_log(f"Notion: cliente não pôde ser criado: {exc}")
+            outcome.notion_skipped = True
+            return outcome
+
+        sync_outcome = sincronizar_pendentes(
+            client=client,
+            dje_conn=self._dje_conn,
+            cache_conn=self._cache_conn,
+            on_progress=self._emit_progress_notion,
+            on_log=self._emit_log,
+            is_cancelled=self._cancel_event.is_set,
+        )
+        outcome.notion_sent = sync_outcome.sent
+        outcome.notion_failed = sync_outcome.failed
+        outcome.notion_stuck_after = sync_outcome.stuck_after
+        outcome.notion_skipped = False
+        return outcome
+
+    def _emit_progress_notion(self, idx: int, total: int) -> None:
+        """Atualiza barra de progresso durante a fase Notion. Mantemos
+        o sinal ``progress`` reusado da fase DJEN — UI troca o ``format``
+        da progress bar via ``log`` pra diferenciar."""
+        self.progress.emit(idx, total)
+
     def _log_skipped(self, skipped: list) -> None:
         """Loga linhas puladas pelo exporter com cap (Fase 2.1)."""
         if not skipped:
@@ -886,6 +959,20 @@ class LeitorDJEPage(QWidget):
         self._open_dir_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._open_dir_btn.clicked.connect(self._on_open_dir_clicked)
         action_row.addWidget(self._open_dir_btn)
+
+        # Pós-Fase 5 (2026-05-03): botão "Tentar reenviar falhas Notion"
+        # — só aparece quando há publicações com 3+ falhas no banco.
+        # Click → zera attempts e dispara nova sincronização.
+        self._retry_notion_btn = QPushButton("Tentar reenviar falhas Notion")
+        self._retry_notion_btn.setVisible(False)
+        self._retry_notion_btn.setStyleSheet(self._secondary_btn_css())
+        self._retry_notion_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._retry_notion_btn.setToolTip(
+            "Zera o contador de tentativas das publicações que falharam 3 "
+            "vezes e dispara nova sincronização imediatamente.",
+        )
+        self._retry_notion_btn.clicked.connect(self._on_retry_notion_clicked)
+        action_row.addWidget(self._retry_notion_btn)
 
         action_row.addStretch()
         root.addLayout(action_row)
@@ -1643,6 +1730,95 @@ class LeitorDJEPage(QWidget):
                 "histórico anterior não será reconstruído pra esses 4 advogados.",
             )
 
+    def _check_and_offer_notion_primeira_carga(self) -> None:
+        """Pós-Fase 5 (2026-05-03): exibe modal one-shot perguntando o
+        que fazer com publicações já no banco quando a integração Notion
+        é ativada pela primeira vez.
+
+        Detecção: ``FLAG_NOTION_PRIMEIRA_CARGA`` ainda não setada em
+        ``app_flags``. Após qualquer escolha, flag é gravada — modal
+        nunca recorre.
+
+        3 ramos:
+        - "Enviar tudo agora" → mantém ``notion_page_id IS NULL`` em
+          todas (já é o default — nada a fazer no banco; flag fica
+          ``"tudo_agora"``).
+        - "Só publicações novas a partir de hoje" → marca todas
+          existentes com ``NOTION_SKIPPED_SENTINEL``; flag fica
+          ``"skipped_passado"``.
+        - "Decidir depois" → não mexe em nada; flag fica ``"adiado"``.
+          Próxima execução não mostra mais modal — usuário precisa
+          deletar a flag manualmente do banco se quiser revisitar.
+        """
+        from PySide6.QtWidgets import QMessageBox
+
+        conn = self._ensure_dje_conn()
+        if dje_db.read_flag(
+            conn, dje_db.FLAG_NOTION_PRIMEIRA_CARGA,
+        ) is not None:
+            return  # já tratado nesta máquina
+
+        # Conta o que existe no banco antes de abrir o modal.
+        n_pendentes = dje_db.count_publicacoes_pending_notion(conn)
+        if n_pendentes == 0:
+            # Banco sem publicações pra enviar — marca flag como tratada
+            # silenciosamente. Próxima captura DJEN já entra como pendente
+            # naturalmente (notion_page_id NULL).
+            dje_db.set_flag(
+                conn, dje_db.FLAG_NOTION_PRIMEIRA_CARGA, "banco_vazio",
+            )
+            return
+
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle("Integração com Notion ativada")
+        box.setText(
+            "O app agora envia publicações para a database 📬 Publicações "
+            f"do Notion. Detectamos {n_pendentes} publicação(ões) já no "
+            "banco local. O que fazer com elas?",
+        )
+        btn_tudo = box.addButton(
+            "Enviar tudo agora", QMessageBox.ButtonRole.AcceptRole,
+        )
+        btn_so_novas = box.addButton(
+            "Só publicações novas a partir de hoje",
+            QMessageBox.ButtonRole.ActionRole,
+        )
+        btn_adiar = box.addButton(
+            "Decidir depois", QMessageBox.ButtonRole.RejectRole,
+        )
+        box.setDefaultButton(btn_adiar)
+        box.setStyleSheet(self._dialog_stylesheet())
+        box.exec()
+        clicked = box.clickedButton()
+
+        if clicked is btn_tudo:
+            dje_db.set_flag(
+                conn, dje_db.FLAG_NOTION_PRIMEIRA_CARGA, "tudo_agora",
+            )
+            self._append_log_line(
+                f"Notion: {n_pendentes} publicações marcadas pra envio "
+                "na próxima sincronização.",
+            )
+        elif clicked is btn_so_novas:
+            n_skipped = dje_db.mark_all_pending_notion_skipped(conn)
+            dje_db.set_flag(
+                conn, dje_db.FLAG_NOTION_PRIMEIRA_CARGA, "skipped_passado",
+            )
+            self._append_log_line(
+                f"Notion: {n_skipped} publicações antigas marcadas como "
+                "SKIPPED — só capturas novas serão enviadas.",
+            )
+        else:
+            # Adiado (default em close/Escape também).
+            dje_db.set_flag(
+                conn, dje_db.FLAG_NOTION_PRIMEIRA_CARGA, "adiado",
+            )
+            self._append_log_line(
+                "Notion: decisão adiada. Modal não recorrerá; pra revisitar, "
+                "delete a flag 'notion_primeira_carga_v1' em app_flags.",
+            )
+
     def _on_download_padrao_clicked(self) -> None:
         """Eixo OAB — "Publicações novas por OAB" (FLOW_OAB_NOVAS):
         janela individual por advogado a partir do cursor."""
@@ -1654,6 +1830,8 @@ class LeitorDJEPage(QWidget):
         # em 2026-05-02 (cursores falsos). Não-bloqueante — segue com
         # qualquer resposta.
         self._check_and_offer_reactivation_reset()
+        # Pós-Fase 5: modal one-shot de "primeira carga Notion".
+        self._check_and_offer_notion_primeira_carga()
         conn = self._ensure_dje_conn()
         consultas: list[AdvogadoConsulta] = []
         for adv in ADVOGADOS:
@@ -1693,6 +1871,9 @@ class LeitorDJEPage(QWidget):
             return
         if not self._check_and_run_legacy_migration():
             return
+        # Pós-Fase 5: modal one-shot de primeira carga Notion (mesmo em
+        # transient — modal é sobre o estado do BANCO, não desta execução).
+        self._check_and_offer_notion_primeira_carga()
         di = self._date_inicio_padrao.date().toPython()
         df = self._date_fim_padrao.date().toPython()
         if df < di:
@@ -1765,6 +1946,8 @@ class LeitorDJEPage(QWidget):
         if not self._check_and_run_legacy_migration():
             return
         self._check_and_offer_reactivation_reset()
+        # Pós-Fase 5: modal one-shot de primeira carga Notion.
+        self._check_and_offer_notion_primeira_carga()
         df = _dt.date.today()
         di = df - _dt.timedelta(days=CNJ_WINDOW_DAYS)
         consultas = self._coletar_consultas_cnj(di, df)
@@ -1889,6 +2072,10 @@ class LeitorDJEPage(QWidget):
             oabs_escritorio_marcadas=oabs_escritorio_marcadas,
             oabs_externas_pesquisadas=oabs_externas_pesquisadas,
             dje_conn=conn,
+            # Pós-Fase 5: passa credenciais Notion + cache pra que o
+            # worker possa sincronizar publicações pendentes após captura.
+            notion_token=self._token,
+            cache_conn=self._conn,
         )
         worker.moveToThread(thread)
         worker.log.connect(self._on_log_line)
@@ -1973,6 +2160,8 @@ class LeitorDJEPage(QWidget):
         # Revalida: se algum path retornado pelo worker não existe no
         # FS por algum motivo, esconde silenciosamente.
         self._refresh_open_buttons_visibility()
+        # Pós-Fase 5: mostra/esconde botão "Tentar reenviar falhas Notion".
+        self._refresh_retry_notion_btn()
 
         # Banner depende do modo: modo padrão tem banco e mostra
         # "X novas (Y já existiam)"; modo manual é transient (sem
@@ -2042,11 +2231,26 @@ class LeitorDJEPage(QWidget):
                     f"mais atrasado em {oldest.strftime('%d/%m/%Y')}",
                 )
 
+        # Pós-Fase 5: bloco de status do envio Notion (se aplicável).
+        if not outcome.notion_skipped and (
+            outcome.notion_sent
+            or outcome.notion_failed
+            or outcome.notion_stuck_after
+        ):
+            partes.append(
+                f"Notion: {outcome.notion_sent} enviadas, "
+                f"{outcome.notion_failed} falharam"
+                + (
+                    f" ({outcome.notion_stuck_after} presas há 3+ tentativas)"
+                    if outcome.notion_stuck_after else ""
+                ),
+            )
+
         msg = ". ".join(partes) + "."
 
         has_warning = (
             outcome.cancelled or outcome.errors or outcome.skipped_count
-            or outcome.historico_locked
+            or outcome.historico_locked or outcome.notion_stuck_after
         )
         if has_warning:
             self._set_warning(msg)
@@ -2112,6 +2316,67 @@ class LeitorDJEPage(QWidget):
         self._warning_lbl.setText(msg)
         self._warning_lbl.setVisible(True)
 
+    def _refresh_retry_notion_btn(self) -> None:
+        """Mostra/esconde botão "Tentar reenviar falhas Notion" baseado
+        em ``count_publicacoes_failed_notion``. Chamado em
+        ``_on_finished``, ``showEvent`` e após o próprio retry."""
+        if not hasattr(self, "_retry_notion_btn"):
+            return
+        if self._dje_conn is None:
+            self._retry_notion_btn.setVisible(False)
+            return
+        n_stuck = dje_db.count_publicacoes_failed_notion(self._dje_conn)
+        self._retry_notion_btn.setVisible(n_stuck > 0)
+        if n_stuck > 0:
+            self._retry_notion_btn.setText(
+                f"Tentar reenviar {n_stuck} falha(s) Notion",
+            )
+
+    def _on_retry_notion_clicked(self) -> None:
+        """Click no botão "Tentar reenviar falhas Notion": zera attempts
+        das publicações em 3+ falhas e dispara nova sincronização. Reusa
+        a infraestrutura de worker; mas como sync é lightweight, roda
+        síncrono mesmo (UI fica bloqueada — aceitável pra retry manual)."""
+        from notion_bulk_edit.notion_api import NotionClient
+
+        if self._thread is not None:
+            return  # captura em andamento; espera terminar
+        conn = self._ensure_dje_conn()
+        n_reset = dje_db.reset_notion_failed_attempts(conn)
+        if n_reset == 0:
+            self._set_info("Nenhuma falha Notion presa pra retentar.")
+            self._refresh_retry_notion_btn()
+            return
+        self._append_log_line(
+            f"Notion: {n_reset} publicações tiveram attempts zerados; "
+            "iniciando reenvio…",
+        )
+        try:
+            client = NotionClient(self._token)
+        except Exception as exc:  # noqa: BLE001
+            self._set_warning(
+                f"Notion: cliente não pôde ser criado: {exc}",
+            )
+            self._refresh_retry_notion_btn()
+            return
+        sync_outcome = sincronizar_pendentes(
+            client=client,
+            dje_conn=conn,
+            cache_conn=self._conn,
+            on_log=self._append_log_line,
+        )
+        if sync_outcome.failed == 0 and sync_outcome.stuck_after == 0:
+            self._set_info(
+                f"Notion: {sync_outcome.sent} publicações reenviadas com sucesso.",
+            )
+        else:
+            self._set_warning(
+                f"Notion retry: {sync_outcome.sent} enviadas, "
+                f"{sync_outcome.failed} falharam, "
+                f"{sync_outcome.stuck_after} ainda presas.",
+            )
+        self._refresh_retry_notion_btn()
+
     def _refresh_open_buttons_visibility(self) -> None:
         """Verifica silenciosamente se os arquivos/pastas referenciados
         em ``_last_*_path`` ainda existem; esconde botões cujos alvos
@@ -2156,11 +2421,12 @@ class LeitorDJEPage(QWidget):
             self._open_dir_btn.setVisible(False)
 
     def showEvent(self, event) -> None:  # noqa: N802
-        """Revalida visibilidade dos botões de "Abrir" sempre que a
-        página volta a ser exibida (troca de aba). Mantém invariante
-        de que botões só aparecem com alvo válido."""
+        """Revalida visibilidade dos botões de "Abrir" + "Tentar reenviar
+        falhas Notion" sempre que a página volta a ser exibida (troca de
+        aba). Mantém invariante de que botões só aparecem com alvo válido."""
         super().showEvent(event)
         self._refresh_open_buttons_visibility()
+        self._refresh_retry_notion_btn()
 
     def _on_open_file_clicked(self) -> None:
         # Re-checa silenciosamente antes de tentar abrir; se sumiu,

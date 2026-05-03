@@ -1386,3 +1386,211 @@ def test_hotfix_show_event_revalida_botoes_quando_aba_volta(
         not page._open_file_btn.isVisible()  # noqa: SLF001
         or page._open_file_btn.isHidden()  # noqa: SLF001
     )
+
+
+# ---------------------------------------------------------------------------
+# Fase 5 (2026-05-03) — Modal de primeira carga Notion + botão retry
+# ---------------------------------------------------------------------------
+
+
+def test_F5_modal_primeira_carga_so_dispara_quando_flag_ausente(
+    tmp_path: Path,
+) -> None:
+    """Modal aparece apenas quando ``FLAG_NOTION_PRIMEIRA_CARGA`` ainda
+    não está em ``app_flags`` E há pelo menos 1 publicação pendente."""
+    page, conn = _make_page_with_dje_conn(tmp_path)
+    try:
+        from notion_rpadv.services import dje_db
+
+        # Insere 2 publicações pendentes.
+        for i in (1, 2):
+            dje_db.insert_publicacao(
+                conn, djen_id=i, hash_=f"h{i}",
+                oabs_escritorio="X", oabs_externas="",
+                numero_processo=None,
+                data_disponibilizacao="2026-04-30",
+                sigla_tribunal="TRT10", payload={"id": i},
+                mode="padrao",
+            )
+        captured = {"shown": False, "msg": ""}
+
+        def fake_exec(self_box):
+            captured["shown"] = True
+            captured["msg"] = self_box.text()
+            # Simula click no botão "Decidir depois" (1º addedButton de role
+            # RejectRole).
+            from PySide6.QtWidgets import QMessageBox
+            for b in self_box.buttons():
+                role = self_box.buttonRole(b)
+                if role == QMessageBox.ButtonRole.RejectRole:
+                    self_box.setProperty("__clicked", b)
+                    return 0
+            return 0
+
+        # Monkey-patch QMessageBox.exec via setting clickedButton manually.
+        import unittest.mock as _mock
+        from PySide6.QtWidgets import QMessageBox
+
+        # Simulate user clicking "Decidir depois" by patching exec to do nothing
+        # and manually calling _set_clicked on the box.
+        def fake_exec_bound(self_box, *args, **kwargs):
+            captured["shown"] = True
+            captured["msg"] = self_box.text()
+            # Force the "adiar" button as clicked.
+            for b in self_box.buttons():
+                if b.text() == "Decidir depois":
+                    # No public setter; we rely on the page reading via
+                    # ``clickedButton()`` which Qt sets after exec(). Pra
+                    # simular, monkey-patch ``clickedButton`` no box.
+                    self_box.clickedButton = lambda b=b: b
+                    break
+            return 0
+
+        with _mock.patch.object(QMessageBox, "exec", fake_exec_bound):
+            page._check_and_offer_notion_primeira_carga()  # noqa: SLF001
+
+        assert captured["shown"]
+        assert "2 publicação" in captured["msg"]
+        # Flag setada como adiado.
+        assert dje_db.read_flag(
+            conn, dje_db.FLAG_NOTION_PRIMEIRA_CARGA,
+        ) == "adiado"
+    finally:
+        conn.close()
+
+
+def test_F5_modal_nao_recorre_apos_primeira_decisao(tmp_path: Path) -> None:
+    """Após qualquer decisão (flag setada), próxima chamada não dispara
+    modal."""
+    page, conn = _make_page_with_dje_conn(tmp_path)
+    try:
+        from notion_rpadv.services import dje_db
+        dje_db.set_flag(
+            conn, dje_db.FLAG_NOTION_PRIMEIRA_CARGA, "adiado",
+        )
+        calls = {"v": 0}
+        from PySide6.QtWidgets import QMessageBox
+
+        def fake_exec(self_box, *args, **kwargs):
+            calls["v"] += 1
+            return 0
+
+        import unittest.mock as _mock
+        with _mock.patch.object(QMessageBox, "exec", fake_exec):
+            page._check_and_offer_notion_primeira_carga()  # noqa: SLF001
+        assert calls["v"] == 0
+    finally:
+        conn.close()
+
+
+def test_F5_modal_banco_vazio_seta_flag_silenciosamente(
+    tmp_path: Path,
+) -> None:
+    """Banco sem publicações → modal não aparece, mas flag é gravada
+    pra próxima execução não recorrer."""
+    page, conn = _make_page_with_dje_conn(tmp_path)
+    try:
+        from notion_rpadv.services import dje_db
+        from PySide6.QtWidgets import QMessageBox
+        import unittest.mock as _mock
+
+        calls = {"v": 0}
+        with _mock.patch.object(QMessageBox, "exec",
+                                lambda *a, **k: calls.__setitem__(
+                                    "v", calls["v"] + 1) or 0):
+            page._check_and_offer_notion_primeira_carga()  # noqa: SLF001
+        assert calls["v"] == 0
+        assert dje_db.read_flag(
+            conn, dje_db.FLAG_NOTION_PRIMEIRA_CARGA,
+        ) == "banco_vazio"
+    finally:
+        conn.close()
+
+
+def test_F5_botao_retry_oculto_quando_sem_falhas(tmp_path: Path) -> None:
+    """``_retry_notion_btn`` permanece invisível quando não há
+    publicações presas (3+ falhas)."""
+    _qapp()
+    from notion_rpadv.pages.leitor_dje import LeitorDJEPage
+
+    # cache_conn (1º arg) é cache.db; aqui usamos MagicMock pq não toca.
+    page = LeitorDJEPage(conn=MagicMock(), token="dummy", user="leo")
+    page._refresh_retry_notion_btn()  # noqa: SLF001 — _dje_conn é None
+    assert (
+        not page._retry_notion_btn.isVisible()  # noqa: SLF001
+        or page._retry_notion_btn.isHidden()  # noqa: SLF001
+    )
+
+
+def test_F5_botao_retry_aparece_quando_ha_falhas(tmp_path: Path) -> None:
+    """Após 3 falhas em uma pub, botão "Tentar reenviar" fica visível
+    com label informativo do número de falhas."""
+    page, conn = _make_page_with_dje_conn(tmp_path)
+    try:
+        from notion_rpadv.services import dje_db
+        # Insere e simula 3 falhas.
+        dje_db.insert_publicacao(
+            conn, djen_id=1, hash_="h1",
+            oabs_escritorio="X", oabs_externas="", numero_processo=None,
+            data_disponibilizacao="2026-04-30", sigla_tribunal="TRT10",
+            payload={"id": 1}, mode="padrao",
+        )
+        for err in ("e1", "e2", "e3"):
+            dje_db.mark_publicacao_notion_failure(conn, 1, err)
+        page._refresh_retry_notion_btn()  # noqa: SLF001
+        # Em headless ``isHidden`` retorna True mesmo após setVisible(True)
+        # — testamos via ``isHidden() is False``.
+        assert not page._retry_notion_btn.isHidden()  # noqa: SLF001
+        assert "1 falha" in page._retry_notion_btn.text()  # noqa: SLF001
+    finally:
+        conn.close()
+
+
+def test_F5_retry_zera_attempts_e_dispara_sync(tmp_path: Path) -> None:
+    """Click em "Tentar reenviar falhas" zera attempts das publicações
+    em 3+ falhas e dispara nova sincronização."""
+    page, conn = _make_page_with_dje_conn(tmp_path)
+    try:
+        from unittest.mock import patch
+
+        from notion_rpadv.services import dje_db
+
+        # Insere 1 pub e força 3 falhas.
+        dje_db.insert_publicacao(
+            conn, djen_id=1, hash_="h1",
+            oabs_escritorio="X", oabs_externas="", numero_processo=None,
+            data_disponibilizacao="2026-04-30", sigla_tribunal="TRT10",
+            payload={"id": 1}, mode="padrao",
+        )
+        for err in ("e1", "e2", "e3"):
+            dje_db.mark_publicacao_notion_failure(conn, 1, err)
+        assert dje_db.count_publicacoes_failed_notion(conn) == 1
+
+        # Mock cache_conn pra evitar cache real (page._conn é o cache).
+        # ``page._conn`` foi MagicMock no construtor — o sync vai tentar
+        # ler "Processos" dele. Vamos só mockar o sync inteiro pra validar
+        # que ele FOI chamado após reset.
+        with patch(
+            "notion_rpadv.pages.leitor_dje.sincronizar_pendentes",
+        ) as mock_sync, patch(
+            "notion_bulk_edit.notion_api.NotionClient",
+        ) as mock_client_cls:
+            from notion_rpadv.services.dje_notion_sync import NotionSyncOutcome
+            mock_sync.return_value = NotionSyncOutcome(
+                sent=1, failed=0, stuck_after=0,
+            )
+            mock_client_cls.return_value = MagicMock()
+            page._on_retry_notion_clicked()  # noqa: SLF001
+
+        # attempts foi zerado pre-sync.
+        # (Após sync mock que disse "sent=1" + nada mudou no banco, a pub
+        # ainda está pendente com attempts=0).
+        row = conn.execute(
+            "SELECT notion_attempts, notion_page_id FROM publicacoes "
+            "WHERE djen_id=1"
+        ).fetchone()
+        assert row["notion_attempts"] == 0
+        # Sync foi chamado.
+        mock_sync.assert_called_once()
+    finally:
+        conn.close()

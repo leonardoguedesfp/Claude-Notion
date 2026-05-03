@@ -289,6 +289,37 @@ class NotionClient:
             },
         )
 
+    def create_page_in_data_source(
+        self,
+        data_source_id: str,
+        properties: dict,
+        children: list[dict] | None = None,
+    ) -> dict:
+        """Cria página em data source (API 2025-09-03), com blocos opcionais.
+
+        Diferente de ``create_page`` legado:
+        - Usa ``parent.data_source_id`` (recomendado pela API atual) em
+          vez de ``parent.database_id``.
+        - Aceita ``children`` opcional pra popular o corpo da página
+          imediatamente.
+
+        Args:
+            data_source_id: UUID do data source (mesmo usado em /query).
+            properties: Propriedades no formato Notion API.
+            children: Lista de blocos (opcional) — paragraph, heading_2,
+                quote, etc. Cada bloco no formato Notion canônico.
+
+        Returns:
+            Objeto Page recém-criado (inclui o ``id`` da página criada).
+        """
+        body: dict = {
+            "parent": {"data_source_id": data_source_id},
+            "properties": properties,
+        }
+        if children:
+            body["children"] = children
+        return self._request("POST", "/pages", json=body)
+
     def archive_page(self, page_id: str) -> dict:
         """Arquiva (exclui logicamente) uma página Notion.
 

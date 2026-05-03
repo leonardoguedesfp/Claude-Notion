@@ -91,12 +91,21 @@ CREATE TABLE IF NOT EXISTS publicacoes (
     sigla_tribunal TEXT,
     payload_json TEXT NOT NULL,
     captured_at TEXT NOT NULL,
-    captured_in_mode TEXT NOT NULL CHECK (captured_in_mode IN ('padrao', 'manual'))
+    captured_in_mode TEXT NOT NULL CHECK (captured_in_mode IN ('padrao', 'manual')),
+    -- Pós-Fase 5 (2026-05-03) — integração Notion. Adicionadas via
+    -- migração ALTER TABLE em ``_migrate_notion_columns_if_needed``
+    -- pra bancos pré-Fase-5; aqui no DDL inicial já vêm pra DBs novos.
+    notion_page_id TEXT,        -- NULL=pendente; UUID=enviado; "SKIPPED"=ignorado
+    notion_attempts INTEGER NOT NULL DEFAULT 0,
+    notion_last_error TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_pub_data ON publicacoes(data_disponibilizacao);
 CREATE INDEX IF NOT EXISTS idx_pub_processo ON publicacoes(numero_processo);
 CREATE INDEX IF NOT EXISTS idx_pub_oabs_escritorio ON publicacoes(oabs_escritorio);
+-- Índice parcial Pós-Fase 5 ``idx_publicacoes_notion_pending`` é criado em
+-- ``_migrate_notion_columns_if_needed`` (depende da coluna notion_page_id
+-- já existir, o que não é garantido aqui no DDL legado).
 
 -- Pós-Fase 3 (2026-05-02): flags arbitrárias one-shot pra eventos
 -- operacionais que não pertencem a um schema mais estruturado.
@@ -115,6 +124,16 @@ CREATE TABLE IF NOT EXISTS app_flags (
 # Bumpe esta string se for preciso re-mostrar o modal (improvável).
 FLAG_REATIVACAO_2026_05_02: str = "reativacao_4_advogados_2026_05_02_treated"
 
+# Flag key: marca que o modal de "primeira carga Notion" (Fase 5,
+# 2026-05-03) já foi exibido e tratado. Valores possíveis no
+# ``app_flags.value``: ``"tudo_agora"``, ``"skipped_passado"``,
+# ``"adiado"`` — refletem a escolha do usuário no modal.
+FLAG_NOTION_PRIMEIRA_CARGA: str = "notion_primeira_carga_v1"
+
+# Sentinela usado em ``publicacoes.notion_page_id`` pra publicações que
+# o usuário escolheu ignorar na primeira carga (não enviar pro Notion).
+NOTION_SKIPPED_SENTINEL: str = "SKIPPED"
+
 
 # ---------------------------------------------------------------------------
 # Path / connection / init
@@ -129,13 +148,59 @@ def get_db_path() -> Path:
 def init_db(conn: sqlite3.Connection) -> None:
     """Cria as 2 tabelas + índices se ainda não existirem (idempotente).
 
-    Pragmas devem estar setados antes de chamar (feito por
-    ``get_connection``). Função pública pra que o caller possa abrir
-    conexão custom (e.g. teste com ``:memory:``) e ainda inicializar
-    o schema.
+    Pragmas devem setados antes de chamar (feito por ``get_connection``).
+    Função pública pra que o caller possa abrir conexão custom (e.g.
+    teste com ``:memory:``) e ainda inicializar o schema.
+
+    Pós-Fase 5 (2026-05-03): chama ``_migrate_notion_columns_if_needed``
+    pra adicionar colunas Notion em bancos pré-Fase-5 (DDL inicial já
+    cria pra DBs novos; ALTER TABLE cobre os legados).
     """
     conn.executescript(_SCHEMA_DDL)
+    _migrate_notion_columns_if_needed(conn)
     conn.commit()
+
+
+def _migrate_notion_columns_if_needed(conn: sqlite3.Connection) -> None:
+    """Adiciona ``notion_page_id``, ``notion_attempts`` e
+    ``notion_last_error`` à tabela ``publicacoes`` se ainda não estiverem
+    presentes (banco pré-Fase-5).
+
+    SQLite não tem ``ADD COLUMN IF NOT EXISTS``, então fazemos detect via
+    ``PRAGMA table_info(publicacoes)`` e ALTER TABLE seletivo. Default
+    das colunas casa com o DDL canônico em ``_SCHEMA_DDL`` (notion_page_id
+    NULL, notion_attempts 0, notion_last_error NULL)."""
+    cols = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(publicacoes)").fetchall()
+    }
+    if "notion_page_id" not in cols:
+        conn.execute(
+            "ALTER TABLE publicacoes ADD COLUMN notion_page_id TEXT"
+        )
+        logger.info("DJE: migração Fase 5 — adicionada coluna notion_page_id")
+    if "notion_attempts" not in cols:
+        conn.execute(
+            "ALTER TABLE publicacoes ADD COLUMN notion_attempts "
+            "INTEGER NOT NULL DEFAULT 0"
+        )
+        logger.info(
+            "DJE: migração Fase 5 — adicionada coluna notion_attempts"
+        )
+    if "notion_last_error" not in cols:
+        conn.execute(
+            "ALTER TABLE publicacoes ADD COLUMN notion_last_error TEXT"
+        )
+        logger.info(
+            "DJE: migração Fase 5 — adicionada coluna notion_last_error"
+        )
+    # Garante o índice parcial mesmo em DBs onde o ALTER TABLE só
+    # acabou de criar a coluna (executescript anterior pode ter pulado
+    # o CREATE INDEX se a coluna ainda não existia).
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_publicacoes_notion_pending "
+        "ON publicacoes(notion_page_id) WHERE notion_page_id IS NULL"
+    )
 
 
 def get_connection(path: Path | None = None) -> sqlite3.Connection:
@@ -347,6 +412,177 @@ def set_flag(conn: sqlite3.Connection, key: str, value: str) -> None:
         (key, value, ts),
     )
     conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Sync Notion — Pós-Fase 5 (2026-05-03)
+# ---------------------------------------------------------------------------
+
+
+def count_publicacoes_pending_notion(conn: sqlite3.Connection) -> int:
+    """Conta publicações com ``notion_page_id IS NULL`` E
+    ``notion_attempts < 3`` — elegíveis pra envio no próximo ciclo."""
+    row = conn.execute(
+        "SELECT COUNT(*) AS n FROM publicacoes "
+        "WHERE notion_page_id IS NULL AND notion_attempts < 3"
+    ).fetchone()
+    return int(row["n"])
+
+
+def count_publicacoes_failed_notion(conn: sqlite3.Connection) -> int:
+    """Conta publicações ``presas`` (3+ falhas) — pra alerta no banner +
+    botão "Tentar reenviar falhas"."""
+    row = conn.execute(
+        "SELECT COUNT(*) AS n FROM publicacoes "
+        "WHERE notion_page_id IS NULL AND notion_attempts >= 3"
+    ).fetchone()
+    return int(row["n"])
+
+
+def count_publicacoes_sent_to_notion(conn: sqlite3.Connection) -> int:
+    """Conta publicações já enviadas (``notion_page_id`` não-NULL e
+    diferente do sentinela SKIPPED)."""
+    row = conn.execute(
+        "SELECT COUNT(*) AS n FROM publicacoes "
+        "WHERE notion_page_id IS NOT NULL AND notion_page_id != ?",
+        (NOTION_SKIPPED_SENTINEL,),
+    ).fetchone()
+    return int(row["n"])
+
+
+def fetch_pending_for_notion(
+    conn: sqlite3.Connection,
+    *,
+    include_failed: bool = False,
+) -> list[dict[str, Any]]:
+    """Retorna publicações pendentes pra envio Notion.
+
+    Default: ``notion_page_id IS NULL AND notion_attempts < 3`` (não
+    inclui as ``presas`` em 3+ falhas — caller pede via flag se quiser
+    forçar reenvio).
+
+    Ordem: ``data_disponibilizacao ASC, djen_id ASC`` — envia as mais
+    antigas primeiro pra preservar ordem cronológica no Notion.
+
+    Cada dict retornado tem o mesmo shape de ``fetch_all_publicacoes``
+    (payload mesclado com ``advogados_consultados_escritorio`` e
+    ``oabs_externas_consultadas``) acrescido de ``notion_attempts``.
+    """
+    where_clause = (
+        "WHERE notion_page_id IS NULL"
+        if include_failed
+        else "WHERE notion_page_id IS NULL AND notion_attempts < 3"
+    )
+    rows = conn.execute(
+        f"""
+        SELECT djen_id, hash, oabs_escritorio, oabs_externas,
+               numero_processo, data_disponibilizacao, sigla_tribunal,
+               payload_json, captured_at, captured_in_mode,
+               notion_page_id, notion_attempts, notion_last_error
+        FROM publicacoes
+        {where_clause}
+        ORDER BY data_disponibilizacao ASC, djen_id ASC
+        """,
+    ).fetchall()
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        payload = json.loads(row["payload_json"])
+        payload["advogados_consultados_escritorio"] = row["oabs_escritorio"]
+        payload["oabs_externas_consultadas"] = row["oabs_externas"] or ""
+        payload["notion_attempts"] = row["notion_attempts"]
+        out.append(payload)
+    return out
+
+
+def mark_publicacao_sent_to_notion(
+    conn: sqlite3.Connection,
+    djen_id: int,
+    notion_page_id: str,
+) -> None:
+    """Após sucesso na API: persiste o ``notion_page_id`` e limpa erros."""
+    conn.execute(
+        "UPDATE publicacoes SET notion_page_id = ?, notion_last_error = NULL "
+        "WHERE djen_id = ?",
+        (notion_page_id, djen_id),
+    )
+    conn.commit()
+
+
+def mark_publicacao_notion_failure(
+    conn: sqlite3.Connection,
+    djen_id: int,
+    error_msg: str,
+) -> None:
+    """Incrementa ``notion_attempts`` e grava ``notion_last_error``.
+    ``notion_page_id`` permanece NULL (continua pendente)."""
+    conn.execute(
+        "UPDATE publicacoes SET "
+        "notion_attempts = notion_attempts + 1, "
+        "notion_last_error = ? "
+        "WHERE djen_id = ?",
+        (str(error_msg)[:500], djen_id),
+    )
+    conn.commit()
+
+
+def mark_all_pending_notion_skipped(conn: sqlite3.Connection) -> int:
+    """Marca todas as publicações pendentes (``notion_page_id IS NULL``)
+    com ``notion_page_id = NOTION_SKIPPED_SENTINEL``. Usado pelo ramo
+    "Só publicações novas a partir de hoje" do modal de primeira carga.
+
+    Retorna número de linhas afetadas."""
+    cur = conn.execute(
+        "UPDATE publicacoes SET notion_page_id = ? "
+        "WHERE notion_page_id IS NULL",
+        (NOTION_SKIPPED_SENTINEL,),
+    )
+    conn.commit()
+    affected = cur.rowcount
+    logger.info(
+        "DJE.notion: %d publicações marcadas SKIPPED na primeira carga",
+        affected,
+    )
+    return affected
+
+
+def reset_notion_failed_attempts(conn: sqlite3.Connection) -> int:
+    """Zera ``notion_attempts`` e ``notion_last_error`` das publicações
+    presas (3+ falhas). Usado pelo botão "Tentar reenviar falhas" da UI.
+
+    Retorna número de linhas afetadas (= quantas voltam pra fila)."""
+    cur = conn.execute(
+        "UPDATE publicacoes SET "
+        "notion_attempts = 0, notion_last_error = NULL "
+        "WHERE notion_page_id IS NULL AND notion_attempts >= 3"
+    )
+    conn.commit()
+    affected = cur.rowcount
+    logger.info(
+        "DJE.notion: %d publicações tiveram attempts zerados (retry manual)",
+        affected,
+    )
+    return affected
+
+
+def count_sequencial_titulo(
+    conn: sqlite3.Connection,
+    sigla_tribunal: str,
+    data_disponibilizacao: str,
+) -> int:
+    """Calcula o sequencial N pro título do Notion: conta quantas
+    publicações já foram enviadas (``notion_page_id`` não-NULL e !=
+    SKIPPED) na mesma combinação ``(siglaTribunal, data_disponibilizacao)``,
+    e retorna count + 1.
+
+    Single-threaded → sem race conditions. Caller chama no momento de
+    montar o payload, antes da requisição."""
+    row = conn.execute(
+        "SELECT COUNT(*) AS n FROM publicacoes "
+        "WHERE sigla_tribunal = ? AND data_disponibilizacao = ? "
+        "AND notion_page_id IS NOT NULL AND notion_page_id != ?",
+        (sigla_tribunal, data_disponibilizacao, NOTION_SKIPPED_SENTINEL),
+    ).fetchone()
+    return int(row["n"]) + 1
 
 
 def fetch_publicacoes_by_ids(
