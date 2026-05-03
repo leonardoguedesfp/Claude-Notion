@@ -1178,3 +1178,205 @@ def test_R1_6_flush_omite_duplicatas_suprimidas_se_schema_nao_tem(
     # Mas Partes e Advogados sim
     assert "Partes" in props
     assert "Advogados intimados" in props
+
+
+# ===========================================================================
+# Wire — sync + dedup integrado
+# ===========================================================================
+
+
+from notion_bulk_edit.notion_api import NotionClient
+from notion_rpadv.services.dje_notion_sync import sincronizar_pendentes
+
+
+@pytest.fixture
+def cache_conn_round1(tmp_path):
+    """Cache conn vazio (sem processos cadastrados) — checkbox marca True."""
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        """
+        CREATE TABLE records (
+            base TEXT, page_id TEXT, data_json TEXT, updated_at REAL,
+            PRIMARY KEY (base, page_id)
+        )
+        """,
+    )
+    conn.commit()
+    yield conn
+    conn.close()
+
+
+def _client_returning_round1(page_ids: list[str]) -> MagicMock:
+    """Mock NotionClient para testes wire."""
+    client = MagicMock(spec=NotionClient)
+    client.create_page_in_data_source.side_effect = [
+        {"id": pid} for pid in page_ids
+    ]
+    client.update_page.side_effect = lambda page_id, props: {"id": page_id}
+    return client
+
+
+def test_R1_wire_par_real_so_envia_canonica_e_marca_duplicata(
+    dedup_dje_conn, cache_conn_round1,
+) -> None:
+    """Cenário ponta a ponta: 2 pubs com mesma chave canônica → API
+    cria página só pra 1ª; 2ª é marcada como duplicata sem chamar API."""
+    cnj = "0001234-56.2024.5.10.0001"
+    data = "2026-02-10"
+    tribunal = "TRT10"
+    tipo = "Acórdão"
+    texto = "Texto canônico " * 50
+
+    payload_base = {
+        "id": 100,
+        "hash": "hash-100",
+        "siglaTribunal": tribunal,
+        "data_disponibilizacao": data,
+        "numeroprocessocommascara": cnj,
+        "tipoDocumento": tipo,
+        "tipoComunicacao": "Intimação",
+        "texto": texto,
+        "destinatarios": [{"nome": "ACME", "polo": "ATIVO"}],
+        "destinatarioadvogados": [
+            {"advogado": {"numero_oab": "15523", "uf_oab": "DF"}}
+        ],
+    }
+    # 1ª pub (canônica)
+    dje_db.insert_publicacao(
+        dedup_dje_conn,
+        djen_id=100, hash_="hash-100",
+        oabs_escritorio="Ricardo (15523/DF)", oabs_externas="",
+        numero_processo=cnj, data_disponibilizacao=data,
+        sigla_tribunal=tribunal, payload=payload_base,
+        mode=dje_db.CAPTURE_MODE_PADRAO,
+    )
+    # 2ª pub (duplicata) — mesmo hash NÃO funciona (UNIQUE), usar outro
+    payload_dup = {**payload_base, "id": 101, "hash": "hash-101"}
+    dje_db.insert_publicacao(
+        dedup_dje_conn,
+        djen_id=101, hash_="hash-101",
+        oabs_escritorio="Leonardo (36129/DF)", oabs_externas="",
+        numero_processo=cnj, data_disponibilizacao=data,
+        sigla_tribunal=tribunal, payload=payload_dup,
+        mode=dje_db.CAPTURE_MODE_PADRAO,
+    )
+
+    # 1ª chamada API → page-uuid-canon; 2ª NÃO acontece (dedup)
+    client = _client_returning_round1(["page-uuid-canon"])
+    out = sincronizar_pendentes(
+        client=client,
+        dje_conn=dedup_dje_conn,
+        cache_conn=cache_conn_round1,
+        sleep_ms=lambda _: None,
+        sleep=lambda _: None,
+    )
+    # Sucesso: 1 enviada, 1 duplicata
+    assert out.sent == 1
+    assert out.duplicates_supprimidas == 1
+    # Apenas 1 chamada de create
+    assert client.create_page_in_data_source.call_count == 1
+    # Update_page chamado 1x (flush da canônica)
+    assert client.update_page.call_count == 1
+    args, _ = client.update_page.call_args
+    assert args[0] == "page-uuid-canon"
+
+    # Estado do banco
+    row100 = dedup_dje_conn.execute(
+        "SELECT notion_page_id, dup_chave, dup_canonical_djen_id "
+        "FROM publicacoes WHERE djen_id=100"
+    ).fetchone()
+    assert row100["notion_page_id"] == "page-uuid-canon"
+    assert row100["dup_chave"] is not None
+    assert row100["dup_canonical_djen_id"] is None  # canônica
+
+    row101 = dedup_dje_conn.execute(
+        "SELECT notion_page_id, dup_chave, dup_canonical_djen_id "
+        "FROM publicacoes WHERE djen_id=101"
+    ).fetchone()
+    assert row101["notion_page_id"] == "page-uuid-canon"  # compartilha
+    assert row101["dup_chave"] == row100["dup_chave"]
+    assert row101["dup_canonical_djen_id"] == 100
+
+    # Pendentes apagados após flush
+    assert dje_db.count_dup_pendentes(dedup_dje_conn) == 0
+
+
+def test_R1_wire_pub_sem_cnj_nao_passa_por_dedup(
+    dedup_dje_conn, cache_conn_round1,
+) -> None:
+    """D-2: pub sem CNJ → SEM_DEDUP → envia direto sem persistir chave."""
+    payload = {
+        "id": 200,
+        "hash": "h-200",
+        "siglaTribunal": "TRT10",
+        "data_disponibilizacao": "2026-02-10",
+        # NB: numeroprocessocommascara ausente
+        "numero_processo": None,
+        "tipoDocumento": "Acórdão",
+        "tipoComunicacao": "Intimação",
+        "texto": "x",
+        "destinatarios": [],
+        "destinatarioadvogados": [],
+    }
+    dje_db.insert_publicacao(
+        dedup_dje_conn,
+        djen_id=200, hash_="h-200",
+        oabs_escritorio="", oabs_externas="",
+        numero_processo=None,
+        data_disponibilizacao="2026-02-10",
+        sigla_tribunal="TRT10", payload=payload,
+        mode=dje_db.CAPTURE_MODE_PADRAO,
+    )
+    client = _client_returning_round1(["page-sem-dedup"])
+    out = sincronizar_pendentes(
+        client=client, dje_conn=dedup_dje_conn,
+        cache_conn=cache_conn_round1,
+        sleep_ms=lambda _: None, sleep=lambda _: None,
+    )
+    assert out.sent == 1
+    assert out.duplicates_supprimidas == 0
+    # Pub enviada mas SEM chave persistida
+    row = dedup_dje_conn.execute(
+        "SELECT notion_page_id, dup_chave FROM publicacoes WHERE djen_id=200"
+    ).fetchone()
+    assert row["notion_page_id"] == "page-sem-dedup"
+    assert row["dup_chave"] is None
+
+
+def test_R1_wire_outcome_inclui_canonicas_atualizadas(
+    dedup_dje_conn, cache_conn_round1,
+) -> None:
+    """Outcome do sync inclui canonicas_atualizadas refletindo o flush."""
+    cnj = "0001234-56.2024.5.10.0001"
+    payload = {
+        "id": 100, "hash": "h-100", "siglaTribunal": "TRT10",
+        "data_disponibilizacao": "2026-02-10",
+        "numeroprocessocommascara": cnj,
+        "tipoDocumento": "Acórdão", "tipoComunicacao": "Intimação",
+        "texto": "Texto", "destinatarios": [],
+        "destinatarioadvogados": [],
+    }
+    dje_db.insert_publicacao(
+        dedup_dje_conn, djen_id=100, hash_="h-100",
+        oabs_escritorio="", oabs_externas="",
+        numero_processo=cnj, data_disponibilizacao="2026-02-10",
+        sigla_tribunal="TRT10", payload=payload,
+        mode=dje_db.CAPTURE_MODE_PADRAO,
+    )
+    payload_dup = {**payload, "id": 101, "hash": "h-101"}
+    dje_db.insert_publicacao(
+        dedup_dje_conn, djen_id=101, hash_="h-101",
+        oabs_escritorio="", oabs_externas="",
+        numero_processo=cnj, data_disponibilizacao="2026-02-10",
+        sigla_tribunal="TRT10", payload=payload_dup,
+        mode=dje_db.CAPTURE_MODE_PADRAO,
+    )
+    client = _client_returning_round1(["page-canon"])
+    out = sincronizar_pendentes(
+        client=client, dje_conn=dedup_dje_conn,
+        cache_conn=cache_conn_round1,
+        sleep_ms=lambda _: None, sleep=lambda _: None,
+    )
+    assert out.canonicas_atualizadas == 1
+    assert out.canonicas_404 == 0

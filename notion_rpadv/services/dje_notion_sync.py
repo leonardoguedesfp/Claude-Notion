@@ -39,6 +39,13 @@ from notion_bulk_edit.notion_api import (
     NotionRateLimitError,
 )
 from notion_rpadv.services import dje_db
+from notion_rpadv.services.dje_dedup import (
+    TipoDestino,
+    determinar_destino,
+    flush_atualizacoes_canonicas,
+    marcar_como_canonica,
+    marcar_como_duplicata,
+)
 from notion_rpadv.services.dje_notion_constants import (
     NOTION_MAX_RETRY_ATTEMPTS,
     NOTION_PUBLICACOES_DATA_SOURCE_ID,
@@ -62,6 +69,10 @@ class NotionSyncOutcome:
     elapsed_seconds: float = 0.0
     cancelled: bool = False
     errors_sample: list[str] = field(default_factory=list)
+    # Round 1: estatísticas do dedup (1.6)
+    duplicates_supprimidas: int = 0  # publicações detectadas como duplicatas (sem nova página)
+    canonicas_atualizadas: int = 0   # canônicas que receberam flush de pendentes
+    canonicas_404: int = 0           # canônicas deletadas manualmente do Notion (D-8)
 
 
 def _sleep_ms(ms: int) -> None:
@@ -129,6 +140,7 @@ def sincronizar_pendentes(
     is_cancelled: Callable[[], bool] | None = None,
     sleep_ms: Callable[[int], None] = _sleep_ms,
     sleep: Callable[[float], None] = time.sleep,
+    schema_tem_duplicatas_suprimidas: bool = False,
 ) -> NotionSyncOutcome:
     """Loop principal de sincronização. Single-threaded — caller que
     queira rodar em thread separada deve chamar daqui dentro do
@@ -136,6 +148,12 @@ def sincronizar_pendentes(
 
     ``sleep_ms``/``sleep`` injetáveis pra teste determinístico (sem
     espera real).
+
+    ``schema_tem_duplicatas_suprimidas`` (Round 1, 2026-05-03): caller
+    deve detectar via ``client.get_data_source(...)`` antes de chamar
+    e passar ``True`` se a property ``Duplicatas suprimidas`` foi criada
+    no Notion (Round 2). Default ``False`` — flush ainda envia merge de
+    Partes + Advogados, só não inclui o histórico de duplicatas.
     """
     inicio = time.monotonic()
     outcome = NotionSyncOutcome()
@@ -159,10 +177,6 @@ def sincronizar_pendentes(
                 on_log("Notion: envio cancelado pelo usuário.")
             break
 
-        if not first_request:
-            sleep_ms(NOTION_RATE_LIMIT_DELAY_MS)
-        first_request = False
-
         djen_id = int(pub.get("id") or 0)
         if djen_id == 0:
             # Defesa: row sem ``id`` não conseguimos rastrear no banco.
@@ -173,6 +187,55 @@ def sincronizar_pendentes(
                 on_progress(idx, total)
             continue
 
+        # Round 1 (1.6): detecção de duplicata ANTES da chamada API.
+        # SEM_DEDUP (CNJ ausente, D-2) → envia normal sem persistir chave.
+        # NOVA_CANONICA → envia normal + persiste chave após sucesso.
+        # DUPLICATA_DE → não chama API, marca + insere em dup_pendentes.
+        try:
+            destino = determinar_destino(pub, dje_conn)
+        except Exception as exc:  # noqa: BLE001
+            # Falha do detector NÃO bloqueia o envio — degrada pra
+            # comportamento legacy (cria página sem dedup).
+            logger.warning(
+                "DJE.sync: falha no detector de duplicatas em djen=%d: %s "
+                "— enviando sem dedup",
+                djen_id, exc,
+            )
+            destino = None
+
+        if destino is not None and destino.tipo == TipoDestino.DUPLICATA_DE:
+            try:
+                marcar_como_duplicata(
+                    dje_conn,
+                    publicacao_duplicata=pub,
+                    canonica_row=destino.canonica,
+                    chave=destino.chave,
+                )
+                outcome.duplicates_supprimidas += 1
+                if on_log is not None:
+                    canon_djen = destino.canonica["djen_id"]
+                    on_log(
+                        f"Notion: ↳ djen={djen_id} é duplicata da canônica "
+                        f"djen={canon_djen} (suprimida sem nova página)",
+                    )
+            except Exception as exc:  # noqa: BLE001
+                outcome.failed += 1
+                err_msg = f"{type(exc).__name__}: {exc}"
+                dje_db.mark_publicacao_notion_failure(dje_conn, djen_id, err_msg)
+                if on_log is not None:
+                    on_log(
+                        f"Notion: ⚠ falha ao marcar djen={djen_id} como "
+                        f"duplicata: {err_msg}",
+                    )
+            if on_progress is not None:
+                on_progress(idx, total)
+            continue  # próxima pub — sem rate-limit (sem chamada API)
+
+        # Aqui é envio normal (NOVA_CANONICA ou SEM_DEDUP).
+        if not first_request:
+            sleep_ms(NOTION_RATE_LIMIT_DELAY_MS)
+        first_request = False
+
         try:
             payload = montar_payload_publicacao(
                 pub, dje_conn=dje_conn, cache_conn=cache_conn,
@@ -181,6 +244,11 @@ def sincronizar_pendentes(
                 client, payload, sleep=sleep,
             )
             dje_db.mark_publicacao_sent_to_notion(dje_conn, djen_id, page_id)
+            # Persiste chave apenas se a pub teve chave gerada (NOVA_CANONICA).
+            if destino is not None and destino.tipo == TipoDestino.NOVA_CANONICA:
+                marcar_como_canonica(
+                    dje_conn, djen_id=djen_id, chave=destino.chave,
+                )
             outcome.sent += 1
             if on_log is not None:
                 titulo = payload["_meta"]["titulo"]
@@ -208,12 +276,40 @@ def sincronizar_pendentes(
         if on_progress is not None:
             on_progress(idx, total)
 
+    # Round 1: flush das atualizações de canônicas com pendentes.
+    # Idempotente: se nada pendente, no-op. Não conta nos rate-limits do
+    # loop principal (chama na own thread).
+    try:
+        flush_outcome = flush_atualizacoes_canonicas(
+            client=client,
+            conn=dje_conn,
+            schema_tem_duplicatas_suprimidas=schema_tem_duplicatas_suprimidas,
+            on_log=on_log,
+        )
+        outcome.canonicas_atualizadas = flush_outcome.canonicas_atualizadas
+        outcome.canonicas_404 = flush_outcome.canonicas_404
+        outcome.errors_sample.extend(flush_outcome.erros_sample)
+    except NotionAuthError as exc:
+        outcome.errors_sample.append(f"AUTH (flush): {exc}")
+        if on_log is not None:
+            on_log(f"Notion: ⚠ flush abortado por token inválido: {exc}")
+    except Exception as exc:  # noqa: BLE001
+        # Flush é best-effort — falha não compromete pubs já enviadas.
+        logger.warning("DJE.sync: falha no flush de canônicas: %s", exc)
+        if on_log is not None:
+            on_log(f"Notion: ⚠ flush de canônicas falhou: {exc}")
+
     outcome.stuck_after = dje_db.count_publicacoes_failed_notion(dje_conn)
     outcome.elapsed_seconds = time.monotonic() - inicio
     if on_log is not None:
+        partes_resumo = [
+            f"{outcome.sent} enviadas",
+            f"{outcome.duplicates_supprimidas} duplicatas suprimidas",
+            f"{outcome.failed} falharam",
+            f"{outcome.stuck_after} presas",
+        ]
         on_log(
-            f"Notion: envio concluído — {outcome.sent} enviadas, "
-            f"{outcome.failed} falharam, {outcome.stuck_after} presas "
+            f"Notion: envio concluído — {', '.join(partes_resumo)} "
             f"(em {outcome.elapsed_seconds:.1f}s)",
         )
     return outcome
