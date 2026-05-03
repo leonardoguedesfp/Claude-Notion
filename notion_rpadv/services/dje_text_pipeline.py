@@ -155,3 +155,184 @@ def truncar_texto_inline(
     else:
         ponto_corte = corte_max
     return s[:ponto_corte].rstrip() + marcador
+
+
+# ===========================================================================
+# 1.4 — Block split com detecção de seções lógicas
+# ===========================================================================
+
+#: Limite duro de blocos por chamada na API Notion: 100. Usamos 90 pra
+#: deixar margem (overflow é enviado via ``append_block_children``).
+LIMITE_BLOCOS_INICIAIS: int = 90
+
+#: Tamanho-alvo (chars) ao agrupar parágrafos em um bloco paragraph.
+#: Folga até o limite duro de 2000 do Notion permite escrever buffers
+#: confortáveis sem rodar atrás do limite.
+TAMANHO_PARAGRAFO_ALVO: int = 1500
+
+#: Limite duro do Notion API por bloco rich_text.
+NOTION_BLOCK_HARD_LIMIT: int = 2000
+
+#: Heurística de detecção de seções lógicas — palavras-chave que aparecem
+#: SOZINHAS na linha (mark + start + end com possível espaço) em
+#: acórdãos/decisões/sentenças. Case-insensitive. Pode capturar falsos
+#: positivos em pautas (que repetem "VOTO" como tag), por isso é usada
+#: apenas como heurística — quando não detecta seções, faz fallback pra
+#: agrupamento por parágrafos.
+_SECOES_LOGICAS_RE: re.Pattern[str] = re.compile(
+    r"^(EMENTA|RELATÓRIO|RELATORIO|VOTO|DISPOSITIVO|"
+    r"CONCLUSÃO|CONCLUSAO|ACÓRDÃO|ACORDAO|"
+    r"FUNDAMENTAÇÃO|FUNDAMENTACAO)\s*$",
+    re.MULTILINE | re.IGNORECASE,
+)
+
+
+def _heading3_block(titulo: str) -> dict:
+    """Bloco heading_3 com o título da seção em uppercase canônico."""
+    return {
+        "object": "block",
+        "type": "heading_3",
+        "heading_3": {
+            "rich_text": [
+                {"type": "text", "text": {"content": titulo}},
+            ],
+        },
+    }
+
+
+def _paragraph_block(content: str) -> dict:
+    """Bloco paragraph — chama-se DEPOIS de garantir que ``content`` cabe
+    em ``NOTION_BLOCK_HARD_LIMIT`` chars."""
+    return {
+        "object": "block",
+        "type": "paragraph",
+        "paragraph": {
+            "rich_text": [
+                {"type": "text", "text": {"content": content}},
+            ],
+        },
+    }
+
+
+def _split_chunk_em_palavra(texto: str, limite: int) -> list[str]:
+    """Divide ``texto`` em chunks ≤ ``limite`` chars cada, preferindo
+    cortar em ``\\n`` ou espaço próximo do limite (janela de 80 chars).
+    Sem espaço/quebra próximo: corta cru."""
+    if len(texto) <= limite:
+        return [texto]
+    out: list[str] = []
+    pos = 0
+    while pos < len(texto):
+        end = min(pos + limite, len(texto))
+        if end == len(texto):
+            out.append(texto[pos:end])
+            break
+        # Tenta cortar em \n primeiro (preferido), depois espaço.
+        janela_inicio = max(pos, end - 80)
+        janela = texto[janela_inicio:end]
+        cut_rel = janela.rfind("\n")
+        if cut_rel < 0:
+            cut_rel = janela.rfind(" ")
+        if cut_rel >= 0:
+            cut_abs = janela_inicio + cut_rel
+            out.append(texto[pos:cut_abs])
+            pos = cut_abs + 1  # pula o separador
+        else:
+            out.append(texto[pos:end])
+            pos = end
+    return [c for c in out if c]
+
+
+def _agrupar_em_paragrafos(texto: str) -> list[dict]:
+    """Recebe texto sem heading e devolve lista de blocos paragraph
+    agrupando parágrafos consecutivos até ~``TAMANHO_PARAGRAFO_ALVO``.
+
+    Parágrafos longos (>= NOTION_BLOCK_HARD_LIMIT) são SPLIT em múltiplos
+    blocos sem perda de conteúdo. Vazio devolve lista vazia.
+    """
+    if not texto:
+        return []
+    paragrafos_brutos = re.split(r"\n\s*\n", texto)
+    blocos: list[dict] = []
+    buffer: list[str] = []
+    buffer_len = 0
+
+    def _flush_buffer() -> None:
+        nonlocal buffer, buffer_len
+        if not buffer:
+            return
+        joined = "\n\n".join(buffer)
+        for chunk in _split_chunk_em_palavra(joined, NOTION_BLOCK_HARD_LIMIT):
+            if chunk.strip():
+                blocos.append(_paragraph_block(chunk))
+        buffer = []
+        buffer_len = 0
+
+    for p in paragrafos_brutos:
+        p = p.strip()
+        if not p:
+            continue
+        # Parágrafo único maior que o alvo? Flusha buffer e emite isolado
+        # (ainda sujeito a split em chunks de ≤ NOTION_BLOCK_HARD_LIMIT).
+        if len(p) >= TAMANHO_PARAGRAFO_ALVO:
+            _flush_buffer()
+            for chunk in _split_chunk_em_palavra(p, NOTION_BLOCK_HARD_LIMIT):
+                if chunk.strip():
+                    blocos.append(_paragraph_block(chunk))
+            continue
+        # Caberia no buffer atual?
+        if buffer_len + len(p) + 2 > TAMANHO_PARAGRAFO_ALVO and buffer:
+            _flush_buffer()
+        buffer.append(p)
+        buffer_len += len(p) + 2
+
+    _flush_buffer()
+    return blocos
+
+
+def _detectar_secoes(texto: str) -> list[tuple[str | None, str]]:
+    """Devolve ``[(titulo_uppercase_ou_None, conteudo), ...]`` segmentando
+    pelas seções lógicas detectadas. Lista vazia → não detectou nenhuma
+    (caller faz fallback pra agrupamento por parágrafos)."""
+    matches = list(_SECOES_LOGICAS_RE.finditer(texto))
+    if not matches:
+        return []
+    secoes: list[tuple[str | None, str]] = []
+    # Preâmbulo (texto antes da 1ª seção)
+    if matches[0].start() > 0:
+        preambulo = texto[: matches[0].start()].strip()
+        if preambulo:
+            secoes.append((None, preambulo))
+    for i, m in enumerate(matches):
+        titulo = m.group(0).strip().upper()
+        ini = m.end()
+        fim = matches[i + 1].start() if i + 1 < len(matches) else len(texto)
+        conteudo = texto[ini:fim].strip()
+        if conteudo:
+            secoes.append((titulo, conteudo))
+    return secoes
+
+
+def quebrar_em_blocos(texto: str | None) -> list[dict]:
+    """Recebe texto puro (já pré-processado por 1.7) e devolve lista de
+    blocos Notion (heading_3 quando há seções detectadas + paragraphs).
+
+    Se nenhuma seção é detectada, agrupa diretamente em parágrafos sem
+    headings.
+
+    Vazio → lista vazia. Caller é responsável por adicionar blocos
+    "wrapper" (heading_2 "Texto da publicação", "Observações", etc.)
+    em volta destes.
+    """
+    if not texto:
+        return []
+    s = str(texto)
+    secoes = _detectar_secoes(s)
+    if not secoes:
+        return _agrupar_em_paragrafos(s)
+    blocos: list[dict] = []
+    for titulo, conteudo in secoes:
+        if titulo:
+            blocos.append(_heading3_block(titulo))
+        blocos.extend(_agrupar_em_paragrafos(conteudo))
+    return blocos

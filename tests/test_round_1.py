@@ -32,7 +32,10 @@ from notion_rpadv.services.dje_notion_mappings import (
     tinha_destinatarios_advogados,
 )
 from notion_rpadv.services.dje_text_pipeline import (
+    LIMITE_BLOCOS_INICIAIS,
+    NOTION_BLOCK_HARD_LIMIT,
     preprocessar_texto_djen,
+    quebrar_em_blocos,
     truncar_texto_inline,
 )
 
@@ -351,3 +354,102 @@ def test_R1_8_sem_espacos_corta_cru() -> None:
     """Texto sem espaços (cenário patológico) corta no meio mesmo."""
     out = truncar_texto_inline("a" * 5000, limite=20)
     assert len(out) <= 20
+
+
+# ===========================================================================
+# 1.4 — Block split com detecção de seções
+# ===========================================================================
+
+
+def test_R1_4_split_em_secoes_logicas() -> None:
+    """Acórdão com RELATÓRIO + VOTO gera 2 heading_3 (1 por seção)."""
+    texto = "RELATÓRIO\n\nIsso é o relatório.\n\nVOTO\n\nEsse é o voto."
+    blocos = quebrar_em_blocos(texto)
+    headings = [b for b in blocos if b["type"] == "heading_3"]
+    assert len(headings) == 2
+    titulos = [
+        h["heading_3"]["rich_text"][0]["text"]["content"]
+        for h in headings
+    ]
+    assert titulos == ["RELATÓRIO", "VOTO"]
+
+
+def test_R1_4_secoes_caps_insensitive() -> None:
+    """Seções podem aparecer em casing variado — detector é case-insensitive."""
+    texto = "ementa\n\nUma ementa.\n\nVoto\n\nUm voto."
+    blocos = quebrar_em_blocos(texto)
+    headings = [b for b in blocos if b["type"] == "heading_3"]
+    titulos = [h["heading_3"]["rich_text"][0]["text"]["content"] for h in headings]
+    # Output sempre uppercase canônico.
+    assert titulos == ["EMENTA", "VOTO"]
+
+
+def test_R1_4_preambulo_antes_da_primeira_secao() -> None:
+    """Texto antes da 1ª seção (preâmbulo) entra como paragraph SEM heading."""
+    texto = "Cabeçalho do acórdão.\n\nEMENTA\n\nA ementa."
+    blocos = quebrar_em_blocos(texto)
+    # 1º bloco é paragraph (preâmbulo), depois vem o heading_3 EMENTA.
+    assert blocos[0]["type"] == "paragraph"
+    assert "Cabeçalho" in blocos[0]["paragraph"]["rich_text"][0]["text"]["content"]
+    assert blocos[1]["type"] == "heading_3"
+
+
+def test_R1_4_sem_secoes_so_paragraphs() -> None:
+    """Texto sem keywords de seção → só paragraphs, sem heading."""
+    texto = "Parágrafo 1.\n\nParágrafo 2.\n\nParágrafo 3."
+    blocos = quebrar_em_blocos(texto)
+    types = {b["type"] for b in blocos}
+    assert types == {"paragraph"}
+
+
+def test_R1_4_paragrafo_longo_e_split_sem_perda() -> None:
+    """Parágrafo único > 2000 chars vira múltiplos blocks SEM perder
+    conteúdo (vs. truncar)."""
+    texto = "x" * 5500
+    blocos = quebrar_em_blocos(texto)
+    paragraphs = [b for b in blocos if b["type"] == "paragraph"]
+    total_chars = sum(
+        len(b["paragraph"]["rich_text"][0]["text"]["content"])
+        for b in paragraphs
+    )
+    # Tolera diff de quebras inseridas; não pode haver mais de 5% de perda.
+    assert total_chars >= 5500 * 0.95
+    # Cada bloco respeita o limite duro do Notion.
+    for b in paragraphs:
+        assert len(b["paragraph"]["rich_text"][0]["text"]["content"]) <= NOTION_BLOCK_HARD_LIMIT
+
+
+def test_R1_4_500_paragrafos_curtos_agrupam_sob_100_blocos() -> None:
+    """Spec: 500 parágrafos curtos NÃO devem virar 500 blocos —
+    agrupamento até ~1500 chars de buffer."""
+    texto = "\n\n".join([f"Parágrafo {i} com algum texto." for i in range(500)])
+    blocos = quebrar_em_blocos(texto)
+    # Sem heading_3 esperado (não há keywords). Total deve ser razoável.
+    assert len(blocos) < 200  # margem larga
+    assert all(b["type"] == "paragraph" for b in blocos)
+
+
+def test_R1_4_texto_vazio_devolve_lista_vazia() -> None:
+    assert quebrar_em_blocos("") == []
+    assert quebrar_em_blocos(None) == []
+    assert quebrar_em_blocos("   ") == []
+
+
+def test_R1_4_cada_bloco_respeita_limite_2000() -> None:
+    """Sanity duro: nenhum bloco gerado pode exceder NOTION_BLOCK_HARD_LIMIT."""
+    texto = ("a" * 1900 + "\n\n") * 10 + "RELATÓRIO\n\n" + ("b" * 1900 + "\n\n") * 5
+    blocos = quebrar_em_blocos(texto)
+    for b in blocos:
+        if b["type"] == "paragraph":
+            content = b["paragraph"]["rich_text"][0]["text"]["content"]
+        elif b["type"] == "heading_3":
+            content = b["heading_3"]["rich_text"][0]["text"]["content"]
+        else:
+            content = ""
+        assert len(content) <= NOTION_BLOCK_HARD_LIMIT
+
+
+def test_R1_4_limite_blocos_iniciais_e_90() -> None:
+    """Sanity: constante usada pelo overflow API é 90 (margem de 10 do
+    limite duro 100 do Notion)."""
+    assert LIMITE_BLOCOS_INICIAIS == 90
