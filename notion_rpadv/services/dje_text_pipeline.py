@@ -336,3 +336,206 @@ def quebrar_em_blocos(texto: str | None) -> list[dict]:
             blocos.append(_heading3_block(titulo))
         blocos.extend(_agrupar_em_paragrafos(conteudo))
     return blocos
+
+
+# ===========================================================================
+# 1.5 — Filtragem inteligente Pautas TJDFT + Truncamento simples
+# ===========================================================================
+
+#: Limite de bytes (chars) abaixo do qual a publicação passa intacta.
+#: Acima disso, no caso A entra na filtragem; no caso B, em truncamento
+#: simples + callout pra certidão oficial DJEN.
+LIMITE_TRUNCAMENTO_BYTES: int = 80_000
+
+#: Limite mínimo de tamanho pra disparar filtragem da pauta TJDFT.
+#: Pautas curtas (single-process, < 5KB) não disparam — passam intactas.
+PAUTA_FILTRO_MIN_BYTES: int = 5_000
+
+#: Tipos canônicos (após 1.1) que disparam filtragem em pautas integrais.
+PAUTA_TJDFT_TIPOS_DOC: frozenset[str] = frozenset({
+    "Pauta de Julgamento",
+    # Variantes pré-canônicas (caller pode passar bruto ou canônico).
+    "PAUTA DE JULGAMENTOS",
+})
+
+#: 12 OABs do escritório com sufixo opcional ``-A``/``-S`` (Aprovado/Suplente).
+#: Aceita 5 OU 6 dígitos (zeros à esquerda) — DJEN às vezes serializa
+#: ``DF015523``, ``DF15523``, ``DF15523-A``, ``DF015523-A``.
+_OAB_ESCRITORIO_RE: re.Pattern[str] = re.compile(
+    r"\bDF\s*(?:0*15523|0*36129|0*48468|0*20120|0*38809|0*75799|"
+    r"0*65089|0*81225|0*37654|0*39857|0*84703|0*79658)\b(?:-[A-Z])?",
+    re.IGNORECASE,
+)
+
+#: Detecta o início de um bloco "Processo\n0000000-00.AAAA..." em pautas
+#: TJDFT integrais (após pré-processamento). Sem capturar o CNJ inteiro
+#: — só precisa da posição do início do bloco.
+_PROCESSO_BLOCO_RE: re.Pattern[str] = re.compile(
+    r"\nProcesso\n\d{7}-\d{2}\.\d{4}",
+)
+
+
+def deve_filtrar_pauta_tjdft(
+    tribunal: str | None,
+    tipo_documento: str | None,
+    texto: str | None,
+) -> bool:
+    """``True`` se a publicação se qualifica pra filtragem inteligente
+    (caso A do 1.5): tribunal=TJDFT + tipo=Pauta de Julgamento (canônico
+    OU variante CAPS) + texto > 5000 chars.
+
+    Pautas pequenas (single-process) e pautas de outros tribunais não
+    disparam.
+    """
+    if not tribunal or not tipo_documento or not texto:
+        return False
+    return (
+        str(tribunal).strip().upper() == "TJDFT"
+        and str(tipo_documento).strip() in PAUTA_TJDFT_TIPOS_DOC
+        and len(texto) > PAUTA_FILTRO_MIN_BYTES
+    )
+
+
+def filtrar_pauta_tjdft(texto: str) -> str | None:
+    """Aplica filtragem inteligente em pauta TJDFT integral. Devolve:
+
+    - ``texto filtrado`` (cabeçalho + apenas blocos com OAB escritório +
+      nota explicativa) — caso normal.
+    - ``texto compacto`` (cabeçalho + nota D-9) — caso 0 matches.
+    - ``None`` — falha de parsing (caller faz fallback pra truncamento
+      simples). Acontece se o regex de Processo não acha nenhum bloco
+      (texto não está no formato esperado).
+    """
+    starts = [m.start() for m in _PROCESSO_BLOCO_RE.finditer(texto)]
+    if not starts:
+        return None  # parsing falhou — sai pro fallback caso B
+
+    cabecalho = texto[: starts[0]].strip()
+    starts_marcados = [*starts, len(texto)]
+    blocos = [
+        texto[starts_marcados[i]:starts_marcados[i + 1]]
+        for i in range(len(starts_marcados) - 1)
+    ]
+
+    blocos_match = [b for b in blocos if _OAB_ESCRITORIO_RE.search(b)]
+
+    if blocos_match:
+        nota = (
+            f"\n\n[Pauta filtrada automaticamente: "
+            f"{len(blocos_match)} de {len(blocos)} processos pertencem ao escritório.]\n"
+        )
+        return cabecalho + nota + "".join(blocos_match)
+    # D-9: nenhum processo do escritório. Mantém cabeçalho + nota.
+    nota_d9 = (
+        f"\n\n[0 processos do escritório nesta pauta de {len(blocos)} processos. "
+        f"Pauta possivelmente capturada por menção tangencial. "
+        f"Conteúdo integral disponível na certidão oficial.]\n"
+    )
+    return cabecalho + nota_d9
+
+
+def truncar_corpo_simples(
+    texto: str,
+    *,
+    limite: int = LIMITE_TRUNCAMENTO_BYTES,
+) -> tuple[str, bool]:
+    """Truncamento simples pra textos > ``limite`` bytes. Tenta cortar
+    em ``\\n`` próximo do limite (janela de 200 chars) — se não achar,
+    corta cru. Devolve ``(texto_truncado, foi_truncado)``."""
+    if len(texto) <= limite:
+        return texto, False
+    janela_inicio = max(0, limite - 200)
+    janela = texto[janela_inicio:limite]
+    ultima_quebra = janela.rfind("\n")
+    if ultima_quebra >= 0:
+        ponto_corte = janela_inicio + ultima_quebra
+    else:
+        ponto_corte = limite
+    return texto[:ponto_corte].rstrip(), True
+
+
+def _callout_certidao(qtd_chars: int, hash_djen: str) -> dict:
+    """Block callout amarelo com ícone ⚠ apontando pra certidão oficial DJEN
+    quando o corpo foi truncado."""
+    url_certidao = (
+        f"https://comunicaapi.pje.jus.br/api/v1/comunicacao/{hash_djen}/certidao"
+    )
+    return {
+        "object": "block",
+        "type": "callout",
+        "callout": {
+            "icon": {"type": "emoji", "emoji": "⚠"},  # ⚠ (warning)
+            "color": "yellow_background",
+            "rich_text": [
+                {
+                    "type": "text",
+                    "text": {
+                        "content": (
+                            f"Texto truncado em {qtd_chars:,} caracteres. "
+                            f"Conteúdo integral em PDF assinado: "
+                        ),
+                    },
+                },
+                {
+                    "type": "text",
+                    "text": {
+                        "content": "Abrir certidão oficial DJEN",
+                        "link": {"url": url_certidao},
+                    },
+                },
+            ],
+        },
+    }
+
+
+def aplicar_caso_15(
+    *,
+    tribunal: str | None,
+    tipo_documento: str | None,
+    texto: str | None,
+    hash_djen: str | None,
+) -> tuple[str, list[dict]]:
+    """Pipeline completa do estágio 2 da text pipeline.
+
+    Recebe texto JÁ pré-processado (1.7) e devolve:
+
+    - ``texto_para_corpo``: texto que vai pro split em blocos (1.4).
+      Pode ser o original (publicação curta), filtrado (caso A) ou
+      truncado (caso B).
+    - ``blocos_callout``: lista (vazia ou 1 bloco) com callout
+      "abrir certidão" — anexar AO FIM dos blocos do corpo. Caso A
+      filtrado não emite callout (filtragem é suficiente). Caso B
+      sempre emite.
+
+    ``hash_djen`` é usado pra montar a URL da certidão. ``None`` ou vazio
+    desabilita o link mas mantém o callout texto-only.
+    """
+    if not texto:
+        return "", []
+    s = str(texto)
+
+    if deve_filtrar_pauta_tjdft(tribunal, tipo_documento, s):
+        filtrado = filtrar_pauta_tjdft(s)
+        if filtrado is not None:
+            logger.info(
+                "DJE.text.pipeline: pauta TJDFT filtrada (%d → %d chars)",
+                len(s), len(filtrado),
+            )
+            return filtrado, []
+        # Parsing falhou — segue pro caso B
+        logger.warning(
+            "DJE.text.pipeline: pauta TJDFT sem blocos Processo "
+            "detectáveis — caindo pra truncamento simples",
+        )
+
+    truncado, foi_truncado = truncar_corpo_simples(s)
+    if foi_truncado:
+        logger.info(
+            "DJE.text.pipeline: corpo truncado (%d → %d chars) — anexando "
+            "callout pra certidão",
+            len(s), len(truncado),
+        )
+        callout = _callout_certidao(len(truncado), hash_djen or "")
+        return truncado, [callout]
+
+    return s, []

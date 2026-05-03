@@ -33,9 +33,14 @@ from notion_rpadv.services.dje_notion_mappings import (
 )
 from notion_rpadv.services.dje_text_pipeline import (
     LIMITE_BLOCOS_INICIAIS,
+    LIMITE_TRUNCAMENTO_BYTES,
     NOTION_BLOCK_HARD_LIMIT,
+    aplicar_caso_15,
+    deve_filtrar_pauta_tjdft,
+    filtrar_pauta_tjdft,
     preprocessar_texto_djen,
     quebrar_em_blocos,
+    truncar_corpo_simples,
     truncar_texto_inline,
 )
 
@@ -453,3 +458,216 @@ def test_R1_4_limite_blocos_iniciais_e_90() -> None:
     """Sanity: constante usada pelo overflow API é 90 (margem de 10 do
     limite duro 100 do Notion)."""
     assert LIMITE_BLOCOS_INICIAIS == 90
+
+
+# ===========================================================================
+# 1.5 — Filtragem inteligente Pautas TJDFT + Truncamento simples
+# ===========================================================================
+
+
+def _pauta_sintetica(processos: list[tuple[str, list[str]]]) -> str:
+    """Gera uma pauta TJDFT sintética com formato real do DJEN
+    (após 1.7). Cada tupla é (cnj, [oab1, oab2, ...]) — OABs no formato
+    'DF15523-A' ou similar."""
+    cabecalho = (
+        "TRIBUNAL DE JUSTIÇA DO DISTRITO FEDERAL E TERRITÓRIOS\n"
+        "PAUTA DE JULGAMENTOS - 1ª Turma Cível\n"
+        "Sessão Virtual de 12/05/2026 a 19/05/2026\n"
+    )
+    blocos = []
+    for cnj, oabs in processos:
+        oab_str = "\n".join([f"NOME ADVOGADO {i + 1} - {oab}" for i, oab in enumerate(oabs)])
+        bloco = (
+            f"\nProcesso\n{cnj}\n\n"
+            f"Número de ordem\n1\n\n"
+            f"Órgão julgador\nGabinete Teste\n\n"
+            f"Polo Ativo\nPARTE TESTE\n\n"
+            f"Advogado(s) - Polo Ativo\n{oab_str}\n"
+        )
+        blocos.append(bloco)
+    return cabecalho + "".join(blocos) + "\n"
+
+
+def test_R1_5_deve_filtrar_so_em_pauta_tjdft_grande() -> None:
+    """Trigger: TJDFT + Pauta de Julgamento + > 5000 chars."""
+    grande = "x" * 6000
+    assert deve_filtrar_pauta_tjdft("TJDFT", "Pauta de Julgamento", grande) is True
+    assert deve_filtrar_pauta_tjdft("TJDFT", "PAUTA DE JULGAMENTOS", grande) is True
+    # Tribunal diferente: não filtra
+    assert deve_filtrar_pauta_tjdft("STJ", "Pauta de Julgamento", grande) is False
+    # Tipo diferente: não filtra
+    assert deve_filtrar_pauta_tjdft("TJDFT", "Acórdão", grande) is False
+    # Pequeno: não filtra
+    assert deve_filtrar_pauta_tjdft("TJDFT", "Pauta de Julgamento", "x" * 100) is False
+    # Inputs nulos: não filtra
+    assert deve_filtrar_pauta_tjdft(None, None, None) is False
+
+
+def test_R1_5_filtragem_pauta_tjdft_com_match_sintetica() -> None:
+    """Pauta com 1 escritório match em 3 processos: filtragem deixa 1 bloco."""
+    pauta = _pauta_sintetica([
+        ("0707739-37.2025.8.07.0001", ["DF99999"]),  # externo
+        ("0707740-37.2025.8.07.0001", ["DF15523-A", "DF36129-A"]),  # escritório
+        ("0707741-37.2025.8.07.0001", ["DF88888"]),  # externo
+    ])
+    # Padding pra ultrapassar 5000 chars (trigger)
+    pauta = pauta + ("x" * 6000)
+    resultado = filtrar_pauta_tjdft(pauta)
+    assert resultado is not None
+    assert "1 de 3 processos pertencem ao escritório" in resultado
+    # CNJ do match aparece, dos outros não
+    assert "0707740-37" in resultado
+    assert "0707739-37" not in resultado
+    assert "0707741-37" not in resultado
+    # Cabeçalho preservado
+    assert "PAUTA DE JULGAMENTOS" in resultado
+
+
+def test_R1_5_filtragem_pauta_d9_zero_matches() -> None:
+    """Pauta sem nenhum escritório match (D-9): nota explicativa."""
+    pauta = _pauta_sintetica([
+        ("0707739-37.2025.8.07.0001", ["DF99999"]),
+        ("0707740-37.2025.8.07.0001", ["DF88888"]),
+    ])
+    resultado = filtrar_pauta_tjdft(pauta)
+    assert resultado is not None
+    assert "0 processos do escritório" in resultado
+    assert "menção tangencial" in resultado
+    # Cabeçalho preservado mas nenhum CNJ
+    assert "0707739" not in resultado
+    assert "0707740" not in resultado
+
+
+def test_R1_5_filtragem_sem_blocos_processo_devolve_none() -> None:
+    """Se o regex de Processo não acha nenhum bloco, devolve None
+    (caller faz fallback caso B)."""
+    texto_sem_processos = "Texto qualquer sem blocos no formato esperado.\n" * 200
+    assert filtrar_pauta_tjdft(texto_sem_processos) is None
+
+
+def test_R1_5_oab_com_zeros_a_esquerda_e_sufixo_a_match() -> None:
+    """Regex aceita 5 ou 6 dígitos (zeros à esquerda) + sufixo opcional -A."""
+    pauta = _pauta_sintetica([
+        ("0707740-37.2025.8.07.0001", ["DF015523-A"]),  # 6 dígitos + -A
+    ])
+    resultado = filtrar_pauta_tjdft(pauta)
+    assert "1 de 1 processos" in resultado
+
+
+def test_R1_5_truncar_corpo_simples_curto_passa_intacto() -> None:
+    texto = "x" * 10_000
+    truncado, foi = truncar_corpo_simples(texto)
+    assert foi is False
+    assert truncado == texto
+
+
+def test_R1_5_truncar_corpo_simples_grande_corta() -> None:
+    texto = "x" * 100_000
+    truncado, foi = truncar_corpo_simples(texto)
+    assert foi is True
+    assert len(truncado) <= LIMITE_TRUNCAMENTO_BYTES
+
+
+def test_R1_5_truncar_corpo_simples_corta_em_quebra_se_possivel() -> None:
+    """Janela de 200 chars antes do limite procura por \\n — se acha,
+    corta lá. Resultado tem TODAS as linhas completas (nenhum corte
+    no meio de uma linha)."""
+    base = "linha que termina com newline.\n" * 4000  # >> 80KB
+    truncado, foi = truncar_corpo_simples(base)
+    assert foi is True
+    # Cabe no limite
+    assert len(truncado) <= LIMITE_TRUNCAMENTO_BYTES
+    # Todas as ocorrências da linha estão completas (nenhuma quebrada
+    # no meio): split em \n só devolve linha-padrão ou string vazia.
+    for linha in truncado.split("\n"):
+        assert linha == "linha que termina com newline." or linha == ""
+
+
+def test_R1_5_aplicar_caso_15_pauta_tjdft_filtrada() -> None:
+    """Caso A: pauta TJDFT > 5000 chars vira filtrado, sem callout."""
+    pauta = _pauta_sintetica([
+        ("0707739-37.2025.8.07.0001", ["DF15523-A"]),
+        ("0707740-37.2025.8.07.0001", ["DF99999"]),
+    ])
+    pauta = pauta + ("x" * 6000)  # ultrapassa 5000
+    corpo, callouts = aplicar_caso_15(
+        tribunal="TJDFT",
+        tipo_documento="Pauta de Julgamento",
+        texto=pauta,
+        hash_djen="abc123",
+    )
+    assert "1 de 2 processos" in corpo
+    assert callouts == []  # filtragem é suficiente
+
+
+def test_R1_5_aplicar_caso_15_acordao_grande_trunca_e_callout() -> None:
+    """Caso B: acórdão TST > 80KB vira truncado + callout pra certidão."""
+    texto = "Texto do acórdão\n" * 20_000  # ~340KB
+    corpo, callouts = aplicar_caso_15(
+        tribunal="TST",
+        tipo_documento="Acórdão",
+        texto=texto,
+        hash_djen="abc123",
+    )
+    assert len(corpo) <= LIMITE_TRUNCAMENTO_BYTES
+    assert len(callouts) == 1
+    callout = callouts[0]
+    assert callout["type"] == "callout"
+    assert callout["callout"]["color"] == "yellow_background"
+    # Link pra certidão presente
+    rich_texts = callout["callout"]["rich_text"]
+    link_text = next(rt for rt in rich_texts if rt["text"].get("link"))
+    assert "abc123" in link_text["text"]["link"]["url"]
+
+
+def test_R1_5_aplicar_caso_15_pequeno_passa_intacto() -> None:
+    """Texto pequeno (caso C implícito): passa sem mudança, sem callout."""
+    texto = "Despacho curto."
+    corpo, callouts = aplicar_caso_15(
+        tribunal="TJDFT",
+        tipo_documento="Despacho",
+        texto=texto,
+        hash_djen="abc",
+    )
+    assert corpo == texto
+    assert callouts == []
+
+
+def test_R1_5_aplicar_caso_15_vazio_devolve_vazio() -> None:
+    corpo, callouts = aplicar_caso_15(
+        tribunal="TJDFT", tipo_documento="Acórdão",
+        texto=None, hash_djen="abc",
+    )
+    assert corpo == ""
+    assert callouts == []
+
+
+def test_R1_5_pauta_tjdft_pequena_nao_dispara_filtragem() -> None:
+    """Pauta TJDFT mas com texto < 5000 chars (single-process): caso C
+    (passa intacta), sem callout."""
+    pauta_pequena = _pauta_sintetica([
+        ("0707739-37.2025.8.07.0001", ["DF15523-A"]),
+    ])
+    assert len(pauta_pequena) < 5000
+    corpo, callouts = aplicar_caso_15(
+        tribunal="TJDFT",
+        tipo_documento="Pauta de Julgamento",
+        texto=pauta_pequena,
+        hash_djen="abc",
+    )
+    assert corpo == pauta_pequena
+    assert callouts == []
+
+
+def test_R1_5_pauta_tst_grande_cai_no_caso_b() -> None:
+    """Pautas STJ/TST/TRF1 NÃO filtram (caso A é só TJDFT). Se grande,
+    cai em truncamento simples + callout."""
+    texto = "Texto longo de pauta STJ.\n" * 10_000  # > 80KB
+    corpo, callouts = aplicar_caso_15(
+        tribunal="STJ",
+        tipo_documento="Pauta de Julgamento",
+        texto=texto,
+        hash_djen="abc",
+    )
+    assert len(corpo) <= LIMITE_TRUNCAMENTO_BYTES
+    assert len(callouts) == 1
