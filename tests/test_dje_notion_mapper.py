@@ -368,7 +368,9 @@ def test_payload_texto_truncado_em_inline_corpo_completo(
     )
     inline = payload["properties"]["Texto"]["rich_text"][0]["text"]["content"]
     assert len(inline) <= 2000
-    assert inline.endswith("...")
+    # Round 1 (1.8): marcador agora é " […]" (corte limpo em fronteira
+    # de palavra), substitui o "..." cru da Fase 5.
+    assert inline.endswith(" […]")
     # Children: pelo menos 3 blocks (5000 / 2000 ≈ 3 chunks).
     paragraphs = [b for b in payload["children"] if b["type"] == "paragraph"]
     assert len(paragraphs) >= 3
