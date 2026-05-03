@@ -55,6 +55,9 @@ from notion_rpadv.services.dje_notion_constants import (
 from notion_rpadv.services.dje_notion_mapper import (
     montar_payload_publicacao,
 )
+from notion_rpadv.services.dje_notion_schema import (
+    NotionSchemaCapabilities,
+)
 
 logger = logging.getLogger("dje.notion.sync")
 
@@ -140,7 +143,8 @@ def sincronizar_pendentes(
     is_cancelled: Callable[[], bool] | None = None,
     sleep_ms: Callable[[int], None] = _sleep_ms,
     sleep: Callable[[float], None] = time.sleep,
-    schema_tem_duplicatas_suprimidas: bool = False,
+    schema_tem_duplicatas_suprimidas: bool | None = None,
+    schema_caps: NotionSchemaCapabilities | None = None,
 ) -> NotionSyncOutcome:
     """Loop principal de sincronização. Single-threaded — caller que
     queira rodar em thread separada deve chamar daqui dentro do
@@ -149,14 +153,40 @@ def sincronizar_pendentes(
     ``sleep_ms``/``sleep`` injetáveis pra teste determinístico (sem
     espera real).
 
-    ``schema_tem_duplicatas_suprimidas`` (Round 1, 2026-05-03): caller
-    deve detectar via ``client.get_data_source(...)`` antes de chamar
-    e passar ``True`` se a property ``Duplicatas suprimidas`` foi criada
-    no Notion (Round 2). Default ``False`` — flush ainda envia merge de
-    Partes + Advogados, só não inclui o histórico de duplicatas.
+    ``schema_tem_duplicatas_suprimidas``: 3 casos:
+
+    - ``None`` (default): faz **detecção dinâmica** via
+      ``NotionSchemaCapabilities.from_notion`` no startup (1 fetch ao
+      Notion). Round 2 (2026-05-03) — substitui o opt-in manual.
+    - ``True`` / ``False`` explícito: caller força o valor — útil pra
+      testes ou pra evitar o fetch quando capabilities já foram
+      pré-detectadas (passa via ``schema_caps`` em vez disso).
+
+    ``schema_caps``: alternativa ao primeiro parâmetro. Caller que já
+    tem uma instância de ``NotionSchemaCapabilities`` (ex: detectada
+    no startup do app uma vez por sessão) pode passar aqui pra evitar
+    fetch duplicado. Tem precedência sobre ``schema_tem_duplicatas_suprimidas``.
     """
     inicio = time.monotonic()
     outcome = NotionSyncOutcome()
+
+    # Round 2 — resolve o flag de "Duplicatas suprimidas" antes do loop.
+    # Precedência: schema_caps > schema_tem_duplicatas_suprimidas (explicit) >
+    # auto-detect.
+    if schema_caps is not None:
+        flush_dups_flag = schema_caps.has_duplicatas_suprimidas
+    elif schema_tem_duplicatas_suprimidas is not None:
+        flush_dups_flag = schema_tem_duplicatas_suprimidas
+    else:
+        caps_detected = NotionSchemaCapabilities.from_notion(
+            client, NOTION_PUBLICACOES_DATA_SOURCE_ID,
+        )
+        flush_dups_flag = caps_detected.has_duplicatas_suprimidas
+        if on_log is not None:
+            on_log(
+                f"Notion: schema capabilities detectadas "
+                f"(has_duplicatas_suprimidas={flush_dups_flag})",
+            )
 
     pendentes = dje_db.fetch_pending_for_notion(dje_conn)
     total = len(pendentes)
@@ -278,12 +308,13 @@ def sincronizar_pendentes(
 
     # Round 1: flush das atualizações de canônicas com pendentes.
     # Idempotente: se nada pendente, no-op. Não conta nos rate-limits do
-    # loop principal (chama na own thread).
+    # loop principal (chama na own thread). ``flush_dups_flag`` foi
+    # resolvido no início (auto-detect ou explicit, ver Round 2).
     try:
         flush_outcome = flush_atualizacoes_canonicas(
             client=client,
             conn=dje_conn,
-            schema_tem_duplicatas_suprimidas=schema_tem_duplicatas_suprimidas,
+            schema_tem_duplicatas_suprimidas=flush_dups_flag,
             on_log=on_log,
         )
         outcome.canonicas_atualizadas = flush_outcome.canonicas_atualizadas
