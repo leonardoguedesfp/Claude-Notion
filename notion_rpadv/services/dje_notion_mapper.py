@@ -18,11 +18,9 @@ from typing import Any
 
 from notion_rpadv.services import dje_db
 from notion_rpadv.services.dje_notion_constants import (
-    NOTION_BLOCK_TEXT_LIMIT,
     NOTION_TEXTO_INLINE_LIMIT,
 )
 from notion_rpadv.services.dje_notion_mappings import (
-    ADVOGADOS_ESCRITORIO as _OABS_ESCRITORIO_TAGS,
     formatar_advogados_intimados,
     mapear_tipo_comunicacao,
     mapear_tipo_documento,

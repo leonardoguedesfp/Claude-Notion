@@ -15,11 +15,26 @@ Smoke integrado contra publicações reais fica em ``smoke_test_round_1.py``.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
+from notion_bulk_edit.notion_api import NotionAPIError, NotionClient
+from notion_rpadv.services import dje_db
+from notion_rpadv.services.dje_dedup import (
+    TipoDestino,
+    _merge_advogados,
+    _merge_partes,
+    calcular_chave_canonica,
+    calcular_chave_para_publicacao,
+    determinar_destino,
+    flush_atualizacoes_canonicas,
+    marcar_como_canonica,
+    marcar_como_duplicata,
+)
 from notion_rpadv.services.dje_notion_mappings import (
     ADVOGADOS_ESCRITORIO,
     MAPA_TIPO_COMUNICACAO,
@@ -31,6 +46,7 @@ from notion_rpadv.services.dje_notion_mappings import (
     mapear_tipo_documento,
     tinha_destinatarios_advogados,
 )
+from notion_rpadv.services.dje_notion_sync import sincronizar_pendentes
 from notion_rpadv.services.dje_text_pipeline import (
     LIMITE_BLOCOS_INICIAIS,
     LIMITE_TRUNCAMENTO_BYTES,
@@ -235,7 +251,6 @@ def test_R1_3_todas_as_12_oabs_estao_listadas() -> None:
 
 def test_R1_3_formato_dos_rotulos_e_consistente() -> None:
     """Todos os 12 rótulos têm formato 'Nome (NNNN/UF)'."""
-    import re
     pattern = re.compile(r"^[A-Za-zÀ-ú ]+ \(\d{3,6}/[A-Z]{2}\)$")
     for chave, rotulo in ADVOGADOS_ESCRITORIO.items():
         assert pattern.match(rotulo), (
@@ -678,24 +693,6 @@ def test_R1_5_pauta_tst_grande_cai_no_caso_b() -> None:
 # ===========================================================================
 
 
-from unittest.mock import MagicMock
-
-from notion_rpadv.services import dje_db
-from notion_rpadv.services.dje_dedup import (
-    FlushOutcome,
-    ResultadoDedup,
-    TipoDestino,
-    _merge_advogados,
-    _merge_partes,
-    calcular_chave_canonica,
-    calcular_chave_para_publicacao,
-    determinar_destino,
-    flush_atualizacoes_canonicas,
-    marcar_como_canonica,
-    marcar_como_duplicata,
-)
-
-
 @pytest.fixture
 def dedup_dje_conn(tmp_path: Path):
     """Conexão SQLite isolada por teste, schema migrado."""
@@ -1130,7 +1127,6 @@ def test_R1_6_flush_404_descarta_pendentes_d8(dedup_dje_conn) -> None:
         canonica_row=canonica_row, chave="k1",
     )
 
-    from notion_bulk_edit.notion_api import NotionAPIError
     client = MagicMock()
     client.update_page.side_effect = NotionAPIError(404, "page not found")
 
@@ -1183,10 +1179,6 @@ def test_R1_6_flush_omite_duplicatas_suprimidas_se_schema_nao_tem(
 # ===========================================================================
 # Wire — sync + dedup integrado
 # ===========================================================================
-
-
-from notion_bulk_edit.notion_api import NotionClient
-from notion_rpadv.services.dje_notion_sync import sincronizar_pendentes
 
 
 @pytest.fixture
