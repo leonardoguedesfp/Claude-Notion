@@ -18,37 +18,23 @@ from typing import Any
 
 from notion_rpadv.services import dje_db
 from notion_rpadv.services.dje_notion_constants import (
-    NOTION_BLOCK_TEXT_LIMIT,
     NOTION_TEXTO_INLINE_LIMIT,
 )
+from notion_rpadv.services.dje_notion_mappings import (
+    formatar_advogados_intimados,
+    mapear_tipo_comunicacao,
+    mapear_tipo_documento,
+    tinha_destinatarios_advogados,
+)
 from notion_rpadv.services.dje_processos import _normaliza_cnj
+from notion_rpadv.services.dje_text_pipeline import (
+    aplicar_caso_15,
+    preprocessar_texto_djen,
+    quebrar_em_blocos,
+    truncar_texto_inline,
+)
 
 logger = logging.getLogger("dje.notion.mapper")
-
-
-# ---------------------------------------------------------------------------
-# Lista canônica das OABs do escritório (12 — 6 ativas + 6 desativadas).
-# Fase 5: o multi-select "Advogados intimados" da database aceita TAGS pré-
-# criadas no Notion. Cruzamos com TODAS as 12 (não só as ativas) porque
-# publicações antigas no banco podem conter advogados desativados.
-# ---------------------------------------------------------------------------
-
-
-_OABS_ESCRITORIO_TAGS: dict[str, str] = {
-    # OAB normalizada → tag exibida no multi-select do Notion (primeiro nome).
-    "15523/DF": "Ricardo",
-    "36129/DF": "Leonardo",
-    "48468/DF": "Vitor",
-    "20120/DF": "Cecília",
-    "38809/DF": "Samantha",
-    "75799/DF": "Deborah",
-    "65089/DF": "Juliana Vieira",
-    "81225/DF": "Juliana Chiaratto",
-    "37654/DF": "Shirley",
-    "39857/DF": "Erika",
-    "84703/DF": "Maria Isabel",
-    "79658/DF": "Cristiane",
-}
 
 
 # ---------------------------------------------------------------------------
@@ -76,6 +62,17 @@ def _rich_text_prop(text: str | None) -> dict[str, Any]:
     truncated = _truncate_with_ellipsis(s, NOTION_TEXTO_INLINE_LIMIT)
     return {
         "rich_text": [{"type": "text", "text": {"content": truncated}}],
+    }
+
+
+def _texto_inline_prop(texto_pre: str | None) -> dict[str, Any]:
+    """Property "Texto" — usa truncar_texto_inline (1.8) com corte em
+    fronteira de palavra e marcador " […]"."""
+    if not texto_pre:
+        return {"rich_text": []}
+    truncado = truncar_texto_inline(texto_pre, limite=NOTION_TEXTO_INLINE_LIMIT)
+    return {
+        "rich_text": [{"type": "text", "text": {"content": truncado}}],
     }
 
 
@@ -180,36 +177,79 @@ def _build_corpo_blocks(
     texto_completo: str | None,
     observacoes: str | None,
 ) -> list[dict[str, Any]]:
-    """Monta a lista de blocos do corpo da página: heading "Texto da
-    publicação" + parágrafos + heading "Observações" + observações ou
-    placeholder."""
+    """LEGACY: monta lista de blocos do corpo (heading "Texto da
+    publicação" + texto + heading "Observações" + obs/placeholder)
+    SEM aplicar a filtragem 1.5 (que precisa de tribunal+tipo). Usa
+    pipeline simplificada: 1.7 (preprocessar) + 1.4 (quebrar_em_blocos).
+
+    Caller que precise da pipeline completa (com filtragem TJDFT e
+    callouts) deve chamar ``montar_payload_publicacao`` (que orquestra
+    todos os estágios)."""
     blocks: list[dict[str, Any]] = []
     blocks.append(_heading2_block("Texto da publicação"))
-    texto = (texto_completo or "").strip()
-    if not texto:
-        blocks.append(_paragraph_block("(texto vazio)"))
-    else:
-        # Quebra por parágrafos (linha em branco) e depois cada parágrafo
-        # em chunks ≤ NOTION_BLOCK_TEXT_LIMIT.
-        for paragrafo in texto.split("\n\n"):
-            paragrafo = paragrafo.strip()
-            if not paragrafo:
-                continue
-            for chunk in _split_paragraph_at_limit(
-                paragrafo, NOTION_BLOCK_TEXT_LIMIT,
-            ):
-                blocks.append(_paragraph_block(chunk))
+    texto_pre = preprocessar_texto_djen(texto_completo)
+    blocos_texto = quebrar_em_blocos(texto_pre) if texto_pre else []
+    if not blocos_texto:
+        blocos_texto = [_paragraph_block("(texto vazio)")]
+    blocks.extend(blocos_texto)
 
     blocks.append(_heading2_block("Observações"))
-    obs = (observacoes or "").strip()
-    if obs:
-        for chunk in _split_paragraph_at_limit(obs, NOTION_BLOCK_TEXT_LIMIT):
-            blocks.append(_paragraph_block(chunk))
+    obs_pre = preprocessar_texto_djen(observacoes) if observacoes else ""
+    if obs_pre:
+        blocks.extend(quebrar_em_blocos(obs_pre))
     else:
         blocks.append(
             _quote_block("Sem observações automáticas pra esta publicação."),
         )
     return blocks
+
+
+def _build_corpo_blocks_full(
+    publicacao: dict[str, Any],
+    *,
+    tipo_documento_canonico: str,
+) -> tuple[list[dict[str, Any]], str, list[dict[str, Any]]]:
+    """Pipeline completa de blocos do corpo da página (1.7 → 1.5 → 1.4).
+
+    Retorna:
+
+    - ``children``: lista pronta de blocos (heading_2 wrappers + filtrado/
+      truncado + callout opcional + observações).
+    - ``texto_pre``: texto após pré-processamento HTML — útil pra dedup
+      (chave canônica usa este string) e pra inline "Texto" property.
+    - ``callouts``: blocos callout que foram anexados (geralmente 0 ou 1).
+      Exposto separadamente em ``_meta`` pra debug.
+    """
+    texto_bruto = publicacao.get("texto")
+    tribunal = publicacao.get("siglaTribunal") or ""
+    hash_djen = publicacao.get("hash") or ""
+
+    texto_pre = preprocessar_texto_djen(texto_bruto)
+    texto_corpo, callouts = aplicar_caso_15(
+        tribunal=tribunal,
+        tipo_documento=tipo_documento_canonico,
+        texto=texto_pre,
+        hash_djen=hash_djen,
+    )
+
+    blocos_texto = quebrar_em_blocos(texto_corpo) if texto_corpo else []
+    if not blocos_texto:
+        blocos_texto = [_paragraph_block("(texto vazio)")]
+
+    children: list[dict[str, Any]] = [_heading2_block("Texto da publicação")]
+    children.extend(blocos_texto)
+    children.extend(callouts)
+
+    children.append(_heading2_block("Observações"))
+    obs_pre = preprocessar_texto_djen(publicacao.get("observacoes"))
+    if obs_pre:
+        children.extend(quebrar_em_blocos(obs_pre))
+    else:
+        children.append(
+            _quote_block("Sem observações automáticas pra esta publicação."),
+        )
+
+    return children, texto_pre, callouts
 
 
 # ---------------------------------------------------------------------------
@@ -247,51 +287,17 @@ def lookup_processo_page_id(
 
 # ---------------------------------------------------------------------------
 # Cruzamento de advogados do escritório → tags
+#
+# Round 1 (2026-05-03): movido pra ``dje_notion_mappings``. Os aliases
+# abaixo preservam compatibilidade com testes/legacy callers que
+# importavam os nomes privados originais. Use as funções públicas
+# ``formatar_advogados_intimados`` / ``tinha_destinatarios_advogados``
+# em código novo.
 # ---------------------------------------------------------------------------
 
 
-def _advogados_escritorio_em_destinatarios(
-    destinatarioadvogados: Any,
-) -> list[str]:
-    """Retorna a lista de tags (nomes do escritório) que aparecem em
-    ``destinatarioadvogados`` da publicação. Externos são desprezados.
-
-    A estrutura real do DJEN tem ``numero_oab``/``uf_oab`` aninhados em
-    ``entry["advogado"]`` (descoberta do smoke da Fase 2.2); aqui
-    fazemos lookup com fallback no nível raiz pra fixtures legacy."""
-    tags: list[str] = []
-    if not isinstance(destinatarioadvogados, list):
-        return tags
-    seen: set[str] = set()
-    for entry in destinatarioadvogados:
-        if not isinstance(entry, dict):
-            continue
-        adv = (
-            entry.get("advogado")
-            if isinstance(entry.get("advogado"), dict)
-            else entry
-        )
-        oab_raw = str(adv.get("numero_oab") or "").strip()
-        oab_digits = "".join(c for c in oab_raw if c.isdigit())
-        uf = str(adv.get("uf_oab") or "").strip().upper()
-        if not oab_digits or not uf:
-            continue
-        oab_uf = f"{oab_digits}/{uf}"
-        if oab_uf in _OABS_ESCRITORIO_TAGS and oab_uf not in seen:
-            seen.add(oab_uf)
-            tags.append(_OABS_ESCRITORIO_TAGS[oab_uf])
-    return tags
-
-
-def _tem_advogados_no_payload(destinatarioadvogados: Any) -> bool:
-    """``destinatarioadvogados`` é lista não-vazia de dicts? Usado pra
-    distinguir "lista de destinatários vazia" (não marca checkbox) de
-    "tinha lista mas só com externos" (marca checkbox).
-    """
-    return (
-        isinstance(destinatarioadvogados, list)
-        and any(isinstance(e, dict) for e in destinatarioadvogados)
-    )
+_advogados_escritorio_em_destinatarios = formatar_advogados_intimados
+_tem_advogados_no_payload = tinha_destinatarios_advogados
 
 
 # ---------------------------------------------------------------------------
@@ -329,10 +335,10 @@ def montar_payload_publicacao(
     processo_page_id = lookup_processo_page_id(cache_conn, numero_processo)
     processo_nao_cadastrado = processo_page_id is None
 
-    advogados_tags = _advogados_escritorio_em_destinatarios(
+    advogados_tags = formatar_advogados_intimados(
         publicacao.get("destinatarioadvogados"),
     )
-    tinha_destinatarios = _tem_advogados_no_payload(
+    tinha_destinatarios = tinha_destinatarios_advogados(
         publicacao.get("destinatarioadvogados"),
     )
     # "Advogados não cadastrados" só dispara quando havia destinatários
@@ -352,6 +358,17 @@ def montar_payload_publicacao(
     else:
         destinatarios_str = str(destinatarios_raw or "")
 
+    tipo_documento_canonico = mapear_tipo_documento(
+        publicacao.get("tipoDocumento"),
+    )
+    tipo_comunicacao_canonico = mapear_tipo_comunicacao(
+        publicacao.get("tipoComunicacao"),
+    )
+
+    children, texto_pre, callouts = _build_corpo_blocks_full(
+        publicacao, tipo_documento_canonico=tipo_documento_canonico,
+    )
+
     properties: dict[str, Any] = {
         "Identificação": _title_prop(titulo),
         "Data de disponibilização": _date_prop(data_disp),
@@ -360,10 +377,10 @@ def montar_payload_publicacao(
             [processo_page_id] if processo_page_id else [],
         ),
         "Órgão": _rich_text_prop(publicacao.get("nomeOrgao")),
-        "Tipo de comunicação": _select_prop(publicacao.get("tipoComunicacao")),
-        "Tipo de documento": _select_prop(publicacao.get("tipoDocumento")),
+        "Tipo de comunicação": _select_prop(tipo_comunicacao_canonico),
+        "Tipo de documento": _select_prop(tipo_documento_canonico),
         "Classe": _rich_text_prop(publicacao.get("nomeClasse")),
-        "Texto": _rich_text_prop(publicacao.get("texto")),
+        "Texto": _texto_inline_prop(texto_pre),
         "Link": _url_prop(publicacao.get("link")),
         "Status": _select_prop("Nova"),
         "Advogados intimados": _multi_select_prop(advogados_tags),
@@ -375,19 +392,20 @@ def montar_payload_publicacao(
         "Advogados não cadastrados": _checkbox_prop(advogados_nao_cadastrados),
     }
 
-    children = _build_corpo_blocks(
-        publicacao.get("texto"),
-        publicacao.get("observacoes"),
-    )
-
     return {
         "properties": properties,
         "children": children,
-        # Metadados úteis pro caller logar — não fazem parte do body Notion.
+        # Metadados úteis pro caller logar/fazer dedup — NÃO fazem parte
+        # do body Notion. ``texto_pre`` e ``tipo_documento_canonico``
+        # são usados pelo módulo de dedup pra computar a chave canônica.
         "_meta": {
             "titulo": titulo,
             "djen_id": publicacao.get("id"),
             "sigla_tribunal": sigla,
+            "tipo_documento_canonico": tipo_documento_canonico,
+            "tipo_comunicacao_canonico": tipo_comunicacao_canonico,
+            "texto_pre": texto_pre,
+            "callouts_count": len(callouts),
             "processo_nao_cadastrado": processo_nao_cadastrado,
             "advogados_nao_cadastrados": advogados_nao_cadastrados,
             "advogados_tags": advogados_tags,

@@ -335,6 +335,33 @@ class NotionClient:
             json={"archived": True},
         )
 
+    def append_block_children(
+        self,
+        block_id: str,
+        children: list[dict],
+    ) -> dict:
+        """Anexa blocos como filhos de um bloco existente (página ou
+        bloco-pai). Usado pra contornar o limite de 100 blocos por
+        chamada de criação: a página é criada com os primeiros 90 blocos
+        e o restante vai em chamadas subsequentes desta função
+        (chunks de ≤ 100 blocos cada).
+
+        Endpoint: ``PATCH /v1/blocks/{block_id}/children``
+
+        Args:
+            block_id: ID do bloco-pai (geralmente o page_id da página).
+            children: Lista de blocos no formato Notion canônico
+                (max 100 itens — caller deve fazer chunking).
+
+        Returns:
+            Objeto retornado pela API com os blocos criados.
+        """
+        return self._request(
+            "PATCH",
+            f"/blocks/{block_id}/children",
+            json={"children": children},
+        )
+
     def list_users(self) -> list[dict]:
         """Lista todos os usuários do workspace.
 

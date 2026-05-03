@@ -155,10 +155,68 @@ def init_db(conn: sqlite3.Connection) -> None:
     Pós-Fase 5 (2026-05-03): chama ``_migrate_notion_columns_if_needed``
     pra adicionar colunas Notion em bancos pré-Fase-5 (DDL inicial já
     cria pra DBs novos; ALTER TABLE cobre os legados).
+
+    Round 1 (2026-05-03): chama ``_migrate_dedup_columns_if_needed``
+    pra adicionar colunas/tabela de detecção de duplicatas (1.6).
     """
     conn.executescript(_SCHEMA_DDL)
     _migrate_notion_columns_if_needed(conn)
+    _migrate_dedup_columns_if_needed(conn)
     conn.commit()
+
+
+def _migrate_dedup_columns_if_needed(conn: sqlite3.Connection) -> None:
+    """Adiciona colunas de detecção de duplicatas em ``publicacoes`` e
+    cria a tabela ``dup_pendentes`` (Round 1, 1.6, 2026-05-03).
+
+    - ``dup_chave``: SHA-256 hex da chave canônica (CNJ + data + tribunal +
+      tipo_canonico + texto[:500]). NULL = não-deduplicada (CNJ ausente,
+      D-2) OU ainda não computada.
+    - ``dup_canonical_djen_id``: ``djen_id`` da publicação canônica (a 1ª
+      do grupo enviada ao Notion). NULL = esta linha é a própria canônica
+      (ou ainda não dedup'ada).
+    - Índice parcial em ``dup_chave`` pra acelerar lookup de canônica
+      por chave em batches grandes.
+    - ``dup_pendentes``: tabela auxiliar pra acumular duplicatas que
+      precisam ser flushadas no Notion (atualização da canônica) ao
+      fim do batch.
+
+    Idempotente — pode rodar em banco pré-Round-1 (adiciona) ou já
+    migrado (no-op). Não altera dados.
+    """
+    cols = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(publicacoes)").fetchall()
+    }
+    if "dup_chave" not in cols:
+        conn.execute(
+            "ALTER TABLE publicacoes ADD COLUMN dup_chave TEXT"
+        )
+        logger.info("DJE: migração Round 1 — adicionada coluna dup_chave")
+    if "dup_canonical_djen_id" not in cols:
+        conn.execute(
+            "ALTER TABLE publicacoes ADD COLUMN dup_canonical_djen_id INTEGER"
+        )
+        logger.info(
+            "DJE: migração Round 1 — adicionada coluna dup_canonical_djen_id",
+        )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_publicacoes_dup_chave "
+        "ON publicacoes(dup_chave) WHERE dup_chave IS NOT NULL"
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS dup_pendentes (
+            canonical_djen_id INTEGER NOT NULL,
+            duplicata_djen_id INTEGER NOT NULL,
+            duplicata_destinatario TEXT,
+            duplicata_partes_json TEXT,
+            duplicata_advogados_json TEXT,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (canonical_djen_id, duplicata_djen_id)
+        )
+        """
+    )
 
 
 def _migrate_notion_columns_if_needed(conn: sqlite3.Connection) -> None:
@@ -583,6 +641,186 @@ def count_sequencial_titulo(
         (sigla_tribunal, data_disponibilizacao, NOTION_SKIPPED_SENTINEL),
     ).fetchone()
     return int(row["n"]) + 1
+
+
+# ---------------------------------------------------------------------------
+# Detecção de duplicatas — Round 1 (2026-05-03)
+# ---------------------------------------------------------------------------
+
+
+def find_canonical_by_chave(
+    conn: sqlite3.Connection,
+    chave: str,
+) -> dict[str, Any] | None:
+    """Retorna a publicação canônica (a 1ª do grupo já enviada ao Notion)
+    cuja ``dup_chave`` bate com ``chave``. ``None`` se nenhuma encontrada.
+
+    Critério canônica = ``dup_chave = ?`` AND ``notion_page_id`` não-NULL e
+    diferente do sentinela SKIPPED AND ``dup_canonical_djen_id`` IS NULL
+    (a própria não é duplicata de outra). Ordem: ``data_disponibilizacao
+    ASC, djen_id ASC`` — primeira na cronologia.
+
+    Output: ``{djen_id, notion_page_id, data_disponibilizacao, ...}`` (row
+    completa do publicacoes).
+    """
+    row = conn.execute(
+        """
+        SELECT djen_id, hash, oabs_escritorio, oabs_externas,
+               numero_processo, data_disponibilizacao, sigla_tribunal,
+               payload_json, captured_at, captured_in_mode,
+               notion_page_id, notion_attempts, notion_last_error,
+               dup_chave, dup_canonical_djen_id
+        FROM publicacoes
+        WHERE dup_chave = ?
+          AND notion_page_id IS NOT NULL
+          AND notion_page_id != ?
+          AND dup_canonical_djen_id IS NULL
+        ORDER BY data_disponibilizacao ASC, djen_id ASC
+        LIMIT 1
+        """,
+        (chave, NOTION_SKIPPED_SENTINEL),
+    ).fetchone()
+    if row is None:
+        return None
+    return dict(row)
+
+
+def mark_publicacao_dup_chave(
+    conn: sqlite3.Connection,
+    djen_id: int,
+    chave: str,
+) -> None:
+    """Persiste ``dup_chave`` numa publicação canônica (1ª do grupo) APÓS
+    sucesso no envio ao Notion. Necessário pra que duplicatas posteriores
+    consigam achar a canônica em ``find_canonical_by_chave``."""
+    conn.execute(
+        "UPDATE publicacoes SET dup_chave = ? WHERE djen_id = ?",
+        (chave, djen_id),
+    )
+    conn.commit()
+
+
+def mark_publicacao_as_duplicate(
+    conn: sqlite3.Connection,
+    *,
+    duplicata_djen_id: int,
+    canonical_djen_id: int,
+    canonical_notion_page_id: str,
+    chave: str,
+) -> None:
+    """Marca uma publicação como duplicata da canônica.
+
+    Atualizações:
+    - ``dup_chave`` = chave (mesma da canônica).
+    - ``dup_canonical_djen_id`` = djen_id da canônica.
+    - ``notion_page_id`` = page_id da canônica (compartilha página).
+    - ``notion_last_error`` = NULL (não houve falha — foi suprimida
+      legitimamente).
+
+    Não toca em ``notion_attempts`` (mantém histórico).
+    """
+    conn.execute(
+        """
+        UPDATE publicacoes
+        SET dup_chave = ?,
+            dup_canonical_djen_id = ?,
+            notion_page_id = ?,
+            notion_last_error = NULL
+        WHERE djen_id = ?
+        """,
+        (chave, canonical_djen_id, canonical_notion_page_id, duplicata_djen_id),
+    )
+    conn.commit()
+
+
+def insert_dup_pendente(
+    conn: sqlite3.Connection,
+    *,
+    canonical_djen_id: int,
+    duplicata_djen_id: int,
+    duplicata_destinatario: str,
+    duplicata_partes_json: str,
+    duplicata_advogados_json: str,
+) -> None:
+    """Insere uma linha em ``dup_pendentes`` — usada pelo flush no fim
+    do batch pra atualizar a canônica no Notion (Partes, Advogados
+    intimados, Duplicatas suprimidas).
+
+    Idempotente: PK ``(canonical_djen_id, duplicata_djen_id)`` evita
+    duplicação de pendentes; ``ON CONFLICT DO NOTHING``.
+    """
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    conn.execute(
+        """
+        INSERT INTO dup_pendentes (
+            canonical_djen_id, duplicata_djen_id,
+            duplicata_destinatario, duplicata_partes_json,
+            duplicata_advogados_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT (canonical_djen_id, duplicata_djen_id) DO NOTHING
+        """,
+        (
+            canonical_djen_id, duplicata_djen_id,
+            duplicata_destinatario, duplicata_partes_json,
+            duplicata_advogados_json, ts,
+        ),
+    )
+    conn.commit()
+
+
+def fetch_canonicas_com_pendentes(conn: sqlite3.Connection) -> list[int]:
+    """Lista de ``djen_id`` das canônicas que têm pelo menos 1 pendente
+    em ``dup_pendentes``. Output ordenado por djen_id ASC pra
+    determinismo nos testes/logs."""
+    rows = conn.execute(
+        "SELECT DISTINCT canonical_djen_id FROM dup_pendentes "
+        "ORDER BY canonical_djen_id ASC"
+    ).fetchall()
+    return [int(r["canonical_djen_id"]) for r in rows]
+
+
+def fetch_dup_pendentes_for_canonical(
+    conn: sqlite3.Connection,
+    canonical_djen_id: int,
+) -> list[dict[str, Any]]:
+    """Carrega todas as linhas de ``dup_pendentes`` para uma canônica,
+    ordenadas por ``duplicata_djen_id ASC`` (cronologia estável)."""
+    rows = conn.execute(
+        """
+        SELECT canonical_djen_id, duplicata_djen_id,
+               duplicata_destinatario, duplicata_partes_json,
+               duplicata_advogados_json, created_at
+        FROM dup_pendentes
+        WHERE canonical_djen_id = ?
+        ORDER BY duplicata_djen_id ASC
+        """,
+        (canonical_djen_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def delete_dup_pendentes_for_canonical(
+    conn: sqlite3.Connection,
+    canonical_djen_id: int,
+) -> int:
+    """Apaga pendentes de uma canônica após flush bem-sucedido (ou
+    quando a canônica deletada — D-8). Retorna número de linhas
+    afetadas."""
+    cur = conn.execute(
+        "DELETE FROM dup_pendentes WHERE canonical_djen_id = ?",
+        (canonical_djen_id,),
+    )
+    conn.commit()
+    return cur.rowcount
+
+
+def count_dup_pendentes(conn: sqlite3.Connection) -> int:
+    """Total de linhas em ``dup_pendentes`` (todas as canônicas).
+    Usado pelo banner pós-sync."""
+    row = conn.execute(
+        "SELECT COUNT(*) AS n FROM dup_pendentes"
+    ).fetchone()
+    return int(row["n"])
 
 
 def fetch_publicacoes_by_ids(
