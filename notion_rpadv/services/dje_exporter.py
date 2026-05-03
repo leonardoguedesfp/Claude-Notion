@@ -51,12 +51,13 @@ import json
 import logging
 from datetime import date
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any, Callable, NamedTuple
 
 from openpyxl import Workbook
 from openpyxl.styles import Font
+from openpyxl.utils import get_column_letter
 
-from notion_rpadv.services.dje_transform import sanitize_for_xlsx
+from notion_rpadv.services.dje_transform import HIDDEN_COLUMNS, sanitize_for_xlsx
 
 logger = logging.getLogger("dje.exporter")
 
@@ -104,19 +105,38 @@ class ExportResult(NamedTuple):
 def format_filename(
     data_inicio: date, data_fim: date, version: int,
 ) -> str:
-    """``Publicacoes_DJEN_{dd.mm.aa}_a_{dd.mm.aa}_v{N}.xlsx``."""
+    """``Publicacoes_DJEN_{dd.mm.aa}_a_{dd.mm.aa}_v{N}.xlsx`` — eixo OAB."""
     di = data_inicio.strftime("%d.%m.%y")
     df = data_fim.strftime("%d.%m.%y")
     return f"Publicacoes_DJEN_{di}_a_{df}_v{version}.xlsx"
 
 
+def format_filename_cnj(
+    data_inicio: date, data_fim: date, version: int,
+) -> str:
+    """``Publicacoes_CNJ_{dd.mm.aa}_a_{dd.mm.aa}_v{N}.xlsx`` — eixo CNJ.
+
+    Pós-Fase 3 (2026-05-02): naming distinto pra Excel-de-execução do
+    eixo CNJ, pra que o operador veja na pasta sem abrir o arquivo qual
+    eixo gerou cada execução."""
+    di = data_inicio.strftime("%d.%m.%y")
+    df = data_fim.strftime("%d.%m.%y")
+    return f"Publicacoes_CNJ_{di}_a_{df}_v{version}.xlsx"
+
+
 def next_version(
     output_dir: Path, data_inicio: date, data_fim: date,
+    *,
+    filename_fn: Callable[[date, date, int], str] = format_filename,
 ) -> int:
     """Próxima versão livre pra esse intervalo. v1 quando nada existe;
-    v2/v3/... quando arquivos anteriores presentes."""
+    v2/v3/... quando arquivos anteriores presentes.
+
+    ``filename_fn`` parametrizável (default ``format_filename``, eixo OAB)
+    permite usar com ``format_filename_cnj`` no eixo CNJ.
+    """
     v = 1
-    while (output_dir / format_filename(data_inicio, data_fim, v)).exists():
+    while (output_dir / filename_fn(data_inicio, data_fim, v)).exists():
         v += 1
     return v
 
@@ -271,6 +291,10 @@ def _write_workbook(
     for col_idx, name in enumerate(columns, start=1):
         cell = ws.cell(row=1, column=col_idx, value=name)
         cell.font = bold
+        # Pós-Fase 3: ``HIDDEN_COLUMNS`` ficam exportadas mas escondidas
+        # no Excel por default (auditável via "Mostrar" no menu da coluna).
+        if name in HIDDEN_COLUMNS:
+            ws.column_dimensions[get_column_letter(col_idx)].hidden = True
 
     skipped: list[SkippedRow] = []
     written_row_idx = 1  # row 1 = header
@@ -382,6 +406,7 @@ def write_publicacoes_xlsx_from_processed(
     advogados: list[dict] | None = None,
     state_map: dict | None = None,
     log_lines: list[str] | None = None,
+    filename_fn: Callable[[date, date, int], str] = format_filename,
 ) -> ExportResult:
     """Escreve Excel-de-execução versionado a partir de rows JÁ
     pós-split (com ``advogados_consultados_escritorio`` e
@@ -401,6 +426,10 @@ def write_publicacoes_xlsx_from_processed(
     nesse caso o Excel é gerado mesmo assim (só cabeçalho + abas
     Status/Log) pra que o usuário sempre tenha evidência da execução.
 
+    ``filename_fn`` (pós-Fase 3, 2026-05-02) parametriza o naming —
+    default é o eixo OAB (``Publicacoes_DJEN_*``); eixo CNJ passa
+    ``format_filename_cnj`` pra gerar ``Publicacoes_CNJ_*``.
+
     Mesma estratégia de versionamento e mesma defesa per-row do F2.1.
     """
     from notion_rpadv.services.dje_transform import (
@@ -410,8 +439,8 @@ def write_publicacoes_xlsx_from_processed(
     enriched_rows, columns = transform_rows_for_history(processed_rows)
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    version = next_version(output_dir, data_inicio, data_fim)
-    path = output_dir / format_filename(data_inicio, data_fim, version)
+    version = next_version(output_dir, data_inicio, data_fim, filename_fn=filename_fn)
+    path = output_dir / filename_fn(data_inicio, data_fim, version)
 
     skipped = _write_workbook(
         enriched_rows, columns, path,

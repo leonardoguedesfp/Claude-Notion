@@ -81,18 +81,27 @@ def test_R7_leitor_dje_page_data_final_anterior_a_inicial_mostra_aviso() -> None
     assert page._thread is None  # noqa: SLF001
 
 
-def test_R7_leitor_dje_page_open_file_when_no_export_yet_shows_warning() -> None:
-    """Click em 'abrir arquivo' antes de exportar não crasha — mostra
-    QMessageBox em produção; aqui validamos só que não levanta."""
+def test_R7_leitor_dje_page_open_file_when_no_export_yet_silencioso() -> None:
+    """Hotfix 2026-05-03: click em 'abrir arquivo' sem export prévio
+    NÃO mostra modal — silenciosamente esconde o botão (que já estava
+    invisível). Antes mostrava QMessageBox 'Arquivo não encontrado /
+    Rode novamente' que confundia o usuário (que acabou de rodar)."""
     _qapp()
-    from notion_rpadv.pages.leitor_dje import LeitorDJEPage
     from unittest.mock import patch
 
+    from notion_rpadv.pages.leitor_dje import LeitorDJEPage
+
     page = LeitorDJEPage(conn=MagicMock(), token="dummy", user="leo")
-    # _last_output_path é None (export não rodou)
-    with patch("PySide6.QtWidgets.QMessageBox.warning"):
+    # _last_output_path é None (export não rodou).
+    with patch.object(page, "_styled_warning") as mock_warn:
         page._on_open_file_clicked()  # noqa: SLF001
-    # Sobreviveu — sem exception.
+    mock_warn.assert_not_called()
+    # Botão fica invisível (já era — mas explícito: handler não causou
+    # exibição inadvertida).
+    assert (
+        not page._open_file_btn.isVisible()  # noqa: SLF001
+        or page._open_file_btn.isHidden()  # noqa: SLF001
+    )
 
 
 def test_R7_leitor_dje_page_resolve_output_dir_uses_settings_when_present(
@@ -385,7 +394,11 @@ def test_modo_padrao_constroi_consultas_por_advogado(tmp_path: Path) -> None:
         page._on_download_padrao_clicked()  # noqa: SLF001
     mock_w_cls.assert_called_once()
     kwargs = mock_w_cls.call_args.kwargs
-    consultas = kwargs["consultas"]
+    # Pós-Fase 3: worker recebe ``flow`` em vez de ``mode``, e
+    # ``consultas_oab``/``consultas_cnj`` em vez de ``consultas``.
+    assert kwargs["flow"] == "oab_novas"
+    consultas = kwargs["consultas_oab"]
+    assert kwargs["consultas_cnj"] is None
     assert len(consultas) == len(ADVOGADOS)
     # Cada consulta tem janela cursor+1d → hoje
     for c in consultas:
@@ -412,7 +425,7 @@ def test_modo_padrao_sem_modal_quando_cursor_vazio(tmp_path: Path) -> None:
     # Sem modal de primeira execução
     mock_q.assert_not_called()
     # Worker recebeu janela [2026-01-01, hoje]
-    consultas = mock_w_cls.call_args.kwargs["consultas"]
+    consultas = mock_w_cls.call_args.kwargs["consultas_oab"]
     assert all(c.data_inicio == DATA_INICIO_HISTORICO_ESCRITORIO for c in consultas)
     assert all(c.data_fim == date.today() for c in consultas)
 
@@ -496,10 +509,11 @@ def test_manual_dispara_worker_so_com_externas(tmp_path: Path) -> None:
     with _patch_chain(tmp_path) as (mock_w_cls, _w):
         page._on_download_manual_clicked()  # noqa: SLF001
     kwargs = mock_w_cls.call_args.kwargs
-    assert kwargs["mode"] == "manual"
+    # Pós-Fase 3: ``flow=manual`` (modo personalizado, OABs externas).
+    assert kwargs["flow"] == "manual"
     assert kwargs["oabs_escritorio_marcadas"] == set()
     assert kwargs["oabs_externas_pesquisadas"] == {"12345/SP"}
-    consultas = kwargs["consultas"]
+    consultas = kwargs["consultas_oab"]
     assert len(consultas) == 1
     assert consultas[0].advogado["oab"] == "12345"
     # Nome vai vazio — transform resolve via destinatarioadvogados
@@ -586,16 +600,31 @@ def test_F3_toggle_alterna_stack_e_sub() -> None:
 
 
 def test_hotfix_ux_todos_datepickers_tem_calendar_popup() -> None:
-    """Todos os QDateEdit da página (modo padrão e modo manual) abrem
-    calendário ao clicar — comportamento padrão de software Windows."""
+    """Todos os datepickers da página (modo padrão e modo manual) abrem
+    calendário ao clicar.
+
+    Pós-refator 2026-05-03: o popup nativo do Qt (calendarPopup=True)
+    foi substituído por ``QCalendarWidget`` próprio em ``CalendarDateEdit``
+    porque o intercept de ``mousePressEvent`` causava decremento do ano.
+    Agora todos os datepickers são instâncias de ``CalendarDateEdit``,
+    que tem seu próprio popup — verificamos via tipo + presença do
+    helper ``_show_calendar_popup``."""
     _qapp()
     from notion_rpadv.pages.leitor_dje import LeitorDJEPage
+    from notion_rpadv.widgets.calendar_date_edit import CalendarDateEdit
 
     page = LeitorDJEPage(conn=MagicMock(), token="dummy", user="leo")
-    assert page._date_inicio_padrao.calendarPopup() is True  # noqa: SLF001
-    assert page._date_fim_padrao.calendarPopup() is True  # noqa: SLF001
-    assert page._date_inicio_manual.calendarPopup() is True  # noqa: SLF001
-    assert page._date_fim_manual.calendarPopup() is True  # noqa: SLF001
+    for w in (
+        page._date_inicio_padrao,  # noqa: SLF001
+        page._date_fim_padrao,  # noqa: SLF001
+        page._date_inicio_manual,  # noqa: SLF001
+        page._date_fim_manual,  # noqa: SLF001
+    ):
+        assert isinstance(w, CalendarDateEdit)
+        # Popup nativo desabilitado (usamos custom).
+        assert w.calendarPopup() is False
+        # Helper que dispara o popup customizado existe.
+        assert hasattr(w, "_show_calendar_popup")
 
 
 def test_hotfix_ux_modo_padrao_tem_datepickers_default_hoje() -> None:
@@ -611,14 +640,17 @@ def test_hotfix_ux_modo_padrao_tem_datepickers_default_hoje() -> None:
 
 
 def test_hotfix_ux_modo_padrao_botao_periodo_selecionado_existe() -> None:
-    """Modo padrão tem botão "Baixar período selecionado" habilitado
-    quando di ≤ df (default = ambos hoje, OK)."""
+    """Modo padrão tem botão "Baixar pelo período selecionado" (eixo OAB)
+    habilitado quando di ≤ df (default = ambos hoje, OK).
+
+    Pós-Fase 3 (Mudança 4): renomeado de "Baixar período selecionado"
+    pra "Baixar pelo período selecionado" (uniformização entre eixos)."""
     _qapp()
     from notion_rpadv.pages.leitor_dje import LeitorDJEPage
 
     page = LeitorDJEPage(conn=MagicMock(), token="dummy", user="leo")
     assert page._download_padrao_periodo_btn.text() == (  # noqa: SLF001
-        "Baixar período selecionado"
+        "Baixar pelo período selecionado"
     )
     assert page._download_padrao_periodo_btn.isEnabled()  # noqa: SLF001
 
@@ -639,9 +671,10 @@ def test_hotfix_ux_botao_periodo_selecionado_desabilita_se_di_maior_que_df() -> 
 def test_hotfix_ux_botao_periodo_selecionado_dispara_worker_modo_manual_6_oabs(
     tmp_path: Path,
 ) -> None:
-    """Click no botão "Baixar período selecionado" dispara worker com
-    mode='manual' (não toca cursor) e as 6 OABs do escritório com a
-    janela dos datepickers do modo padrão (mesma janela pra todos)."""
+    """Click no botão "Baixar pelo período selecionado" do eixo OAB
+    dispara worker com flow='oab_periodo' (não grava no banco — escolha
+    b do user) e as 6 OABs do escritório com a janela dos datepickers
+    (mesma janela pra todos)."""
     _qapp()
     from datetime import date
     from PySide6.QtCore import QDate
@@ -657,8 +690,9 @@ def test_hotfix_ux_botao_periodo_selecionado_dispara_worker_modo_manual_6_oabs(
         page._on_download_padrao_periodo_clicked()  # noqa: SLF001
     mock_w_cls.assert_called_once()
     kwargs = mock_w_cls.call_args.kwargs
-    assert kwargs["mode"] == "manual"  # NÃO toca cursor
-    consultas = kwargs["consultas"]
+    # Pós-Fase 3: flow OAB_PERIODO — transient (escolha b: não grava banco).
+    assert kwargs["flow"] == "oab_periodo"
+    consultas = kwargs["consultas_oab"]
     assert len(consultas) == len(ADVOGADOS)
     # Mesma janela pra todos os 6
     for c in consultas:
@@ -709,3 +743,646 @@ def test_hotfix_ux_log_area_max_height_limitado() -> None:
     # Antes: setMinimumHeight(120) + stretch=1 (dominava)
     # Refator: max ~180, stretch=0
     assert page._log_area.maximumHeight() <= 200  # noqa: SLF001
+
+
+# ---------------------------------------------------------------------------
+# Pós-Fase 3 (2026-05-02) — modal one-shot de reativação dos 4 advogados
+# ---------------------------------------------------------------------------
+
+
+def _make_page_with_dje_conn(tmp_path: Path):
+    """Cria uma LeitorDJEPage e substitui ``_dje_conn`` por uma conn
+    SQLite real em ``tmp_path/leitor_dje.db``. Retorna ``(page, conn)``.
+
+    Caller fecha a conn no final via try/finally."""
+    _qapp()
+    from notion_rpadv.pages.leitor_dje import LeitorDJEPage
+    from notion_rpadv.services import dje_db
+
+    page = LeitorDJEPage(conn=MagicMock(), token="dummy", user="leo")
+    db_path = tmp_path / "leitor_dje.db"
+    conn = dje_db.get_connection(db_path)
+    page._dje_conn = conn  # noqa: SLF001
+    return page, conn
+
+
+def test_modal_reativacao_dispara_quando_4_advogados_tem_cursor(
+    tmp_path: Path,
+) -> None:
+    """Modal aparece quando: flag não setada AND ≥1 dos 4 advogados
+    reativados tem cursor armazenado (estado típico pré-reativação)."""
+    page, conn = _make_page_with_dje_conn(tmp_path)
+    try:
+        from datetime import date as _date
+        from notion_rpadv.services import dje_state
+
+        # Popula cursores falsos (estado real pré-reativação na máquina
+        # do operador em 2026-05-02).
+        for oab, uf in (("48468", "DF"), ("20120", "DF"),
+                        ("38809", "DF"), ("75799", "DF")):
+            dje_state.update_advogado_cursor(
+                conn, oab=oab, uf=uf, novo_cursor=_date(2026, 5, 2),
+            )
+
+        # Captura: o modal foi mostrado?
+        captured = {"shown": False}
+
+        def fake_question(title, text, *, default_no=True):
+            captured["shown"] = True
+            captured["text"] = text
+            return False  # usuário escolhe "Não"
+
+        page._styled_question = fake_question  # noqa: SLF001
+        page._check_and_offer_reactivation_reset()  # noqa: SLF001
+
+        assert captured["shown"], "Modal deveria ter aparecido"
+        # Mensagem menciona os 4 nomes pra dar contexto.
+        for n in ("Vitor", "Cecília", "Samantha", "Deborah"):
+            assert n in captured["text"], (
+                f"Texto do modal deveria citar {n!r}: {captured['text']!r}"
+            )
+    finally:
+        conn.close()
+
+
+def test_modal_reativacao_nao_recorre_apos_resposta_sim(
+    tmp_path: Path,
+) -> None:
+    """Modal é one-shot: após user responder Sim, próxima chamada não
+    mostra mais (flag setada em ``app_flags``). Cursores foram zerados."""
+    page, conn = _make_page_with_dje_conn(tmp_path)
+    try:
+        from datetime import date as _date
+        from notion_rpadv.services import dje_db, dje_state
+
+        for oab, uf in (("48468", "DF"), ("20120", "DF"),
+                        ("38809", "DF"), ("75799", "DF")):
+            dje_state.update_advogado_cursor(
+                conn, oab=oab, uf=uf, novo_cursor=_date(2026, 5, 2),
+            )
+
+        calls = {"n": 0}
+
+        def fake_question_yes(title, text, *, default_no=True):
+            calls["n"] += 1
+            return True  # usuário escolhe "Sim, resetar"
+
+        page._styled_question = fake_question_yes  # noqa: SLF001
+        page._check_and_offer_reactivation_reset()  # noqa: SLF001
+        assert calls["n"] == 1
+        # Cursores zerados:
+        for oab, uf in (("48468", "DF"), ("20120", "DF"),
+                        ("38809", "DF"), ("75799", "DF")):
+            assert dje_state.read_advogado_cursor(
+                conn, oab=oab, uf=uf,
+            ) is None
+        # Flag persistida:
+        assert dje_db.read_flag(
+            conn, dje_db.FLAG_REATIVACAO_2026_05_02,
+        ) == "reset_yes"
+
+        # 2ª chamada: não deve disparar modal de novo.
+        page._check_and_offer_reactivation_reset()  # noqa: SLF001
+        assert calls["n"] == 1, (
+            "Modal disparou na 2ª chamada — flag não está bloqueando recorrência"
+        )
+    finally:
+        conn.close()
+
+
+def test_modal_reativacao_nao_recorre_apos_resposta_nao(
+    tmp_path: Path,
+) -> None:
+    """Mesma proteção quando user escolhe Não: cursores ficam intactos
+    mas flag é setada (aceita o gap consciente)."""
+    page, conn = _make_page_with_dje_conn(tmp_path)
+    try:
+        from datetime import date as _date
+        from notion_rpadv.services import dje_db, dje_state
+
+        for oab, uf in (("48468", "DF"), ("20120", "DF")):
+            dje_state.update_advogado_cursor(
+                conn, oab=oab, uf=uf, novo_cursor=_date(2026, 5, 2),
+            )
+
+        calls = {"n": 0}
+
+        def fake_question_no(title, text, *, default_no=True):
+            calls["n"] += 1
+            return False
+
+        page._styled_question = fake_question_no  # noqa: SLF001
+        page._check_and_offer_reactivation_reset()  # noqa: SLF001
+        # Cursores intactos:
+        assert dje_state.read_advogado_cursor(
+            conn, oab="48468", uf="DF",
+        ) == _date(2026, 5, 2)
+        # Flag persistida com escolha "no":
+        assert dje_db.read_flag(
+            conn, dje_db.FLAG_REATIVACAO_2026_05_02,
+        ) == "reset_no"
+
+        # 2ª chamada: silenciosa.
+        page._check_and_offer_reactivation_reset()  # noqa: SLF001
+        assert calls["n"] == 1
+    finally:
+        conn.close()
+
+
+def test_modal_reativacao_no_op_quando_sem_cursores(tmp_path: Path) -> None:
+    """Máquina sem nenhum dos 4 cursores (e.g. nova): modal NÃO aparece,
+    mas flag é setada pra evitar re-checagem."""
+    page, conn = _make_page_with_dje_conn(tmp_path)
+    try:
+        from notion_rpadv.services import dje_db
+
+        calls = {"n": 0}
+
+        def fake_question(title, text, *, default_no=True):
+            calls["n"] += 1
+            return True
+
+        page._styled_question = fake_question  # noqa: SLF001
+        page._check_and_offer_reactivation_reset()  # noqa: SLF001
+        assert calls["n"] == 0, (
+            "Modal disparou mesmo sem nenhum cursor — desperdício de UX"
+        )
+        # Flag setada com motivo:
+        assert dje_db.read_flag(
+            conn, dje_db.FLAG_REATIVACAO_2026_05_02,
+        ) == "no_cursors_to_reset"
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Pós-Fase 3 (2026-05-02) — UI: renomeação de botões + eixo CNJ
+# ---------------------------------------------------------------------------
+
+
+def test_pos_F3_botao_oab_renomeado_para_publicacoes_novas_por_oab() -> None:
+    """Mudança 4: botão antigo "Baixar publicações novas" virou
+    "Publicações novas por OAB"."""
+    _qapp()
+    from notion_rpadv.pages.leitor_dje import LeitorDJEPage
+
+    page = LeitorDJEPage(conn=MagicMock(), token="dummy", user="leo")
+    assert page._download_padrao_btn.text() == (  # noqa: SLF001
+        "Publicações novas por OAB"
+    )
+
+
+def test_pos_F3_botao_periodo_oab_renomeado_uniformizado() -> None:
+    """Mudança 4: botão "Baixar período selecionado" virou "Baixar pelo
+    período selecionado" (uniformização entre eixos OAB e CNJ)."""
+    _qapp()
+    from notion_rpadv.pages.leitor_dje import LeitorDJEPage
+
+    page = LeitorDJEPage(conn=MagicMock(), token="dummy", user="leo")
+    assert page._download_padrao_periodo_btn.text() == (  # noqa: SLF001
+        "Baixar pelo período selecionado"
+    )
+
+
+def test_pos_F3_eixo_cnj_tem_botoes_corretos() -> None:
+    """Mudança 3: eixo CNJ tem 2 botões — 'Publicações novas por número
+    CNJ' e 'Baixar pelo período selecionado'."""
+    _qapp()
+    from notion_rpadv.pages.leitor_dje import LeitorDJEPage
+
+    page = LeitorDJEPage(conn=MagicMock(), token="dummy", user="leo")
+    # Pós-revisão Seção B (2026-05-03): eixo CNJ tem 1 botão único.
+    assert page._download_cnj_btn.text() == (  # noqa: SLF001
+        "Publicações novas por número CNJ"
+    )
+    # O segundo botão "Baixar pelo período selecionado" do eixo CNJ
+    # foi removido — atributo não deve mais existir.
+    assert not hasattr(page, "_download_cnj_periodo_btn")
+
+
+def test_pos_secao_B_eixo_cnj_nao_tem_datepickers() -> None:
+    """Pós-revisão Seção B (2026-05-03): eixo CNJ minimalista — sem
+    datepickers próprios. Janela é fixa ``[hoje - 15d, hoje]``,
+    calculada inline no handler."""
+    _qapp()
+    from notion_rpadv.pages.leitor_dje import LeitorDJEPage
+
+    page = LeitorDJEPage(conn=MagicMock(), token="dummy", user="leo")
+    assert not hasattr(page, "_date_inicio_cnj")
+    assert not hasattr(page, "_date_fim_cnj")
+    # Datepickers do eixo OAB seguem existindo (não confundir).
+    assert hasattr(page, "_date_inicio_padrao")
+    assert hasattr(page, "_date_fim_padrao")
+
+
+def test_pos_secao_B_eixo_cnj_avisa_quando_cache_vazio(
+    tmp_path: Path,
+) -> None:
+    """Click no único botão do eixo CNJ com cache de Processos vazio
+    mostra warning e NÃO inicia worker."""
+    _qapp()
+    import sqlite3
+
+    from notion_rpadv.pages.leitor_dje import LeitorDJEPage
+
+    # Cache vazio: SQLite com schema mínimo de records, sem nenhum row.
+    cache_conn = sqlite3.connect(":memory:")
+    cache_conn.row_factory = sqlite3.Row
+    cache_conn.execute(
+        """
+        CREATE TABLE records (
+            base TEXT NOT NULL, page_id TEXT NOT NULL,
+            data_json TEXT NOT NULL, updated_at REAL NOT NULL,
+            PRIMARY KEY (base, page_id)
+        )
+        """,
+    )
+    cache_conn.commit()
+
+    page = LeitorDJEPage(conn=cache_conn, token="dummy", user="leo")
+    page._dje_conn = MagicMock()  # noqa: SLF001 — dje_conn não usado nesse path
+    # Mock legacy migration check (precisa retornar True pra prosseguir).
+    page._check_and_run_legacy_migration = lambda: True  # noqa: SLF001
+    page._check_and_offer_reactivation_reset = lambda: None  # noqa: SLF001
+    warned = {"shown": False}
+
+    def fake_warn(title, text):
+        warned["shown"] = True
+        warned["text"] = text
+
+    page._styled_warning = fake_warn  # noqa: SLF001
+    page._resolve_output_dir = lambda: tmp_path  # noqa: SLF001
+    page._on_download_cnj_clicked()  # noqa: SLF001
+    assert warned["shown"]
+    assert "vazio" in warned["text"].lower() or "sincronize" in warned["text"].lower()
+    # Worker NÃO inicia.
+    assert page._thread is None  # noqa: SLF001
+    cache_conn.close()
+
+
+def test_pos_secao_B_eixo_cnj_janela_fixa_15_dias(tmp_path: Path) -> None:
+    """``_on_download_cnj_clicked`` usa janela FIXA ``[hoje - 15d, hoje]``.
+
+    Validamos via mock do ``_launch_worker`` capturando ``consultas_cnj``.
+    Cache populado com 2 CNJs garante que ``_coletar_consultas_cnj``
+    retorna lista não-vazia.
+    """
+    _qapp()
+    import datetime as _dt
+    import json
+    import sqlite3
+    from unittest.mock import patch
+
+    from notion_rpadv.pages.leitor_dje import CNJ_WINDOW_DAYS, LeitorDJEPage
+
+    cache_conn = sqlite3.connect(":memory:")
+    cache_conn.row_factory = sqlite3.Row
+    cache_conn.execute(
+        """
+        CREATE TABLE records (
+            base TEXT NOT NULL, page_id TEXT NOT NULL,
+            data_json TEXT NOT NULL, updated_at REAL NOT NULL,
+            PRIMARY KEY (base, page_id)
+        )
+        """,
+    )
+    cache_conn.execute(
+        "INSERT INTO records VALUES ('Processos', 'p1', ?, 1.0)",
+        (json.dumps({"numero_do_processo": "0001234-56.2025.5.10.0001"}),),
+    )
+    cache_conn.execute(
+        "INSERT INTO records VALUES ('Processos', 'p2', ?, 2.0)",
+        (json.dumps({"numero_do_processo": "0009876-54.2024.1.23.4567"}),),
+    )
+    cache_conn.commit()
+
+    page = LeitorDJEPage(conn=cache_conn, token="dummy", user="leo")
+    page._dje_conn = MagicMock()  # noqa: SLF001
+    page._check_and_run_legacy_migration = lambda: True  # noqa: SLF001
+    page._check_and_offer_reactivation_reset = lambda: None  # noqa: SLF001
+    page._resolve_output_dir = lambda: tmp_path  # noqa: SLF001
+
+    with patch.object(page, "_launch_worker") as mock_launch:
+        page._on_download_cnj_clicked()  # noqa: SLF001
+
+    mock_launch.assert_called_once()
+    kwargs = mock_launch.call_args.kwargs
+    assert kwargs["flow"] == "cnj_novas"
+    consultas = kwargs["consultas_cnj"]
+    assert len(consultas) == 2
+    hoje = _dt.date.today()
+    di_esperado = hoje - _dt.timedelta(days=CNJ_WINDOW_DAYS)
+    for c in consultas:
+        assert c.data_inicio == di_esperado, (
+            f"data_inicio deveria ser {di_esperado} (hoje - {CNJ_WINDOW_DAYS}d)"
+        )
+        assert c.data_fim == hoje
+    cache_conn.close()
+
+
+def test_pos_secao_B_progress_format_processos_no_flow_cnj(
+    tmp_path: Path,
+) -> None:
+    """A1 (2026-05-03): label da barra de progresso vira "%v / %m
+    processos" no flow CNJ (em vez de "advogados")."""
+    _qapp()
+    import json
+    import sqlite3
+    from unittest.mock import patch
+
+    from notion_rpadv.pages.leitor_dje import LeitorDJEPage
+
+    cache_conn = sqlite3.connect(":memory:")
+    cache_conn.row_factory = sqlite3.Row
+    cache_conn.execute(
+        """
+        CREATE TABLE records (
+            base TEXT NOT NULL, page_id TEXT NOT NULL,
+            data_json TEXT NOT NULL, updated_at REAL NOT NULL,
+            PRIMARY KEY (base, page_id)
+        )
+        """,
+    )
+    cache_conn.execute(
+        "INSERT INTO records VALUES ('Processos', 'p1', ?, 1.0)",
+        (json.dumps({"numero_do_processo": "0001234-56.2025.5.10.0001"}),),
+    )
+    cache_conn.commit()
+
+    page = LeitorDJEPage(conn=cache_conn, token="dummy", user="leo")
+    page._dje_conn = MagicMock()  # noqa: SLF001
+    page._check_and_run_legacy_migration = lambda: True  # noqa: SLF001
+    page._check_and_offer_reactivation_reset = lambda: None  # noqa: SLF001
+    page._resolve_output_dir = lambda: tmp_path  # noqa: SLF001
+
+    # Mock QThread + worker pra evitar thread real; só queremos ver o
+    # estado da progress bar logo após launch.
+    with patch("notion_rpadv.pages.leitor_dje.QThread"), \
+         patch("notion_rpadv.pages.leitor_dje._DJEWorker"):
+        page._on_download_cnj_clicked()  # noqa: SLF001
+
+    assert "processos" in page._progress.format()  # noqa: SLF001
+    assert "advogados" not in page._progress.format()  # noqa: SLF001
+    cache_conn.close()
+
+
+def test_pos_secao_B_progress_format_advogados_no_flow_oab() -> None:
+    """A1: flow OAB mantém label ``%v / %m advogados``."""
+    _qapp()
+    from datetime import date, timedelta
+    from unittest.mock import patch
+
+    from notion_rpadv.pages.leitor_dje import LeitorDJEPage
+
+    page = LeitorDJEPage(conn=MagicMock(), token="dummy", user="leo")
+    page._dje_conn = MagicMock()  # noqa: SLF001
+    page._check_and_run_legacy_migration = lambda: True  # noqa: SLF001
+    page._check_and_offer_reactivation_reset = lambda: None  # noqa: SLF001
+
+    with patch("notion_rpadv.pages.leitor_dje.dje_state.compute_advogado_window",
+               return_value=(date.today() - timedelta(days=1), date.today())), \
+         patch.object(page, "_resolve_output_dir", return_value=Path(".")), \
+         patch("notion_rpadv.pages.leitor_dje.QThread"), \
+         patch("notion_rpadv.pages.leitor_dje._DJEWorker"):
+        page._on_download_padrao_clicked()  # noqa: SLF001
+
+    assert "advogados" in page._progress.format()  # noqa: SLF001
+    assert "processos" not in page._progress.format()  # noqa: SLF001
+
+
+def test_a9_todos_datepickers_sao_calendar_date_edit() -> None:
+    """A9 (2026-05-03): todos os datepickers da page Leitor DJE são
+    instâncias de ``CalendarDateEdit`` (subclass que abre calendário em
+    qualquer clique do mouse, não só na seta dropdown)."""
+    _qapp()
+    from notion_rpadv.pages.leitor_dje import LeitorDJEPage
+    from notion_rpadv.widgets.calendar_date_edit import CalendarDateEdit
+
+    page = LeitorDJEPage(conn=MagicMock(), token="dummy", user="leo")
+    # Eixo OAB:
+    assert isinstance(page._date_inicio_padrao, CalendarDateEdit)  # noqa: SLF001
+    assert isinstance(page._date_fim_padrao, CalendarDateEdit)  # noqa: SLF001
+    # Modo manual:
+    assert isinstance(page._date_inicio_manual, CalendarDateEdit)  # noqa: SLF001
+    assert isinstance(page._date_fim_manual, CalendarDateEdit)  # noqa: SLF001
+
+
+def test_a9_calendar_date_edit_eh_subclass_de_qdateedit() -> None:
+    """``CalendarDateEdit`` é subclass de ``QDateEdit`` — preserva todos
+    os comportamentos (``setDate``, ``date()``, ``setDisplayFormat``,
+    ``isinstance`` check em delegates etc.).
+
+    Pós-refator 2026-05-03: usa ``QCalendarWidget`` próprio em vez do
+    popup nativo (calendarPopup=False) — evitando o bug em que o
+    intercept do mousePressEvent decrementava o ano em vez de abrir
+    popup."""
+    _qapp()
+    from PySide6.QtWidgets import QDateEdit
+
+    from notion_rpadv.widgets.calendar_date_edit import CalendarDateEdit
+
+    w = CalendarDateEdit()
+    assert isinstance(w, QDateEdit)
+    # Pós-refator: popup nativo desabilitado — usamos popup custom.
+    assert w.calendarPopup() is False
+
+
+def test_a9_calendar_date_edit_mouse_click_abre_popup_custom() -> None:
+    """Click esquerdo dispara ``_show_calendar_popup`` via subclass
+    ``mousePressEvent`` — o ``QCalendarWidget`` próprio é exibido
+    embaixo do widget. Não decrementa ano (regressão do bug 2026-05-03).
+    """
+    _qapp()
+    from PySide6.QtCore import QDate, QPoint, Qt
+    from PySide6.QtGui import QMouseEvent
+    from PySide6.QtWidgets import QCalendarWidget
+
+    from notion_rpadv.widgets.calendar_date_edit import CalendarDateEdit
+
+    w = CalendarDateEdit()
+    initial_date = QDate(2026, 5, 3)
+    w.setDate(initial_date)
+
+    # Dispara mousePressEvent simulado (clique esquerdo).
+    event = QMouseEvent(
+        QMouseEvent.Type.MouseButtonPress,
+        QPoint(10, 10),
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    w.mousePressEvent(event)
+
+    # Date NÃO decrementou (bug original do mousePressEvent injetando
+    # Alt+Down via keyPressEvent direto).
+    assert w.date() == initial_date
+    # Popup customizado foi criado.
+    assert w._cal_popup is not None  # noqa: SLF001
+    assert isinstance(w._cal_popup, QCalendarWidget)  # noqa: SLF001
+    # Limpa: esconde popup pra não vazar entre tests.
+    w._cal_popup.hide()  # noqa: SLF001
+
+
+def test_a9_calendar_date_edit_clicar_data_no_popup_seta_valor() -> None:
+    """Clicar em uma data dentro do ``QCalendarWidget`` seta o valor
+    do ``CalendarDateEdit`` e fecha o popup."""
+    _qapp()
+    from PySide6.QtCore import QDate
+
+    from notion_rpadv.widgets.calendar_date_edit import CalendarDateEdit
+
+    w = CalendarDateEdit()
+    w.setDate(QDate(2026, 5, 3))
+    # Força criação do popup pra simular click numa data.
+    w._ensure_popup()  # noqa: SLF001
+    nova = QDate(2026, 1, 15)
+    w._on_calendar_clicked(nova)  # noqa: SLF001
+    assert w.date() == nova
+    # Popup fechou.
+    assert not w._cal_popup.isVisible()  # noqa: SLF001
+
+
+def test_a7_exec_container_oculto_no_estado_inicial() -> None:
+    """A7 (2026-05-03): container "Execução em andamento" só aparece
+    durante varredura — escondido por default."""
+    _qapp()
+    from notion_rpadv.pages.leitor_dje import LeitorDJEPage
+
+    page = LeitorDJEPage(conn=MagicMock(), token="dummy", user="leo")
+    # No estado inicial, container está oculto (setVisible(False)).
+    assert not page._exec_container.isVisible() or page._exec_container.isHidden()  # noqa: SLF001
+    # ``_cancel_btn`` agora vive dentro do container — apenas foi criado
+    # (sem mais ``setVisible(False)`` antigo de fora).
+    assert hasattr(page, "_cancel_btn")
+
+
+# ---------------------------------------------------------------------------
+# Hotfix 2026-05-03 — modal "Arquivo não encontrado" não pode aparecer
+# em fluxos automáticos (mount, troca de aba) nem em clique sobre botão
+# cujo arquivo já sumiu — silenciosamente esconde o botão.
+# ---------------------------------------------------------------------------
+
+
+def test_hotfix_open_file_arquivo_inexistente_esconde_botao_sem_modal(
+    tmp_path: Path,
+) -> None:
+    """Click em "Abrir arquivo gerado" quando ``_last_output_path``
+    aponta pra arquivo inexistente: botão é escondido silenciosamente,
+    SEM modal."""
+    _qapp()
+    from unittest.mock import patch
+
+    from notion_rpadv.pages.leitor_dje import LeitorDJEPage
+
+    page = LeitorDJEPage(conn=MagicMock(), token="dummy", user="leo")
+    # Simula execução anterior que setou path mas arquivo sumiu.
+    page._last_output_path = tmp_path / "nao_existe.xlsx"  # noqa: SLF001
+    page._open_file_btn.setVisible(True)  # noqa: SLF001 — simula pós-finished
+    with patch.object(page, "_styled_warning") as mock_warn, \
+         patch("notion_rpadv.pages.leitor_dje.QDesktopServices") as mock_qds:
+        page._on_open_file_clicked()  # noqa: SLF001
+    mock_warn.assert_not_called()
+    mock_qds.openUrl.assert_not_called()
+    assert (
+        not page._open_file_btn.isVisible()  # noqa: SLF001
+        or page._open_file_btn.isHidden()  # noqa: SLF001
+    )
+
+
+def test_hotfix_open_file_arquivo_existente_abre_normalmente(
+    tmp_path: Path,
+) -> None:
+    """Click em "Abrir arquivo gerado" com arquivo presente: abre via
+    ``QDesktopServices.openUrl`` sem warning."""
+    _qapp()
+    from unittest.mock import patch
+
+    from notion_rpadv.pages.leitor_dje import LeitorDJEPage
+
+    arquivo = tmp_path / "publicacoes.xlsx"
+    arquivo.write_bytes(b"fake xlsx content")
+    page = LeitorDJEPage(conn=MagicMock(), token="dummy", user="leo")
+    page._last_output_path = arquivo  # noqa: SLF001
+    page._open_file_btn.setVisible(True)  # noqa: SLF001
+    with patch.object(page, "_styled_warning") as mock_warn, \
+         patch("notion_rpadv.pages.leitor_dje.QDesktopServices") as mock_qds:
+        page._on_open_file_clicked()  # noqa: SLF001
+    mock_warn.assert_not_called()
+    mock_qds.openUrl.assert_called_once()
+
+
+def test_hotfix_refresh_visibility_esconde_botoes_de_paths_que_sumiram(
+    tmp_path: Path,
+) -> None:
+    """``_refresh_open_buttons_visibility`` esconde silenciosamente
+    todos os botões cujos paths não existem no FS."""
+    _qapp()
+    from notion_rpadv.pages.leitor_dje import LeitorDJEPage
+
+    page = LeitorDJEPage(conn=MagicMock(), token="dummy", user="leo")
+    # Fake state: 3 botões visíveis com paths inválidos.
+    page._last_output_path = tmp_path / "no.xlsx"  # noqa: SLF001
+    page._last_historico_path = tmp_path / "no_hist.xlsx"  # noqa: SLF001
+    page._open_file_btn.setVisible(True)  # noqa: SLF001
+    page._open_hist_btn.setVisible(True)  # noqa: SLF001
+    page._open_dir_btn.setVisible(True)  # noqa: SLF001
+
+    page._refresh_open_buttons_visibility()  # noqa: SLF001
+    # Todos os 3 caem silenciosamente — sem modal, sem exception.
+    for btn in (page._open_file_btn, page._open_hist_btn,  # noqa: SLF001
+                page._open_dir_btn):  # noqa: SLF001
+        assert not btn.isVisible() or btn.isHidden()
+
+
+def test_hotfix_refresh_visibility_mantem_botoes_com_paths_validos(
+    tmp_path: Path,
+) -> None:
+    """``_refresh_open_buttons_visibility`` NÃO mexe em botões com
+    paths válidos."""
+    _qapp()
+    from notion_rpadv.pages.leitor_dje import LeitorDJEPage
+
+    arquivo = tmp_path / "ok.xlsx"
+    arquivo.write_bytes(b"x")
+    historico = tmp_path / "hist.xlsx"
+    historico.write_bytes(b"x")
+    page = LeitorDJEPage(conn=MagicMock(), token="dummy", user="leo")
+    page._last_output_path = arquivo  # noqa: SLF001
+    page._last_historico_path = historico  # noqa: SLF001
+    # Marca todos como "visíveis" (estado pós-_on_finished).
+    page._open_file_btn.setVisible(True)  # noqa: SLF001
+    page._open_hist_btn.setVisible(True)  # noqa: SLF001
+    page._open_dir_btn.setVisible(True)  # noqa: SLF001
+
+    page._refresh_open_buttons_visibility()  # noqa: SLF001
+    # ``isVisible()`` em widget Qt fora de ``show()`` retorna False
+    # mesmo que ``setVisible(True)`` — testamos via ``isHidden()``
+    # (False = não foi explicitamente escondido pelo refresh).
+    assert not page._open_file_btn.isHidden()  # noqa: SLF001
+    assert not page._open_hist_btn.isHidden()  # noqa: SLF001
+    assert not page._open_dir_btn.isHidden()  # noqa: SLF001
+
+
+def test_hotfix_show_event_revalida_botoes_quando_aba_volta(
+    tmp_path: Path,
+) -> None:
+    """``showEvent`` (acionado quando a página volta a ser exibida —
+    troca de aba) revalida visibilidade silenciosamente. Não mostra
+    modal."""
+    _qapp()
+    from PySide6.QtGui import QShowEvent
+    from unittest.mock import patch
+
+    from notion_rpadv.pages.leitor_dje import LeitorDJEPage
+
+    page = LeitorDJEPage(conn=MagicMock(), token="dummy", user="leo")
+    page._last_output_path = tmp_path / "sumiu.xlsx"  # noqa: SLF001
+    page._open_file_btn.setVisible(True)  # noqa: SLF001
+    with patch.object(page, "_styled_warning") as mock_warn:
+        # Simula evento show.
+        page.showEvent(QShowEvent())
+    mock_warn.assert_not_called()
+    assert (
+        not page._open_file_btn.isVisible()  # noqa: SLF001
+        or page._open_file_btn.isHidden()  # noqa: SLF001
+    )

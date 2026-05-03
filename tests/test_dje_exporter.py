@@ -7,8 +7,6 @@ import json
 from datetime import date
 from pathlib import Path
 
-import pytest
-
 
 # ---------------------------------------------------------------------------
 # Naming + versionamento
@@ -97,12 +95,14 @@ def test_xlsx_aba_chamada_publicacoes(tmp_path: Path) -> None:
     assert wb.sheetnames == ["Publicacoes"]
 
 
-def test_xlsx_advogados_consultados_eh_primeira_coluna(tmp_path: Path) -> None:
-    """Fase 3: ``advogados_consultados_escritorio`` (renomeada) é a 1ª
-    coluna do schema canônico. Antes era ``advogados_consultados``."""
+def test_xlsx_datadisponibilizacao_eh_primeira_coluna(tmp_path: Path) -> None:
+    """Pós-Fase 3: ``datadisponibilizacao`` (formato BR DD/MM/AAAA) é a
+    1ª coluna do schema canônico (visível). ``advogados_consultados_escritorio``
+    permanece exportada mas oculta (column_dimensions.hidden=True)."""
     from notion_rpadv.services.dje_exporter import write_publicacoes_xlsx
     rows = [{
         "id": 1, "hash": "abc", "texto": "publi 1",
+        "datadisponibilizacao": "01/05/2026",
         "advogado_consultado": "Leonardo Guedes da Fonseca Passos (36129/DF)",
         "destinatarioadvogados": [
             {"advogado": {"numero_oab": "36129", "uf_oab": "DF", "nome": "Leonardo"}},
@@ -116,8 +116,14 @@ def test_xlsx_advogados_consultados_eh_primeira_coluna(tmp_path: Path) -> None:
     )
     wb = _read_back(result.path)
     ws = wb["Publicacoes"]
-    assert ws.cell(row=1, column=1).value == "advogados_consultados_escritorio"
-    assert ws.cell(row=2, column=1).value == (
+    assert ws.cell(row=1, column=1).value == "datadisponibilizacao"
+    assert ws.cell(row=2, column=1).value == "01/05/2026"
+    # advogados_consultados_escritorio: ainda está exportada, mas oculta.
+    headers = [
+        ws.cell(row=1, column=c).value for c in range(1, ws.max_column + 1)
+    ]
+    advs_idx = headers.index("advogados_consultados_escritorio") + 1
+    assert ws.cell(row=2, column=advs_idx).value == (
         "Leonardo Guedes da Fonseca Passos (36129/DF)"
     )
 
@@ -173,9 +179,12 @@ def test_xlsx_serializa_arrays_como_json(tmp_path: Path) -> None:
 
 
 def test_xlsx_schema_canonico_20_colunas_em_ordem_fixa(tmp_path: Path) -> None:
-    """Fase 3: schema canônico passou de 20 → 21 colunas em ordem fixa
-    (CANONICAL_COLUMNS). 1ª col renomeada, última col nova
-    (``oabs_externas_consultadas``)."""
+    """Pós-Fase 3: schema canônico passou de 21 → 20 colunas em ordem
+    fixa (CANONICAL_COLUMNS). Eliminada ``data_disponibilizacao`` (com
+    underscore) — duplicata da ``datadisponibilizacao`` que vem da API.
+    Nova ordem: 9 visíveis primeiro (datadisponibilizacao, siglaTribunal,
+    ..., link), depois 11 ocultas (advogados_consultados_escritorio,
+    observacoes, ..., oabs_externas_consultadas)."""
     from notion_rpadv.services.dje_exporter import write_publicacoes_xlsx
     from notion_rpadv.services.dje_transform import CANONICAL_COLUMNS
     rows = [{
@@ -194,10 +203,10 @@ def test_xlsx_schema_canonico_20_colunas_em_ordem_fixa(tmp_path: Path) -> None:
         ws.cell(row=1, column=c).value
         for c in range(1, ws.max_column + 1)
     ]
-    # 21 colunas exatas, na ordem do schema canônico Fase 3.
+    # 20 colunas exatas, na ordem do schema canônico pós-Fase 3.
     assert headers == CANONICAL_COLUMNS
-    assert headers[0] == "advogados_consultados_escritorio"
-    assert headers[1] == "observacoes"
+    assert headers[0] == "datadisponibilizacao"
+    assert headers[1] == "siglaTribunal"
     assert headers[-1] == "oabs_externas_consultadas"
 
 
@@ -231,7 +240,7 @@ def test_xlsx_chaves_extras_no_payload_sao_ignoradas(tmp_path: Path) -> None:
 
 def test_xlsx_lista_vazia_gera_arquivo_so_com_header(tmp_path: Path) -> None:
     """0 publicações → arquivo gerado mesmo assim com header completo
-    (21 colunas do schema canônico Fase 3)."""
+    (20 colunas do schema canônico pós-Fase 3)."""
     from notion_rpadv.services.dje_exporter import write_publicacoes_xlsx
     from notion_rpadv.services.dje_transform import CANONICAL_COLUMNS
     result = write_publicacoes_xlsx(
@@ -244,8 +253,8 @@ def test_xlsx_lista_vazia_gera_arquivo_so_com_header(tmp_path: Path) -> None:
     assert result.skipped == []
     wb = _read_back(result.path)
     ws = wb["Publicacoes"]
-    # Fase 3: 1ª col é advogados_consultados_escritorio
-    assert ws.cell(row=1, column=1).value == "advogados_consultados_escritorio"
+    # Pós-Fase 3: 1ª col é datadisponibilizacao (visível).
+    assert ws.cell(row=1, column=1).value == "datadisponibilizacao"
     headers = [
         ws.cell(row=1, column=c).value
         for c in range(1, ws.max_column + 1)
@@ -405,15 +414,15 @@ def test_F21_06_linha_com_erro_inesperado_eh_pulada_demais_escritas(
     assert sk.row_id == 200
     assert "fake fail" in sk.error.lower()
     # Arquivo existe e tem header + 2 linhas de dados (sem gaps).
-    # Fase 3: validamos por col 3 (`id`) que sempre tem dado — col 1
-    # (advogados_consultados_escritorio) só é populada pra advogados
-    # da lista oficial; estes testes usam OABs sintéticas.
+    # Pós-Fase 3: col 2 = siglaTribunal (visível). É o campo mais
+    # confiável pra checar presença de dado nessas rows sintéticas
+    # (col 1 = datadisponibilizacao, populada via post-processing).
     wb = _read_back(result.path)
     ws = wb["Publicacoes"]
-    assert ws.cell(row=2, column=3).value is not None
-    assert ws.cell(row=3, column=3).value is not None
+    assert ws.cell(row=2, column=2).value is not None
+    assert ws.cell(row=3, column=2).value is not None
     # Linha 4 do xlsx é vazia (só foram escritas 2 de 3 source rows).
-    assert ws.cell(row=4, column=3).value is None
+    assert ws.cell(row=4, column=2).value is None
 
 
 def test_F21_07_multiplas_linhas_com_erro_todas_puladas_arquivo_gerado(
@@ -477,14 +486,15 @@ def test_F21_07_multiplas_linhas_com_erro_todas_puladas_arquivo_gerado(
         f"esperava 2 warnings 'linha pulada', got {pulada_count}: {warn_msgs!r}"
     )
     # Arquivo gerado com 3 linhas de dados (5 source - 2 puladas).
-    # Fase 3: validamos por col 3 (`id`) que sempre tem dado.
+    # Pós-Fase 3: col 2 = siglaTribunal (visível, sempre populada
+    # nessas rows sintéticas).
     assert result.path.exists()
     wb = _read_back(result.path)
     ws = wb["Publicacoes"]
-    assert ws.cell(row=2, column=3).value is not None
-    assert ws.cell(row=3, column=3).value is not None
-    assert ws.cell(row=4, column=3).value is not None
-    assert ws.cell(row=5, column=3).value is None
+    assert ws.cell(row=2, column=2).value is not None
+    assert ws.cell(row=3, column=2).value is not None
+    assert ws.cell(row=4, column=2).value is not None
+    assert ws.cell(row=5, column=2).value is None
 
 
 def test_F21_08_zero_linhas_com_erro_skipped_eh_lista_vazia(
@@ -504,12 +514,12 @@ def test_F21_08_zero_linhas_com_erro_skipped_eh_lista_vazia(
     )
     assert result.skipped == []
     assert isinstance(result.skipped, list)
-    # Arquivo OK com 1 linha de dados. Fase 3: validamos por col 3 (id)
-    # que sempre é populada (col 1 = escritório fica vazia pra OAB sintética).
+    # Arquivo OK com 1 linha de dados. Pós-Fase 3: col 2 = siglaTribunal
+    # (visível, sempre populada nessa row sintética).
     wb = _read_back(result.path)
     ws = wb["Publicacoes"]
-    assert ws.cell(row=2, column=3).value is not None
-    assert ws.cell(row=3, column=3).value is None
+    assert ws.cell(row=2, column=2).value is not None
+    assert ws.cell(row=3, column=2).value is None
 
 
 # ---------------------------------------------------------------------------
@@ -517,8 +527,9 @@ def test_F21_08_zero_linhas_com_erro_skipped_eh_lista_vazia(
 # ---------------------------------------------------------------------------
 
 
-def test_F3_29_schema_xlsx_tem_21_colunas_em_ordem(tmp_path: Path) -> None:
-    """F3-29: o xlsx gerado tem 21 cabeçalhos exatamente nessa ordem."""
+def test_F3_29_schema_xlsx_tem_20_colunas_em_ordem(tmp_path: Path) -> None:
+    """Pós-Fase 3: o xlsx gerado tem 20 cabeçalhos exatamente nessa ordem
+    (era 21 — ``data_disponibilizacao`` redundante eliminada)."""
     from notion_rpadv.services.dje_exporter import write_publicacoes_xlsx
     from notion_rpadv.services.dje_transform import CANONICAL_COLUMNS
 
@@ -534,16 +545,19 @@ def test_F3_29_schema_xlsx_tem_21_colunas_em_ordem(tmp_path: Path) -> None:
     wb = _read_back(result.path)
     ws = wb["Publicacoes"]
     headers = [
-        ws.cell(row=1, column=c).value for c in range(1, 22)
+        ws.cell(row=1, column=c).value for c in range(1, 21)
     ]
-    assert len(headers) == 21
+    assert len(headers) == 20
     assert headers == CANONICAL_COLUMNS
 
 
-def test_F3_30_advogados_consultados_escritorio_eh_primeira(
+def test_F3_30_visiveis_primeiro_advogados_escritorio_oculta(
     tmp_path: Path,
 ) -> None:
-    """F3-30: ``advogados_consultados_escritorio`` é a 1ª coluna."""
+    """Pós-Fase 3: visíveis (datadisponibilizacao, siglaTribunal, ...) vêm
+    primeiro; ``advogados_consultados_escritorio`` permanece exportada
+    mas com ``column_dimensions.hidden=True`` (na fatia oculta a partir
+    da col 10)."""
     from notion_rpadv.services.dje_exporter import write_publicacoes_xlsx
 
     rows = [{
@@ -557,16 +571,24 @@ def test_F3_30_advogados_consultados_escritorio_eh_primeira(
     )
     wb = _read_back(result.path)
     ws = wb["Publicacoes"]
-    assert ws.cell(row=1, column=1).value == (
-        "advogados_consultados_escritorio"
+    # 1ª col é datadisponibilizacao (visível).
+    assert ws.cell(row=1, column=1).value == "datadisponibilizacao"
+    # advogados_consultados_escritorio fica em algum lugar a partir da 10ª.
+    headers = [
+        ws.cell(row=1, column=c).value for c in range(1, ws.max_column + 1)
+    ]
+    advs_idx = headers.index("advogados_consultados_escritorio") + 1
+    assert advs_idx >= 10, (
+        f"advogados_consultados_escritorio deveria estar na fatia oculta "
+        f"(col >= 10), está na col {advs_idx}"
     )
 
 
 def test_F3_31_oabs_externas_consultadas_eh_ultima_e_vazia_em_padrao(
     tmp_path: Path,
 ) -> None:
-    """F3-31: ``oabs_externas_consultadas`` é a 21ª coluna; vazia em
-    modo padrão (defaults do ``write_publicacoes_xlsx``)."""
+    """Pós-Fase 3: ``oabs_externas_consultadas`` é a 20ª coluna (oculta);
+    vazia em modo padrão (defaults do ``write_publicacoes_xlsx``)."""
     from notion_rpadv.services.dje_exporter import write_publicacoes_xlsx
 
     rows = [{
@@ -582,9 +604,9 @@ def test_F3_31_oabs_externas_consultadas_eh_ultima_e_vazia_em_padrao(
     )
     wb = _read_back(result.path)
     ws = wb["Publicacoes"]
-    assert ws.cell(row=1, column=21).value == "oabs_externas_consultadas"
+    assert ws.cell(row=1, column=20).value == "oabs_externas_consultadas"
     # Linha 2 (primeira de dados) tem essa célula vazia em modo padrão.
-    assert ws.cell(row=2, column=21).value in (None, "")
+    assert ws.cell(row=2, column=20).value in (None, "")
 
 
 # ---------------------------------------------------------------------------
@@ -625,12 +647,16 @@ def test_F3_34_historico_gerado_apos_execucao_com_publicacoes_novas(
 
     wb = _read_back(result.path)
     ws = wb["Publicacoes"]
-    # 1 header + 2 dados
-    assert ws.cell(row=1, column=1).value == "advogados_consultados_escritorio"
+    # 1 header + 2 dados. Pós-Fase 3: 1ª col é datadisponibilizacao.
+    assert ws.cell(row=1, column=1).value == "datadisponibilizacao"
     # Ordem: data DESC, sigla ASC
-    # 200 (2026-04-30, TRT01) primeiro, 100 (2026-04-29, TRT10) depois
-    assert ws.cell(row=2, column=3).value == 200  # 'id' é coluna 3
-    assert ws.cell(row=3, column=3).value == 100
+    # 200 (2026-04-30, TRT01) primeiro, 100 (2026-04-29, TRT10) depois.
+    headers = [
+        ws.cell(row=1, column=c).value for c in range(1, ws.max_column + 1)
+    ]
+    id_col = headers.index("id") + 1
+    assert ws.cell(row=2, column=id_col).value == 200
+    assert ws.cell(row=3, column=id_col).value == 100
 
 
 def test_F3_35_historico_inclui_publicacoes_de_modo_manual(
@@ -662,10 +688,11 @@ def test_F3_35_historico_inclui_publicacoes_de_modo_manual(
     assert result.locked is False
     wb = _read_back(result.path)
     ws = wb["Publicacoes"]
-    # 1ª linha de dados (mais recente, id=2) tem externa preenchida
-    assert ws.cell(row=2, column=21).value == "Joao Silva (12345/SP)"
+    # 1ª linha de dados (mais recente, id=2) tem externa preenchida.
+    # Pós-Fase 3: oabs_externas_consultadas é a col 20 (era 21).
+    assert ws.cell(row=2, column=20).value == "Joao Silva (12345/SP)"
     # 2ª linha (id=1) tem externa vazia
-    assert ws.cell(row=3, column=21).value in (None, "")
+    assert ws.cell(row=3, column=20).value in (None, "")
 
 
 def test_F3_36_historico_locked_nao_derruba_execucao(tmp_path: Path) -> None:
@@ -726,8 +753,8 @@ def test_F3_37_historico_em_banco_vazio_nao_eh_gerado_pelo_caller(
     assert result.path.exists()
     wb = _read_back(result.path)
     ws = wb["Publicacoes"]
-    # Header existe; sem dados.
-    assert ws.cell(row=1, column=1).value == "advogados_consultados_escritorio"
+    # Header existe; sem dados. Pós-Fase 3: 1ª col é datadisponibilizacao.
+    assert ws.cell(row=1, column=1).value == "datadisponibilizacao"
     assert ws.cell(row=2, column=1).value is None
 
 
@@ -765,3 +792,120 @@ def test_F3_historico_atomic_rename_substitui_anterior(tmp_path: Path) -> None:
     assert size2 != size1
     # .tmp não ficou órfão
     assert not (tmp_path / HISTORICO_TMP_FILENAME).exists()
+
+
+# ---------------------------------------------------------------------------
+# Pós-Fase 3 (2026-05-02) — reordenação + ocultação de colunas no xlsx
+# ---------------------------------------------------------------------------
+
+
+def test_pos_F3_visiveis_estao_em_ordem_no_inicio(tmp_path: Path) -> None:
+    """Pós-Fase 3: as 9 colunas visíveis aparecem nas 9 primeiras
+    posições, na ordem editorial: datadisponibilizacao, siglaTribunal,
+    numeroprocessocommascara, nomeOrgao, tipoComunicacao, tipoDocumento,
+    nomeClasse, texto, link."""
+    from notion_rpadv.services.dje_exporter import write_publicacoes_xlsx
+
+    rows = [{
+        "id": 1, "hash": "h1", "siglaTribunal": "TRT10",
+        "data_disponibilizacao": "2026-04-30",
+        "advogado_consultado": "Leonardo Guedes da Fonseca Passos (36129/DF)",
+        "destinatarioadvogados": [],
+    }]
+    result = write_publicacoes_xlsx(
+        rows, tmp_path, date(2026, 4, 30), date(2026, 4, 30),
+    )
+    wb = _read_back(result.path)
+    ws = wb["Publicacoes"]
+    headers_visiveis = [
+        ws.cell(row=1, column=c).value for c in range(1, 10)
+    ]
+    assert headers_visiveis == [
+        "datadisponibilizacao",
+        "siglaTribunal",
+        "numeroprocessocommascara",
+        "nomeOrgao",
+        "tipoComunicacao",
+        "tipoDocumento",
+        "nomeClasse",
+        "texto",
+        "link",
+    ]
+
+
+def test_pos_F3_colunas_ocultas_tem_column_dimensions_hidden(
+    tmp_path: Path,
+) -> None:
+    """Pós-Fase 3: as 11 colunas após a 9ª (advogados_consultados_escritorio,
+    observacoes, id, hash, numero_processo, idOrgao, codigoClasse,
+    numeroComunicacao, destinatarios, destinatarioadvogados,
+    oabs_externas_consultadas) ficam exportadas mas com
+    ``column_dimensions[letter].hidden=True`` no xlsx — Excel as esconde
+    por default, usuário pode mostrar via menu se precisar."""
+    from openpyxl.utils import get_column_letter
+
+    from notion_rpadv.services.dje_exporter import write_publicacoes_xlsx
+    from notion_rpadv.services.dje_transform import (
+        CANONICAL_COLUMNS,
+        HIDDEN_COLUMNS,
+    )
+
+    rows = [{
+        "id": 1, "hash": "h1", "siglaTribunal": "TRT10",
+        "data_disponibilizacao": "2026-04-30",
+        "advogado_consultado": "Leonardo Guedes da Fonseca Passos (36129/DF)",
+        "destinatarioadvogados": [],
+    }]
+    result = write_publicacoes_xlsx(
+        rows, tmp_path, date(2026, 4, 30), date(2026, 4, 30),
+    )
+    wb = _read_back(result.path)
+    ws = wb["Publicacoes"]
+    # HIDDEN_COLUMNS é o contrato; cada uma deve estar marcada hidden=True.
+    assert len(HIDDEN_COLUMNS) == 11
+    for col_idx, name in enumerate(CANONICAL_COLUMNS, start=1):
+        letter = get_column_letter(col_idx)
+        dim = ws.column_dimensions.get(letter)
+        if name in HIDDEN_COLUMNS:
+            assert dim is not None and dim.hidden, (
+                f"Coluna {col_idx} ({name!r}) deveria estar oculta"
+            )
+        else:
+            # Visíveis: ou não tem dimensão (default visível) ou
+            # explicitamente hidden=False.
+            if dim is not None:
+                assert not dim.hidden, (
+                    f"Coluna {col_idx} ({name!r}) deveria estar visível"
+                )
+
+
+def test_pos_F3_data_disponibilizacao_underscore_nao_aparece_no_xlsx(
+    tmp_path: Path,
+) -> None:
+    """Pós-Fase 3: a coluna ``data_disponibilizacao`` (com underscore)
+    SAIU do xlsx — só ``datadisponibilizacao`` (sem underscore, formato
+    BR DD/MM/AAAA) aparece. SQLite ainda guarda a versão ISO internamente,
+    e ``sort_rows`` ainda usa pra ordenação, mas o Excel só mostra a
+    forma BR (que é o que o operador lê)."""
+    from notion_rpadv.services.dje_exporter import write_publicacoes_xlsx
+
+    rows = [{
+        "id": 1, "hash": "h1", "siglaTribunal": "TRT10",
+        "data_disponibilizacao": "2026-04-30",
+        "datadisponibilizacao": "30/04/2026",
+        "advogado_consultado": "Leonardo Guedes da Fonseca Passos (36129/DF)",
+        "destinatarioadvogados": [],
+    }]
+    result = write_publicacoes_xlsx(
+        rows, tmp_path, date(2026, 4, 30), date(2026, 4, 30),
+    )
+    wb = _read_back(result.path)
+    ws = wb["Publicacoes"]
+    headers = [
+        ws.cell(row=1, column=c).value for c in range(1, ws.max_column + 1)
+    ]
+    assert "data_disponibilizacao" not in headers
+    assert "datadisponibilizacao" in headers
+    # E a célula da datadisponibilizacao tem o valor BR formatado.
+    di_idx = headers.index("datadisponibilizacao") + 1
+    assert ws.cell(row=2, column=di_idx).value == "30/04/2026"

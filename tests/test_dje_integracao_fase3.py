@@ -92,8 +92,19 @@ def _run_worker(
     mode: str = "padrao",
     oabs_externas: set[str] | None = None,
 ):
-    """Constrói _DJEWorker com FetchSummary mockado e roda síncrono."""
-    from notion_rpadv.pages.leitor_dje import _DJEWorker
+    """Constrói _DJEWorker com FetchSummary mockado e roda síncrono.
+
+    Pós-Fase 3 (2026-05-02): worker recebe ``flow=`` em vez de ``mode=``.
+    Aqui mantemos a API antiga do helper (``mode='padrao'/'manual'``)
+    e mapeamos:
+    - ``mode='padrao'`` → ``FLOW_OAB_NOVAS``
+    - ``mode='manual'`` → ``FLOW_MANUAL`` (ou ``FLOW_OAB_PERIODO`` —
+      ambos são transient; pra esses tests, FLOW_MANUAL serve)."""
+    from notion_rpadv.pages.leitor_dje import (
+        FLOW_MANUAL,
+        FLOW_OAB_NOVAS,
+        _DJEWorker,
+    )
 
     if consultas is None:
         consultas = [
@@ -111,10 +122,12 @@ def _run_worker(
     )
     if oabs_externas is None:
         oabs_externas = set()
+    flow = FLOW_OAB_NOVAS if mode == "padrao" else FLOW_MANUAL
     worker = _DJEWorker(
-        consultas=consultas,
+        flow=flow,
+        consultas_oab=consultas,
+        consultas_cnj=None,
         output_dir=output_dir,
-        mode=mode,
         oabs_escritorio_marcadas=marcadas,
         oabs_externas_pesquisadas=oabs_externas,
         dje_conn=conn,
@@ -244,16 +257,17 @@ def test_falha_principal_segura_cursor_mesmo_se_retry_recupera(
         summary.by_advogado = [ar]
         summary.errors = [ar]
 
-        from notion_rpadv.pages.leitor_dje import _DJEWorker
+        from notion_rpadv.pages.leitor_dje import FLOW_OAB_NOVAS, _DJEWorker
 
         worker = _DJEWorker(
-            consultas=[AdvogadoConsulta(
+            flow=FLOW_OAB_NOVAS,
+            consultas_oab=[AdvogadoConsulta(
                 advogado=ricardo,
                 data_inicio=date(2026, 1, 1),
                 data_fim=date(2026, 4, 30),
             )],
+            consultas_cnj=None,
             output_dir=output_dir,
-            mode="padrao",
             oabs_escritorio_marcadas={"15523/DF"},
             oabs_externas_pesquisadas=set(),
             dje_conn=conn,

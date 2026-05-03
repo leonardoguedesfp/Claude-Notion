@@ -461,9 +461,10 @@ def test_F2_26_integracao_dedup_observacoes_html_ordem_colunas() -> None:
     # 1) Dedup: 3 linhas finais
     assert len(rows) == 3
 
-    # 2) 21 colunas em ordem canônica (Fase 3)
+    # 2) 20 colunas em ordem canônica (pós-Fase 3 — eliminada
+    # data_disponibilizacao duplicata)
     assert columns == CANONICAL_COLUMNS
-    assert len(columns) == 21
+    assert len(columns) == 20
 
     # 3) Ordem: STJ 2026-04-30 (id=1), STJ 2026-04-28 (id=3), TRT10 2026-04-29 (id=2)
     assert [r["id"] for r in rows] == [1, 3, 2]
@@ -574,13 +575,19 @@ def test_check_constants_motivo_whitespace_only_nao_dispara() -> None:
 
 
 def test_canonical_columns_tem_20_entradas_unicas() -> None:
-    """Fase 3: schema canônico tem 21 colunas únicas (era 20)."""
+    """Pós-Fase 3: schema canônico passou a ter 20 colunas únicas (era 21).
+
+    Eliminada ``data_disponibilizacao`` (com underscore) — duplicata da
+    ``datadisponibilizacao`` que já vem da API DJEN. Nova ordem editorial:
+    9 visíveis primeiro (datadisponibilizacao, siglaTribunal, etc.),
+    11 ocultas no fim (advogados_consultados_escritorio, observacoes,
+    metadados, payload bruto)."""
     from notion_rpadv.services.dje_transform import CANONICAL_COLUMNS
-    assert len(CANONICAL_COLUMNS) == 21
-    assert len(set(CANONICAL_COLUMNS)) == 21
-    # Fase 3: 1ª coluna foi renomeada; 2ª segue a mesma.
-    assert CANONICAL_COLUMNS[0] == "advogados_consultados_escritorio"
-    assert CANONICAL_COLUMNS[1] == "observacoes"
+    assert len(CANONICAL_COLUMNS) == 20
+    assert len(set(CANONICAL_COLUMNS)) == 20
+    # Pós-Fase 3: 1ª é a data BR, 2ª é o tribunal.
+    assert CANONICAL_COLUMNS[0] == "datadisponibilizacao"
+    assert CANONICAL_COLUMNS[1] == "siglaTribunal"
 
 
 def test_dropped_columns_nao_intersecta_canonical() -> None:
@@ -1018,13 +1025,16 @@ def test_F3_split_label_externa_nao_pesquisada_eh_dropada(
     assert out[0]["advogados_consultados_escritorio"] == ""
 
 
-def test_F3_canonical_columns_tem_21_e_inclui_novas() -> None:
-    """Schema canônico tem 21 colunas; primeira renomeada e última nova."""
+def test_F3_canonical_columns_tem_20_e_inclui_novas() -> None:
+    """Pós-Fase 3: schema canônico tem 20 colunas; última segue sendo
+    ``oabs_externas_consultadas`` (oculta) e nome plural antigo
+    ``advogados_consultados`` não aparece (renomeado em Fase 3 pra
+    ``advogados_consultados_escritorio``, agora oculto)."""
     from notion_rpadv.services.dje_transform import CANONICAL_COLUMNS
 
-    assert len(CANONICAL_COLUMNS) == 21
-    assert CANONICAL_COLUMNS[0] == "advogados_consultados_escritorio"
+    assert len(CANONICAL_COLUMNS) == 20
     assert CANONICAL_COLUMNS[-1] == "oabs_externas_consultadas"
+    assert "advogados_consultados_escritorio" in CANONICAL_COLUMNS
     # Nome antigo plural não está mais
     assert "advogados_consultados" not in CANONICAL_COLUMNS
 
@@ -1119,5 +1129,5 @@ def test_F3_transform_rows_for_history_pula_dedup_e_split() -> None:
     assert rows[0]["advogados_consultados_escritorio"] == (
         "Ricardo Luiz Rodrigues da Fonseca Passos (15523/DF)"
     )
-    # 21 colunas
-    assert len(columns) == 21
+    # Pós-Fase 3: 20 colunas (eliminada data_disponibilizacao redundante)
+    assert len(columns) == 20

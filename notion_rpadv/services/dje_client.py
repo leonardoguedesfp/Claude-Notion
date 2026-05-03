@@ -103,6 +103,55 @@ class AdvogadoConsulta:
 
 
 @dataclass
+class ProcessoConsulta:
+    """Especificação de uma consulta por número CNJ: o CNJ com máscara
+    + janela ``[data_inicio, data_fim]`` (mesma pra todos os CNJs da
+    execução, calculada pelo caller a partir do cursor mais antigo
+    dos advogados oficiais ou dos datepickers).
+
+    Pós-Fase 3 (2026-05-02): eixo CNJ do Leitor DJE — alternativa ao
+    eixo OAB. Cada processo é consultado individualmente na API DJEN
+    via ``numeroProcesso=<cnj>``.
+    """
+
+    cnj: str
+    data_inicio: date
+    data_fim: date
+
+
+@dataclass
+class ProcessoResult:
+    """Resultado por processo consultado pelo eixo CNJ. Espelha o
+    ``AdvogadoResult`` mas sem ``data_max_safe`` nem ``sub_windows`` —
+    o eixo CNJ não atualiza watermark e usa janela única (sem split
+    mensal por enquanto)."""
+
+    cnj: str
+    items: list[dict[str, Any]] = field(default_factory=list)
+    paginas: int = 0
+    erro: str | None = None  # None = sucesso, string = mensagem de falha
+
+
+@dataclass
+class ProcessoFetchSummary:
+    """Resultado agregado de uma varredura por CNJ. Mesma forma do
+    ``FetchSummary`` (rows + cancelled), mais a lista de results
+    por processo pra log/aba Status do Excel."""
+
+    rows: list[dict[str, Any]] = field(default_factory=list)
+    by_processo: list[ProcessoResult] = field(default_factory=list)
+    cancelled: bool = False
+
+    @property
+    def total_items(self) -> int:
+        return len(self.rows)
+
+    @property
+    def errors(self) -> list[ProcessoResult]:
+        return [r for r in self.by_processo if r.erro is not None]
+
+
+@dataclass
 class AdvogadoResult:
     """Resultado por advogado: items coletados + meta de execução.
 
@@ -240,6 +289,29 @@ def build_query_params(
     return {
         "numeroOab":                  digits_only,
         "ufOab":                      uf.upper(),
+        "dataDisponibilizacaoInicio": data_inicio.isoformat(),
+        "dataDisponibilizacaoFim":    data_fim.isoformat(),
+        "itensPorPagina":             str(itens_por_pagina),
+        "pagina":                     str(pagina),
+    }
+
+
+def build_query_params_processo(
+    cnj: str,
+    data_inicio: date,
+    data_fim: date,
+    pagina: int,
+    itens_por_pagina: int = PAGE_SIZE,
+) -> dict[str, str]:
+    """Constrói query params pra busca por número CNJ na API DJEN.
+
+    Pós-Fase 3 (2026-05-02): eixo CNJ usa o parâmetro ``numeroProcesso``
+    em vez de ``numeroOab``/``ufOab``. CNJ enviado com máscara — a API
+    DJEN aceita tanto com quanto sem máscara, mas com máscara é mais
+    legível em logs.
+    """
+    return {
+        "numeroProcesso":             cnj,
         "dataDisponibilizacaoInicio": data_inicio.isoformat(),
         "dataDisponibilizacaoFim":    data_fim.isoformat(),
         "itensPorPagina":             str(itens_por_pagina),
@@ -536,6 +608,117 @@ class DJEClient:
             summary.by_advogado.append(agg)
             summary.rows.extend(agg.items)
 
+        return summary
+
+    # ------------------------------------------------------------------
+    # Eixo CNJ (pós-Fase 3, 2026-05-02)
+    # ------------------------------------------------------------------
+
+    def fetch_processo(
+        self,
+        cnj: str,
+        data_inicio: date,
+        data_fim: date,
+        is_cancelled: Callable[[], bool] | None = None,
+    ) -> ProcessoResult:
+        """Pagina e coleta TODAS as publicações de um processo (CNJ) no
+        intervalo. Cada item retornado vira dict do JSON da API com
+        ``cnj_consultado`` injetado (formato ``"0000000-00.0000.0.00.0000"``).
+
+        Comportamento operacional alinhado com ``fetch_advogado``: rate
+        limit entre páginas, retry em 429/503, cancelamento entre páginas,
+        falha persistente NÃO levanta (popula ``erro`` e retorna parcial).
+        """
+        result = ProcessoResult(cnj=cnj)
+        pagina = 1
+        while True:
+            if is_cancelled is not None and is_cancelled():
+                logger.info(
+                    "DJE.cnj: %s — cancelamento detectado antes da pag %d "
+                    "(parcial: %d publicações em %d página(s))",
+                    cnj, pagina, len(result.items), result.paginas,
+                )
+                return result
+            if pagina > 1:
+                self._sleep(RATE_LIMIT_SECONDS)
+            params = build_query_params_processo(
+                cnj, data_inicio, data_fim, pagina,
+            )
+            try:
+                items = self._fetch_page_with_retry(params)
+            except DJEClientError as exc:
+                result.erro = str(exc)
+                logger.warning(
+                    "DJE.cnj: falha persistente em %s pagina=%d: %s",
+                    cnj, pagina, exc,
+                )
+                return result
+            result.paginas = pagina
+            for it in items:
+                annotated = {"cnj_consultado": cnj, **it}
+                result.items.append(annotated)
+            if len(items) < PAGE_SIZE:
+                break
+            pagina += 1
+        logger.info(
+            "DJE.cnj: %s — %d publicações em %d página(s)",
+            cnj, len(result.items), result.paginas,
+        )
+        return result
+
+    def fetch_all_processos(
+        self,
+        consultas: list[ProcessoConsulta],
+        on_progress: Callable[[int, int, ProcessoResult], None] | None = None,
+        is_cancelled: Callable[[], bool] | None = None,
+        on_log_event: Callable[[str], None] | None = None,
+    ) -> ProcessoFetchSummary:
+        """Itera sobre uma lista de ``ProcessoConsulta``, aplicando rate
+        limit entre cada chamada HTTP, e acumula em ``ProcessoFetchSummary``.
+
+        Diferenças vs ``fetch_all`` (eixo OAB):
+        - Sem split mensal de janelas (assumimos janelas mais curtas no
+          eixo CNJ — calculadas a partir do cursor mais antigo dos
+          advogados ou de datepickers; raramente vão > 31 dias).
+        - Sem retry diferido (mesma justificativa).
+        - Sem cálculo de ``data_max_safe`` (eixo CNJ não atualiza
+          watermark — caller só passa janela e processa o que voltou).
+
+        Erros em processos individuais NÃO abortam a varredura.
+        ``cancelled`` propaga corretamente quando ``is_cancelled()`` vira
+        True entre processos.
+        """
+        summary = ProcessoFetchSummary()
+        n_total = len(consultas)
+        first_request = True
+        for idx, c in enumerate(consultas):
+            if is_cancelled is not None and is_cancelled():
+                summary.cancelled = True
+                break
+            if not first_request:
+                self._sleep(RATE_LIMIT_SECONDS)
+            first_request = False
+            res = self.fetch_processo(
+                c.cnj, c.data_inicio, c.data_fim,
+                is_cancelled=is_cancelled,
+            )
+            summary.by_processo.append(res)
+            summary.rows.extend(res.items)
+            if on_progress is not None:
+                try:
+                    on_progress(idx + 1, n_total, res)
+                except Exception:  # noqa: BLE001
+                    logger.exception("DJE.cnj: on_progress raised")
+            if on_log_event is not None:
+                if res.erro is not None:
+                    on_log_event(
+                        f"  CNJ {c.cnj} — FALHA: {res.erro}",
+                    )
+                else:
+                    on_log_event(
+                        f"  CNJ {c.cnj} — {len(res.items)} publicação(ões) "
+                        f"em {res.paginas} página(s)",
+                    )
         return summary
 
     # ------------------------------------------------------------------

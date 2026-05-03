@@ -266,3 +266,61 @@ def test_insert_mode_invalido_levanta(db_path: Path) -> None:
             )
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Pós-Fase 3 (2026-05-02) — app_flags one-shot
+# ---------------------------------------------------------------------------
+
+
+def test_app_flags_read_inexistente_retorna_none(db_path: Path) -> None:
+    """``read_flag`` em chave inexistente retorna ``None`` (não levanta)."""
+    conn = dje_db.get_connection(db_path)
+    try:
+        assert dje_db.read_flag(conn, "chave_que_nao_existe") is None
+    finally:
+        conn.close()
+
+
+def test_app_flags_set_e_read_persiste(db_path: Path) -> None:
+    """``set_flag`` insere; ``read_flag`` recupera o valor exato."""
+    conn = dje_db.get_connection(db_path)
+    try:
+        dje_db.set_flag(conn, "minha_flag", "yes")
+        assert dje_db.read_flag(conn, "minha_flag") == "yes"
+    finally:
+        conn.close()
+
+
+def test_app_flags_set_atualiza_valor_existente(db_path: Path) -> None:
+    """``set_flag`` 2× na mesma chave faz upsert (não duplica linha)."""
+    conn = dje_db.get_connection(db_path)
+    try:
+        dje_db.set_flag(conn, "k", "v1")
+        dje_db.set_flag(conn, "k", "v2")
+        assert dje_db.read_flag(conn, "k") == "v2"
+        # Sanity: 1 row só na tabela.
+        n = conn.execute(
+            "SELECT COUNT(*) AS n FROM app_flags WHERE key='k'"
+        ).fetchone()["n"]
+        assert n == 1
+    finally:
+        conn.close()
+
+
+def test_app_flags_persistem_entre_conexoes(db_path: Path) -> None:
+    """Flag persiste em disco — outra conexão lê o mesmo valor."""
+    conn1 = dje_db.get_connection(db_path)
+    try:
+        dje_db.set_flag(
+            conn1, dje_db.FLAG_REATIVACAO_2026_05_02, "treated",
+        )
+    finally:
+        conn1.close()
+    conn2 = dje_db.get_connection(db_path)
+    try:
+        assert dje_db.read_flag(
+            conn2, dje_db.FLAG_REATIVACAO_2026_05_02,
+        ) == "treated"
+    finally:
+        conn2.close()

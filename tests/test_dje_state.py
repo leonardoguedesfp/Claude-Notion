@@ -230,3 +230,84 @@ def test_clear_legacy_state_zera_djen_state_e_publicacoes(conn) -> None:
     dje_db.clear_legacy_state_and_publicacoes(conn)
     assert dje_db.count_publicacoes(conn) == 0
     assert dje_db.is_legacy_state_present(conn) is False
+
+
+# ---------------------------------------------------------------------------
+# Pós-Fase 3 (2026-05-02) — reset_advogado_cursores
+# ---------------------------------------------------------------------------
+
+
+def test_reset_advogado_cursores_zera_cursor_e_last_run(conn) -> None:
+    """Após reset, cursor e last_run viram None — próxima execução parte
+    de DEFAULT_CURSOR_VAZIO (= 2025-12-31)."""
+    dje_state.update_advogado_cursor(
+        conn, oab="48468", uf="DF", novo_cursor=date(2026, 5, 2),
+    )
+    assert dje_state.read_advogado_cursor(
+        conn, oab="48468", uf="DF",
+    ) == date(2026, 5, 2)
+    affected = dje_state.reset_advogado_cursores(conn, [("48468", "DF")])
+    assert affected == 1
+    assert dje_state.read_advogado_cursor(
+        conn, oab="48468", uf="DF",
+    ) is None
+    assert dje_state.read_advogado_last_run(
+        conn, oab="48468", uf="DF",
+    ) is None
+
+
+def test_reset_advogado_cursores_sem_estado_ainda_retorna_zero(conn) -> None:
+    """Resetar advogado que nunca teve cursor → rowcount=0 (no-op)."""
+    affected = dje_state.reset_advogado_cursores(conn, [("99999", "DF")])
+    assert affected == 0
+
+
+def test_reset_advogado_cursores_so_afeta_oabs_pedidas(conn) -> None:
+    """Reset não toca cursores de outros advogados não listados."""
+    dje_state.update_advogado_cursor(
+        conn, oab="15523", uf="DF", novo_cursor=date(2026, 4, 30),
+    )
+    dje_state.update_advogado_cursor(
+        conn, oab="48468", uf="DF", novo_cursor=date(2026, 5, 2),
+    )
+    dje_state.reset_advogado_cursores(conn, [("48468", "DF")])
+    # Ricardo (15523) intocado:
+    assert dje_state.read_advogado_cursor(
+        conn, oab="15523", uf="DF",
+    ) == date(2026, 4, 30)
+    # Vitor (48468) zerado:
+    assert dje_state.read_advogado_cursor(
+        conn, oab="48468", uf="DF",
+    ) is None
+
+
+def test_reset_advogado_cursores_lista_vazia_retorna_zero(conn) -> None:
+    """Lista vazia → no-op (não levanta SQL inválido)."""
+    affected = dje_state.reset_advogado_cursores(conn, [])
+    assert affected == 0
+
+
+def test_reset_advogado_cursores_nao_apaga_publicacoes(conn) -> None:
+    """Reset SÓ mexe em ``djen_advogado_state`` — publicações capturadas
+    permanecem (ON CONFLICT cuida da dedup na próxima execução)."""
+    dje_state.update_advogado_cursor(
+        conn, oab="48468", uf="DF", novo_cursor=date(2026, 5, 2),
+    )
+    dje_db.insert_publicacao(
+        conn, djen_id=42, hash_="hh",
+        oabs_escritorio="Vitor (48468/DF)", oabs_externas="",
+        numero_processo=None, data_disponibilizacao="2026-04-15",
+        sigla_tribunal="TRT10", payload={"id": 42}, mode="padrao",
+    )
+    conn.commit()
+    n_pre = dje_db.count_publicacoes(conn)
+    dje_state.reset_advogado_cursores(conn, [("48468", "DF")])
+    assert dje_db.count_publicacoes(conn) == n_pre
+
+
+# ---------------------------------------------------------------------------
+# Pós-revisão Seção B (2026-05-03): ``compute_oldest_cursor_window`` foi
+# removida. O eixo CNJ agora usa janela fixa ``[hoje - 15d, hoje]``,
+# calculada inline em ``leitor_dje._on_download_cnj_clicked``. Os tests
+# desse comportamento vivem em ``test_leitor_dje_page``.
+# ---------------------------------------------------------------------------
