@@ -25,6 +25,7 @@ from notion_rpadv.services.dje_notion_mappings import (
     formatar_partes,
     mapear_tipo_comunicacao,
     mapear_tipo_documento,
+    normalizar_classe,
     tinha_destinatarios_advogados,
 )
 from notion_rpadv.services.dje_processos import _normaliza_cnj
@@ -374,7 +375,9 @@ def montar_payload_publicacao(
         "Órgão": _rich_text_prop(publicacao.get("nomeOrgao")),
         "Tipo de comunicação": _select_prop(tipo_comunicacao_canonico),
         "Tipo de documento": _select_prop(tipo_documento_canonico),
-        "Classe": _rich_text_prop(publicacao.get("nomeClasse")),
+        "Classe": _rich_text_prop(
+            normalizar_classe(publicacao.get("nomeClasse")),
+        ),
         "Texto": _texto_inline_prop(texto_pre),
         "Link": _url_prop(publicacao.get("link")),
         "Status": _select_prop("Nova"),

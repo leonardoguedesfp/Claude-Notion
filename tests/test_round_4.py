@@ -15,9 +15,11 @@ Os testes do mapper ponta a ponta (montar_payload_publicacao) ficam em
 from __future__ import annotations
 
 from notion_rpadv.services.dje_notion_mappings import (
+    MAPA_NOMECLASSE,
     PARTES_INLINE_LIMIT,
     POLO_LABEL,
     formatar_partes,
+    normalizar_classe,
 )
 
 
@@ -146,3 +148,85 @@ def test_R4_1_partes_polo_label_constante_canonica() -> None:
     assert POLO_LABEL["A"] == "Polo Ativo"
     assert POLO_LABEL["P"] == "Polo Passivo"
     assert POLO_LABEL["T"] == "Terceiro Interessado"
+
+
+# ===========================================================================
+# 4.2 — Normalização de Classe (casing torto)
+# ===========================================================================
+
+
+def test_R4_2_classe_top_5_acervo_canonizadas() -> None:
+    """Top 5 classes do acervo Round 3 vêm com casing torto e são
+    canonizadas para CAPS uniforme com acentos corretos."""
+    assert normalizar_classe("AçãO TRABALHISTA - RITO ORDINáRIO") == (
+        "AÇÃO TRABALHISTA - RITO ORDINÁRIO"
+    )
+    assert normalizar_classe("RECURSO ORDINáRIO TRABALHISTA") == (
+        "RECURSO ORDINÁRIO TRABALHISTA"
+    )
+    assert normalizar_classe("CUMPRIMENTO DE SENTENçA") == (
+        "CUMPRIMENTO DE SENTENÇA"
+    )
+    assert normalizar_classe("AGRAVO DE PETIçãO") == "AGRAVO DE PETIÇÃO"
+    assert normalizar_classe("PROCEDIMENTO COMUM CíVEL") == (
+        "PROCEDIMENTO COMUM CÍVEL"
+    )
+
+
+def test_R4_2_classe_ja_em_caps_passa_intacta() -> None:
+    """Classes já em CAPS corretas (8 do acervo) NÃO entram no mapa,
+    fallback preserva o cru. Testa: RECURSO ESPECIAL, AGRAVO DE
+    INSTRUMENTO, RECURSO DE REVISTA, etc."""
+    intactas = [
+        "RECURSO ESPECIAL",
+        "AGRAVO DE INSTRUMENTO",
+        "AGRAVO EM RECURSO ESPECIAL",
+        "AGRAVO DE INSTRUMENTO EM RECURSO DE REVISTA",
+        "RECURSO DE REVISTA COM AGRAVO",
+        "AGRAVO",
+        "RECURSO DE REVISTA",
+        "AGRAVO REGIMENTAL TRABALHISTA",
+    ]
+    for c in intactas:
+        assert normalizar_classe(c) == c
+
+
+def test_R4_2_classe_nao_mapeada_passa_intacta() -> None:
+    """Classe nova/futura não listada no mapa: fallback preserva o
+    valor cru (não aplica .upper() cego — pode haver classes futuras
+    bem formatadas)."""
+    classe_nova = "NOVA CLASSE INVENTADA - ALGO"
+    assert normalizar_classe(classe_nova) == classe_nova
+    # Mesmo casing não convencional fica intocado
+    classe_titlecase = "Tipo de Ação Customizado"
+    assert normalizar_classe(classe_titlecase) == classe_titlecase
+
+
+def test_R4_2_classe_titlecase_explicita_no_mapa() -> None:
+    """O caso de title case observado em produção
+    ('Procedimento do Juizado Especial da Fazenda Pública') está
+    no mapa pra ficar consistente com o resto (CAPS uniforme)."""
+    out = normalizar_classe("Procedimento do Juizado Especial da Fazenda Pública")
+    assert out == "PROCEDIMENTO DO JUIZADO ESPECIAL DA FAZENDA PÚBLICA"
+
+
+def test_R4_2_classe_none_e_vazio() -> None:
+    assert normalizar_classe(None) == ""
+    assert normalizar_classe("") == ""
+    assert normalizar_classe("   ") == ""
+
+
+def test_R4_2_classe_strip_aplicado() -> None:
+    """Whitespace nas pontas não atrapalha lookup."""
+    assert normalizar_classe("  AçãO TRABALHISTA - RITO ORDINáRIO  ") == (
+        "AÇÃO TRABALHISTA - RITO ORDINÁRIO"
+    )
+
+
+def test_R4_2_mapa_consistente_chave_diferente_do_valor() -> None:
+    """Sanity: para todas as entradas do MAPA_NOMECLASSE, a saída é
+    diferente da entrada (senão, a entrada é redundante)."""
+    for chave, valor in MAPA_NOMECLASSE.items():
+        assert chave != valor, (
+            f"Entrada redundante: {chave!r} mapeia pra ela mesma"
+        )

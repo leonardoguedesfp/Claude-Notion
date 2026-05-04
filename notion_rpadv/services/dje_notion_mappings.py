@@ -248,6 +248,76 @@ def tinha_destinatarios_advogados(destinatarioadvogados: Any) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Round 4.2 — Normalização de nomeClasse (casing torto do DJEN)
+# ---------------------------------------------------------------------------
+
+#: Tabela de canonização do ``nomeClasse`` do DJEN. As 22 variantes com
+#: casing torto vistas em produção (vogais acentuadas em maiúsculas
+#: viraram minúsculas — ex: ``AçãO`` em vez de ``AÇÃO``) mais 1 caso em
+#: title case (``Procedimento do Juizado Especial da Fazenda Pública``)
+#: mapeiam para CAPS uniforme. As 8 já em CAPS corretas ficam fora do
+#: mapa: o fallback de ``normalizar_classe`` preserva o valor cru.
+#:
+#: Cobertura: 31 variantes do acervo Round 3 (2.152 publicações).
+#: Classes futuras não listadas passam pelo fallback (preservar cru),
+#: evitando regressão se uma classe nova vier bem formatada.
+MAPA_NOMECLASSE: dict[str, str] = {
+    # Casing torto (DJEN serializa "AçãO" em vez de "AÇÃO")
+    "AçãO TRABALHISTA - RITO ORDINáRIO": "AÇÃO TRABALHISTA - RITO ORDINÁRIO",
+    "RECURSO ORDINáRIO TRABALHISTA": "RECURSO ORDINÁRIO TRABALHISTA",
+    "CUMPRIMENTO DE SENTENçA": "CUMPRIMENTO DE SENTENÇA",
+    "AGRAVO DE PETIçãO": "AGRAVO DE PETIÇÃO",
+    "PROCEDIMENTO COMUM CíVEL": "PROCEDIMENTO COMUM CÍVEL",
+    "EMBARGOS DE DECLARAçãO CíVEL": "EMBARGOS DE DECLARAÇÃO CÍVEL",
+    "CUMPRIMENTO PROVISóRIO DE SENTENçA": "CUMPRIMENTO PROVISÓRIO DE SENTENÇA",
+    "APELAçãO CíVEL": "APELAÇÃO CÍVEL",
+    "LIQUIDAçãO POR ARBITRAMENTO": "LIQUIDAÇÃO POR ARBITRAMENTO",
+    "LIQUIDAçãO DE SENTENçA PELO PROCEDIMENTO COMUM": (
+        "LIQUIDAÇÃO DE SENTENÇA PELO PROCEDIMENTO COMUM"
+    ),
+    "AçãO TRABALHISTA - RITO SUMARíSSIMO": "AÇÃO TRABALHISTA - RITO SUMARÍSSIMO",
+    "AGRAVO INTERNO CíVEL": "AGRAVO INTERNO CÍVEL",
+    "EMBARGOS DE DIVERGêNCIA EM RECURSO ESPECIAL": (
+        "EMBARGOS DE DIVERGÊNCIA EM RECURSO ESPECIAL"
+    ),
+    "PROCEDIMENTO DO JUIZADO ESPECIAL CíVEL": "PROCEDIMENTO DO JUIZADO ESPECIAL CÍVEL",
+    "RECURSO ORDINáRIO - RITO SUMARíSSIMO": "RECURSO ORDINÁRIO - RITO SUMARÍSSIMO",
+    "LIQUIDAçãO PROVISóRIA POR ARBITRAMENTO": "LIQUIDAÇÃO PROVISÓRIA POR ARBITRAMENTO",
+    "EXECUçãO PROVISóRIA EM AUTOS SUPLEMENTARES": (
+        "EXECUÇÃO PROVISÓRIA EM AUTOS SUPLEMENTARES"
+    ),
+    "CONFLITO DE COMPETêNCIA": "CONFLITO DE COMPETÊNCIA",
+    "PETIçãO CíVEL": "PETIÇÃO CÍVEL",
+    "EXECUçãO DE TíTULO EXTRAJUDICIAL": "EXECUÇÃO DE TÍTULO EXTRAJUDICIAL",
+    "INVENTáRIO": "INVENTÁRIO",
+    # Title case → CAPS (apenas 1 caso visto em produção)
+    "Procedimento do Juizado Especial da Fazenda Pública": (
+        "PROCEDIMENTO DO JUIZADO ESPECIAL DA FAZENDA PÚBLICA"
+    ),
+    # NOTE: classes já em CAPS corretas (RECURSO ESPECIAL, AGRAVO,
+    # AGRAVO DE INSTRUMENTO, RECURSO DE REVISTA, etc.) NÃO entram no
+    # mapa — passam pelo fallback que preserva o valor cru.
+    # TODO: revisar quando aparecerem novas variantes (volume diário
+    # esperado: ~17 pubs/dia; provável encontrar classes novas conforme
+    # a base cresce).
+}
+
+
+def normalizar_classe(valor: str | None) -> str:
+    """Devolve o ``nomeClasse`` canonizado (CAPS uniforme com acentos
+    corretos) usando ``MAPA_NOMECLASSE``. Variantes não listadas
+    passam intactas — preserva valor cru pra evitar regressão em
+    classes futuras que venham bem formatadas.
+
+    ``None`` ou string vazia → ``""``.
+    """
+    if not valor:
+        return ""
+    s = str(valor).strip()
+    return MAPA_NOMECLASSE.get(s, s)
+
+
+# ---------------------------------------------------------------------------
 # Round 4 — Formatação de Partes (Polo Ativo / Passivo / Terceiro)
 # ---------------------------------------------------------------------------
 
