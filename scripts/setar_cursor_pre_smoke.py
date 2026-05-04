@@ -11,6 +11,21 @@ Inunda o smoke test.
 Solução: pré-setar cursor para ``hoje - N dias`` antes da captura.
 A próxima janela vira ``[hoje - N + 1d, hoje]``.
 
+**Bug-fix (2026-05-04, segunda iteração)**: o reset apaga também
+``app_flags``, removendo ``FLAG_REATIVACAO_2026_05_02``. Quando o
+app abre, esse flag ausente combinado com cursores não-NULL nos 4
+advogados reativados (Vitor 48468, Cecília 20120, Samantha 38809,
+Deborah 75799) faz disparar o modal "Reativação detectada". Se o
+operador clicar "Sim, resetar" (default seria "Não" mas a UX é
+confusa), os 4 cursores que este script setou são **zerados**. Após
+o cancelamento, a captura cobre ``[2026-01-01, hoje]`` para esses
+4 — exatamente o que queríamos evitar.
+
+Fix: este script agora também grava ``FLAG_REATIVACAO_2026_05_02 =
+"skipped_by_smoke_setup"`` para que o modal não dispare durante
+o smoke. A flag tem semântica idêntica a ``"reset_no"`` (= modal
+tratado, cursores mantidos).
+
 Uso:
     python scripts/setar_cursor_pre_smoke.py --dias-atras 7 [--dry-run]
 
@@ -19,11 +34,11 @@ cobre ter 28/04 + qua 29/04 + qui 30/04 + sex 02/05 + seg 04/05 =
 5 dias úteis (sex 01/05 é feriado). ~50-200 pubs estimadas.
 
 Usa API pública ``dje_state.update_advogado_cursor()`` (com guard
-anti-regressão). Não escreve SQL bruto. Idempotente: rodar múltiplas
-vezes não causa efeito além do mesmo cursor sobrescrito.
+anti-regressão) e ``dje_db.set_flag()``. Não escreve SQL bruto.
+Idempotente: rodar múltiplas vezes não causa efeito além do mesmo
+estado.
 
-Read-only sobre o restante do banco (não toca em ``publicacoes``,
-``app_flags``, etc).
+Read-only sobre ``publicacoes`` (não toca neste módulo).
 """
 from __future__ import annotations
 
@@ -120,14 +135,42 @@ def main() -> int:
         else:
             pulados += 1
 
+    # 3. Seta FLAG_REATIVACAO_2026_05_02 para impedir modal de reativação
+    #    de zerar os cursores que acabamos de definir.
+    print()
+    print("[setar cursor pré-smoke] Setando FLAG_REATIVACAO preventiva...")
+    flag_atual = dje_db.read_flag(conn, dje_db.FLAG_REATIVACAO_2026_05_02)
+    if flag_atual is not None:
+        print(
+            f"  flag '{dje_db.FLAG_REATIVACAO_2026_05_02}' já = "
+            f"{flag_atual!r} — sem alteração"
+        )
+    elif args.dry_run:
+        print(
+            f"  flag '{dje_db.FLAG_REATIVACAO_2026_05_02}' "
+            f"→ 'skipped_by_smoke_setup' (DRY-RUN)"
+        )
+    else:
+        dje_db.set_flag(
+            conn, dje_db.FLAG_REATIVACAO_2026_05_02, "skipped_by_smoke_setup",
+        )
+        print(
+            f"  flag '{dje_db.FLAG_REATIVACAO_2026_05_02}' "
+            "→ 'skipped_by_smoke_setup'  ✓"
+        )
+
     if not args.dry_run:
         conn.commit()
 
     print()
     print("=" * 70)
     print("[setar cursor pré-smoke] SUMÁRIO")
-    print(f"  Aplicados: {aplicados}")
-    print(f"  Pulados:   {pulados}")
+    print(f"  Cursores aplicados: {aplicados}")
+    print(f"  Cursores pulados:   {pulados}")
+    print(
+        f"  Flag reativação:    "
+        f"{'já tinha valor — não sobrescrito' if flag_atual is not None else 'setada agora'}"
+    )
 
     if not args.dry_run and aplicados > 0:
         print()
