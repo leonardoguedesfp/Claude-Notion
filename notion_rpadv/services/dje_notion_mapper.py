@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sqlite3
 from typing import Any
 
@@ -22,8 +23,10 @@ from notion_rpadv.services.dje_notion_constants import (
 )
 from notion_rpadv.services.dje_notion_mappings import (
     formatar_advogados_intimados,
+    formatar_partes,
     mapear_tipo_comunicacao,
     mapear_tipo_documento,
+    normalizar_classe,
     tinha_destinatarios_advogados,
 )
 from notion_rpadv.services.dje_processos import _normaliza_cnj
@@ -257,15 +260,18 @@ def _build_corpo_blocks_full(
 # ---------------------------------------------------------------------------
 
 
-def lookup_processo_page_id(
+def lookup_processo_record(
     cache_conn: sqlite3.Connection,
     numero_processo_com_mascara: str | None,
-) -> str | None:
-    """Procura a página de Processos no cache local cujo
-    ``numero_do_processo`` bate com a publicação. Comparação CNJ-tolerante:
-    ambos os lados são normalizados via ``_normaliza_cnj`` antes do match.
+) -> dict[str, Any] | None:
+    """Procura o record completo do Processo cadastrado em ⚖️ Processos
+    no cache local. Comparação CNJ-tolerante (ambos os lados normalizados
+    via ``_normaliza_cnj``).
 
-    Retorna ``page_id`` (UUID Notion) ou ``None`` se não achou.
+    Retorna o dict do record (com chave ``page_id`` adicionada) ou
+    ``None`` se não achou. Usado pelo Round 4.4 (regras de alerta
+    contadoria precisam de ``instancia``, ``data_do_transito_em_julgado_*``
+    etc.).
     """
     target = _normaliza_cnj(str(numero_processo_com_mascara or ""))
     if target is None:
@@ -281,8 +287,20 @@ def lookup_processo_page_id(
             continue
         candidato = _normaliza_cnj(str(rec.get("numero_do_processo") or ""))
         if candidato == target:
-            return str(row["page_id"])
+            rec["page_id"] = str(row["page_id"])
+            return rec
     return None
+
+
+def lookup_processo_page_id(
+    cache_conn: sqlite3.Connection,
+    numero_processo_com_mascara: str | None,
+) -> str | None:
+    """Procura apenas o ``page_id`` do Processo cadastrado. Wrapper sobre
+    ``lookup_processo_record`` mantido pra retro-compatibilidade com
+    testes/callers que só precisam do UUID."""
+    rec = lookup_processo_record(cache_conn, numero_processo_com_mascara)
+    return rec["page_id"] if rec else None
 
 
 # ---------------------------------------------------------------------------
@@ -298,6 +316,185 @@ def lookup_processo_page_id(
 
 _advogados_escritorio_em_destinatarios = formatar_advogados_intimados
 _tem_advogados_no_payload = tinha_destinatarios_advogados
+
+
+# ---------------------------------------------------------------------------
+# Round 4.4 — Auto-Alerta contadoria (5 regras multi-select)
+# ---------------------------------------------------------------------------
+
+#: Alertas canônicos do Round 4.4. Strings exatas que vão pro multi-select
+#: ``Alerta contadoria`` no Notion. Bumpe se renomear opções no Notion.
+ALERTA_PROCESSO_NAO_CADASTRADO: str = "Processo não cadastrado"
+ALERTA_INSTANCIA_DESATUALIZADA: str = "Instância desatualizada"
+ALERTA_TRANSITO_PENDENTE: str = "Trânsito em julgado pendente"
+ALERTA_TEXTO_IMPRESTAVEL: str = "Texto imprestável"
+ALERTA_PAUTA_PRESENCIAL_SEM_INSCRICAO: str = "Pauta presencial sem inscrição"
+
+
+def _texto_e_imprestavel(texto: str) -> bool:
+    """Detecção conservadora de texto imprestável — apenas as classes
+    conhecidas vistas em produção. NÃO dispara em despachos breves
+    legítimos.
+
+    Classes detectadas:
+    - TJGO: ``"ARQUIVOS DIGITAIS INDISPONÍVEIS (NÃO SÃO DO TIPO PÚBLICO)"``.
+    - Despachos minimalistas: ``"Intime-se."``, ``"Intimem-se."``.
+    - TRT10 só com referência a ID: ``"Tomar ciência do(a) Intimação de ID..."`` SEM CNJ no texto.
+    """
+    if not texto:
+        return False
+    t = texto.strip()
+    if "ARQUIVOS DIGITAIS INDISPONÍVEIS" in t:
+        return True
+    if t in ("Intime-se.", "Intimem-se."):
+        return True
+    if "Tomar ciência" in t and "Intimação de ID" in t:
+        # Verifica se há CNJ no texto (formato 0000000-00.0000)
+        if not re.search(r"\d{7}-\d{2}", t):
+            return True
+    return False
+
+
+def _aplicar_regras_alerta_contadoria(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+) -> list[str]:
+    """Aplica as 5 regras do Round 4.4 e retorna lista de alertas que
+    dispararam (multi-select aceita múltiplos).
+
+    Regras:
+
+    1. ``Processo não cadastrado``: ``processo_record is None``.
+    2. ``Instância desatualizada``: tribunal da pub IN (TST, STJ, STF) E
+       processo cadastrado E ``instancia`` IN ("1º grau", "2º grau").
+    3. ``Trânsito em julgado pendente``: ``nomeClasse`` contém
+       "CUMPRIMENTO" (sem "PROVISÓRIO" — D3) E processo cadastrado E
+       ambos ``data_do_transito_em_julgado_cognitiva`` e
+       ``data_do_transito_em_julgado_executiva`` vazios.
+    4. ``Texto imprestável``: texto < 200 chars E é uma classe conhecida
+       de imprestabilidade (vide ``_texto_e_imprestavel``).
+    5. ``Pauta presencial sem inscrição``: tipo canônico Pauta de
+       Julgamento E texto contém "PRESENCIAL" ou "Sala de Sessão".
+    """
+    alertas: list[str] = []
+
+    # 1. Processo não cadastrado
+    if processo_record is None:
+        alertas.append(ALERTA_PROCESSO_NAO_CADASTRADO)
+
+    # 2. Instância desatualizada
+    if processo_record is not None:
+        sigla = (publicacao.get("siglaTribunal") or "").strip().upper()
+        instancia = (processo_record.get("instancia") or "").strip()
+        if sigla in {"TST", "STJ", "STF"} and instancia in {"1º grau", "2º grau"}:
+            alertas.append(ALERTA_INSTANCIA_DESATUALIZADA)
+
+    # 3. Trânsito em julgado pendente
+    nome_classe = (publicacao.get("nomeClasse") or "").upper()
+    if (
+        "CUMPRIMENTO" in nome_classe
+        and "PROVISÓRIO" not in nome_classe  # D3: exclui provisório
+        and processo_record is not None
+    ):
+        t_cog = processo_record.get("data_do_transito_em_julgado_cognitiva")
+        t_exec = processo_record.get("data_do_transito_em_julgado_executiva")
+        if not t_cog and not t_exec:
+            alertas.append(ALERTA_TRANSITO_PENDENTE)
+
+    # 4. Texto imprestável
+    texto = publicacao.get("texto") or ""
+    if len(texto) < 200 and _texto_e_imprestavel(texto):
+        alertas.append(ALERTA_TEXTO_IMPRESTAVEL)
+
+    # 5. Pauta presencial sem inscrição
+    tipo_canon = mapear_tipo_documento(publicacao.get("tipoDocumento"))
+    if tipo_canon == "Pauta de Julgamento":
+        texto_upper = texto.upper()
+        if "PRESENCIAL" in texto_upper or "SALA DE SESSÃO" in texto_upper:
+            alertas.append(ALERTA_PAUTA_PRESENCIAL_SEM_INSCRICAO)
+
+    return alertas
+
+
+# ---------------------------------------------------------------------------
+# Round 4.3 — Auto-Tarefa sugerida (6 regras multi-select)
+# ---------------------------------------------------------------------------
+
+#: Nomes EXATOS das tarefas no 📚 Catálogo de Tarefas. Bumpe se renomear.
+TAREFA_D03_ANALISE_ACORDAO: str = "D.03 Análise de acórdão"
+TAREFA_D02_ANALISE_SENTENCA: str = "D.02 Análise de sentença"
+TAREFA_D01_ANALISE_PUBLICACAO: str = "D.01 Análise de publicação"
+TAREFA_E01_CADASTRO: str = "E.01 Cadastro de cliente/processo"
+TAREFA_E02_ATUALIZAR_DADOS: str = "E.02 Atualizar dados no sistema"
+TAREFA_E04_INSCRICAO_SUSTENTACAO: str = "E.04 Inscrição para sustentação oral"
+
+
+def _aplicar_regras_tarefa_sugerida(
+    publicacao: dict[str, Any],
+    *,
+    processo_record: dict[str, Any] | None,
+    alertas_disparados: list[str],
+) -> list[str]:
+    """Aplica as 6 regras do Round 4.3 e retorna lista (deduped) de
+    tarefas sugeridas. Multi-select aceita múltiplas (D2: sem
+    precedência — pub Acórdão + Pauta soma D.03 + E.04).
+
+    Regras:
+
+    1. ``D.03 Análise de acórdão``: tipoDocumento canônico IN (Acórdão, Ementa).
+    2. ``D.02 Análise de sentença``: tipoDocumento canônico = Sentença.
+    3. ``D.01 Análise de publicação``: tipoDocumento canônico IN
+       (Notificação, Decisão, Despacho, Certidão, Outros, Distribuição)
+       E NÃO disparou D.02 nem D.03 (default genérico).
+    4. ``E.01 Cadastro de cliente/processo``: ``processo_record is None``.
+    5. ``E.02 Atualizar dados no sistema``: tipoDocumento bruto =
+       "ATA DE DISTRIBUIÇÃO" OU disparou alerta "Instância desatualizada".
+    6. ``E.04 Inscrição para sustentação oral``: tipoDocumento canônico
+       = Pauta de Julgamento.
+
+    Ordem de saída segue a numeração das tarefas (D.01 < D.02 < D.03 <
+    E.01 < E.02 < E.04) — facilita teste e leitura no Notion.
+    """
+    tarefas: set[str] = set()
+    tipo_canon = mapear_tipo_documento(publicacao.get("tipoDocumento"))
+    tipo_bruto = (publicacao.get("tipoDocumento") or "").strip()
+
+    # 1. D.03
+    if tipo_canon in {"Acórdão", "Ementa"}:
+        tarefas.add(TAREFA_D03_ANALISE_ACORDAO)
+
+    # 2. D.02
+    if tipo_canon == "Sentença":
+        tarefas.add(TAREFA_D02_ANALISE_SENTENCA)
+
+    # 3. D.01 — só se nem D.02 nem D.03 dispararam
+    has_d02_d03 = (
+        TAREFA_D02_ANALISE_SENTENCA in tarefas
+        or TAREFA_D03_ANALISE_ACORDAO in tarefas
+    )
+    if not has_d02_d03 and tipo_canon in {
+        "Notificação", "Decisão", "Despacho",
+        "Certidão", "Outros", "Distribuição",
+    }:
+        tarefas.add(TAREFA_D01_ANALISE_PUBLICACAO)
+
+    # 4. E.01
+    if processo_record is None:
+        tarefas.add(TAREFA_E01_CADASTRO)
+
+    # 5. E.02
+    if (
+        tipo_bruto == "ATA DE DISTRIBUIÇÃO"
+        or ALERTA_INSTANCIA_DESATUALIZADA in alertas_disparados
+    ):
+        tarefas.add(TAREFA_E02_ATUALIZAR_DADOS)
+
+    # 6. E.04
+    if tipo_canon == "Pauta de Julgamento":
+        tarefas.add(TAREFA_E04_INSCRICAO_SUSTENTACAO)
+
+    # Ordem estável: ordena por código (D.01 < D.02 < D.03 < E.01 < E.02 < E.04)
+    return sorted(tarefas)
 
 
 # ---------------------------------------------------------------------------
@@ -332,8 +529,16 @@ def montar_payload_publicacao(
         publicacao.get("numeroprocessocommascara")
         or publicacao.get("numero_processo")
     )
-    processo_page_id = lookup_processo_page_id(cache_conn, numero_processo)
-    processo_nao_cadastrado = processo_page_id is None
+    # Round 4.4/4.6: cruzamento com cache de Processos retorna o record
+    # completo (instancia, data_transito_*, etc.) pra alimentar as
+    # regras de Alerta contadoria. O page_id é só uma das chaves do
+    # record. Round 4.6 remove o checkbox "Processo não cadastrado" do
+    # payload — a info passa a viver em Alerta contadoria.
+    processo_record = lookup_processo_record(cache_conn, numero_processo)
+    processo_page_id = (
+        processo_record["page_id"] if processo_record else None
+    )
+    processo_nao_cadastrado = processo_record is None
 
     advogados_tags = formatar_advogados_intimados(
         publicacao.get("destinatarioadvogados"),
@@ -348,15 +553,9 @@ def montar_payload_publicacao(
         tinha_destinatarios and len(advogados_tags) == 0
     )
 
-    # Partes (destinatarios é lista de dicts no DJEN). Serializa JSON
-    # truncado pra caber em rich_text inline.
-    destinatarios_raw = publicacao.get("destinatarios")
-    if isinstance(destinatarios_raw, (list, dict)):
-        destinatarios_str = json.dumps(
-            destinatarios_raw, ensure_ascii=False,
-        )
-    else:
-        destinatarios_str = str(destinatarios_raw or "")
+    # Round 4 (4.1): Partes formatado como "Polo Ativo: X / Polo Passivo: Y"
+    # — substitui o JSON cru ilegível da Fase 5/Round 1.
+    partes_str = formatar_partes(publicacao.get("destinatarios"))
 
     tipo_documento_canonico = mapear_tipo_documento(
         publicacao.get("tipoDocumento"),
@@ -369,6 +568,18 @@ def montar_payload_publicacao(
         publicacao, tipo_documento_canonico=tipo_documento_canonico,
     )
 
+    # Round 4.4: aplica regras de Alerta contadoria.
+    alertas_contadoria = _aplicar_regras_alerta_contadoria(
+        publicacao, processo_record,
+    )
+    # Round 4.3: aplica regras de Tarefa sugerida (depende dos alertas
+    # disparados — E.02 dispara em "Instância desatualizada").
+    tarefas_sugeridas = _aplicar_regras_tarefa_sugerida(
+        publicacao,
+        processo_record=processo_record,
+        alertas_disparados=alertas_contadoria,
+    )
+
     properties: dict[str, Any] = {
         "Identificação": _title_prop(titulo),
         "Data de disponibilização": _date_prop(data_disp),
@@ -379,17 +590,24 @@ def montar_payload_publicacao(
         "Órgão": _rich_text_prop(publicacao.get("nomeOrgao")),
         "Tipo de comunicação": _select_prop(tipo_comunicacao_canonico),
         "Tipo de documento": _select_prop(tipo_documento_canonico),
-        "Classe": _rich_text_prop(publicacao.get("nomeClasse")),
+        "Classe": _rich_text_prop(
+            normalizar_classe(publicacao.get("nomeClasse")),
+        ),
         "Texto": _texto_inline_prop(texto_pre),
         "Link": _url_prop(publicacao.get("link")),
         "Status": _select_prop("Nova"),
         "Advogados intimados": _multi_select_prop(advogados_tags),
         "Observações": _rich_text_prop(publicacao.get("observacoes")),
-        "Partes": _rich_text_prop(destinatarios_str),
+        "Partes": _rich_text_prop(partes_str),
         "Hash": _rich_text_prop(publicacao.get("hash")),
         "ID DJEN": _number_prop(publicacao.get("id")),
-        "Processo não cadastrado": _checkbox_prop(processo_nao_cadastrado),
+        # Round 4.6: checkbox "Processo não cadastrado" SAIU. A info passa
+        # a viver em "Alerta contadoria" — quando o usuário dropar a
+        # coluna do Notion, payloads futuros ainda funcionam.
         "Advogados não cadastrados": _checkbox_prop(advogados_nao_cadastrados),
+        # Round 4.3 + 4.4 — multi-selects
+        "Tarefa sugerida": _multi_select_prop(tarefas_sugeridas),
+        "Alerta contadoria": _multi_select_prop(alertas_contadoria),
     }
 
     return {
@@ -409,6 +627,8 @@ def montar_payload_publicacao(
             "processo_nao_cadastrado": processo_nao_cadastrado,
             "advogados_nao_cadastrados": advogados_nao_cadastrados,
             "advogados_tags": advogados_tags,
+            "tarefas_sugeridas": tarefas_sugeridas,
+            "alertas_contadoria": alertas_contadoria,
         },
     }
 

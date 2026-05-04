@@ -256,7 +256,9 @@ def test_build_corpo_texto_vazio_emite_placeholder() -> None:
 
 def test_payload_happy_path_18_propriedades(dje_conn, cache_conn) -> None:
     """Caso típico: processo cadastrado + 1 advogado do escritório.
-    Payload tem as 18 propriedades enviáveis + children."""
+    Round 4.6 removeu o checkbox 'Processo não cadastrado' e Round 4.3+4.4
+    adicionou os multi-selects 'Tarefa sugerida' e 'Alerta contadoria' —
+    agora são 19 propriedades enviáveis."""
     _seed_processo(cache_conn, "page-proc-1", "0001234-56.2025.5.10.0001")
     pub = _publicacao_basica()
     payload = montar_payload_publicacao(
@@ -268,11 +270,13 @@ def test_payload_happy_path_18_propriedades(dje_conn, cache_conn) -> None:
         "Processo", "Órgão", "Tipo de comunicação", "Tipo de documento",
         "Classe", "Texto", "Link", "Status", "Advogados intimados",
         "Observações", "Partes", "Hash", "ID DJEN",
-        "Processo não cadastrado", "Advogados não cadastrados",
+        "Advogados não cadastrados",
+        # Round 4.3 + 4.4 — multi-selects auto-preenchidos
+        "Tarefa sugerida", "Alerta contadoria",
     }
     assert set(props.keys()) == expected_keys
-    # Checkbox "Processo não cadastrado" = False (encontrou no lookup)
-    assert props["Processo não cadastrado"]["checkbox"] is False
+    # Round 4.6: checkbox 'Processo não cadastrado' não existe mais.
+    assert "Processo não cadastrado" not in props
     # Relation com 1 page_id
     assert props["Processo"]["relation"] == [{"id": "page-proc-1"}]
     # Multi-select com Ricardo
@@ -287,13 +291,20 @@ def test_payload_happy_path_18_propriedades(dje_conn, cache_conn) -> None:
 def test_payload_processo_nao_cadastrado_marca_checkbox(
     dje_conn, cache_conn,
 ) -> None:
-    """Cache vazio → lookup falha → checkbox TRUE + relation vazia."""
+    """Round 4.6: o sinalizador 'Processo não cadastrado' migrou de
+    checkbox próprio para o multi-select 'Alerta contadoria'.
+    O nome do teste é mantido por convenção mas o assert mudou."""
     pub = _publicacao_basica(numeroprocessocommascara="9999999-99.9999.9.99.9999")
     payload = montar_payload_publicacao(
         pub, dje_conn=dje_conn, cache_conn=cache_conn,
     )
     props = payload["properties"]
-    assert props["Processo não cadastrado"]["checkbox"] is True
+    # Checkbox antigo NÃO está mais no payload.
+    assert "Processo não cadastrado" not in props
+    # Em vez disso: o alerta está no multi-select.
+    alertas = [a["name"] for a in props["Alerta contadoria"]["multi_select"]]
+    assert "Processo não cadastrado" in alertas
+    # Relation continua vazia (sem cadastro).
     assert props["Processo"]["relation"] == []
 
 
