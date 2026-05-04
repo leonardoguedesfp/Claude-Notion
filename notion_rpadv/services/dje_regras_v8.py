@@ -88,6 +88,13 @@ ALERTA_CAPTURAR_NUMERACAO_STF: str = "Capturar numeração STF"
 ALERTA_TRIBUNAL_FORA_VOCABULARIO: str = "Tribunal fora do vocabulário"
 ALERTA_CONFERIR_TRIBUNAL_ORIGEM: str = "Conferir tribunal de origem"
 
+# Regras 4-6 — Classificação processual
+ALERTA_CONFERIR_NATUREZA_PROCESSO: str = "Conferir natureza do processo"
+ALERTA_CONFERIR_TIPO_PROCESSO: str = "Conferir tipo de processo"
+
+# Regra 39 — Recurso autônomo sem processo pai
+ALERTA_RECURSO_AUTONOMO_SEM_PROCESSO_PAI: str = "Recurso autônomo sem processo pai"
+
 # Alertas mantidos do Round 4 (técnicos/operacionais — sem número no doc v8)
 ALERTA_PROCESSO_NAO_CADASTRADO: str = "Processo não cadastrado"
 ALERTA_TEXTO_IMPRESTAVEL: str = "Texto imprestável"
@@ -253,6 +260,75 @@ def fase_implicada(publicacao: dict[str, Any]) -> str | None:
 
 
 # ---------------------------------------------------------------------------
+# Vocabulário canônico de Proc.natureza e Proc.tipo_de_processo
+# ---------------------------------------------------------------------------
+
+NATUREZA_TRABALHISTA: str = "Trabalhista"
+NATUREZA_CIVEL: str = "Cível"
+
+TIPO_PROCESSO_PRINCIPAL: str = "Principal"
+TIPO_PROCESSO_RECURSO_AUTONOMO: str = "Recurso autônomo"
+TIPO_PROCESSO_RECLAMACAO: str = "Reclamação constitucional"
+TIPO_PROCESSO_INCIDENTE: str = "Incidente"
+
+#: Tipos de processo que NÃO são "Principal" (logo, exigem processo_pai
+#: pela Regra 39).
+TIPOS_PROCESSO_DEPENDENTES: frozenset[str] = frozenset({
+    TIPO_PROCESSO_RECURSO_AUTONOMO,
+    TIPO_PROCESSO_RECLAMACAO,
+    TIPO_PROCESSO_INCIDENTE,
+})
+
+
+# ---------------------------------------------------------------------------
+# Tribunais por natureza (Regra 4)
+# ---------------------------------------------------------------------------
+
+#: Pub.Tribunal trabalhistas — Proc.natureza deve ser Trabalhista.
+TRIBUNAIS_TRABALHISTAS: frozenset[str] = frozenset({
+    "TRT10", "TRT18", "TST",
+})
+
+#: Pub.Tribunal cíveis — Proc.natureza deve ser Cível. STJ/STF ficam
+#: fora porque julgam ambas as naturezas.
+TRIBUNAIS_CIVEIS: frozenset[str] = frozenset({
+    "TJDFT", "TJSP", "TJMG", "TJPR", "TJRJ", "TJRS",
+    "TJSC", "TJBA", "TJMS", "TJGO",
+    "TRF1",
+})
+
+
+# ---------------------------------------------------------------------------
+# Classes por natureza (Regra 5)
+# ---------------------------------------------------------------------------
+
+#: Classes que SÓ existem em justiça trabalhista.
+CLASSES_TRABALHISTAS: frozenset[str] = frozenset({
+    "AÇÃO TRABALHISTA - RITO ORDINÁRIO",
+    "AÇÃO TRABALHISTA - RITO SUMARÍSSIMO",
+    "RECURSO ORDINÁRIO TRABALHISTA",
+    "RECURSO ORDINÁRIO - RITO SUMARÍSSIMO",
+    "AGRAVO DE PETIÇÃO",
+    "AGRAVO REGIMENTAL TRABALHISTA",
+    "RECURSO DE REVISTA",
+    "RECURSO DE REVISTA COM AGRAVO",
+    "AGRAVO DE INSTRUMENTO EM RECURSO DE REVISTA",
+})
+
+#: Classes que SÓ existem em justiça cível.
+CLASSES_CIVEIS: frozenset[str] = frozenset({
+    "PROCEDIMENTO COMUM CÍVEL",
+    "EMBARGOS DE DECLARAÇÃO CÍVEL",
+    "APELAÇÃO CÍVEL",
+    "AGRAVO INTERNO CÍVEL",
+    "PROCEDIMENTO DO JUIZADO ESPECIAL CÍVEL",
+    "JUIZADO ESPECIAL DA FAZENDA PÚBLICA",
+    "INVENTÁRIO",
+    "PETIÇÃO CÍVEL",
+})
+
+
+# ---------------------------------------------------------------------------
 # Tabela auxiliar — normalização de Tribunal entre Pub e Proc
 # ---------------------------------------------------------------------------
 
@@ -363,6 +439,116 @@ def aplicar_camada_base(
 # ---------------------------------------------------------------------------
 # Regras de monitoramento (1-39) — placeholder
 # ---------------------------------------------------------------------------
+
+
+def regra_4_natureza_inconsistente_com_tribunal(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+) -> str | None:
+    """Regra 4 — Natureza inconsistente com Tribunal.
+
+    - Condições:
+      - ``Pub.Tribunal IN (TRT10, TRT18, TST)`` E ``Proc.natureza=Cível``, OU
+      - ``Pub.Tribunal IN (TJDFT, TJ-*, TRF1)`` E ``Proc.natureza=Trabalhista``.
+    - Alerta: ``Conferir natureza do processo``.
+    - Explicação: tribunais trabalhistas só processam matéria trabalhista
+      (e vice-versa). STJ e STF ficam fora — julgam ambas as naturezas.
+    """
+    if processo_record is None:
+        return None
+    sigla = (publicacao.get("siglaTribunal") or "").strip().upper()
+    natureza = (processo_record.get("natureza") or "").strip()
+    if not natureza:
+        return None
+    if sigla in TRIBUNAIS_TRABALHISTAS and natureza == NATUREZA_CIVEL:
+        return ALERTA_CONFERIR_NATUREZA_PROCESSO
+    if sigla in TRIBUNAIS_CIVEIS and natureza == NATUREZA_TRABALHISTA:
+        return ALERTA_CONFERIR_NATUREZA_PROCESSO
+    return None
+
+
+def regra_5_natureza_inconsistente_com_classe(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+) -> str | None:
+    """Regra 5 — Natureza inconsistente com Classe.
+
+    - Condições:
+      - ``Pub.Classe`` é classe trabalhista E ``Proc.natureza=Cível``, OU
+      - ``Pub.Classe`` é classe cível E ``Proc.natureza=Trabalhista``.
+    - Alerta: ``Conferir natureza do processo``.
+    - Explicação: classes ambíguas (RESP, AI sem qualif, AGRAVO simples,
+      CUMPRIMENTO, CONFLITO DE COMPETÊNCIA) herdam natureza do principal
+      e não disparam.
+    """
+    if processo_record is None:
+        return None
+    classe = (publicacao.get("nomeClasse") or "").strip().upper()
+    natureza = (processo_record.get("natureza") or "").strip()
+    if not classe or not natureza:
+        return None
+    if classe in CLASSES_TRABALHISTAS and natureza == NATUREZA_CIVEL:
+        return ALERTA_CONFERIR_NATUREZA_PROCESSO
+    if classe in CLASSES_CIVEIS and natureza == NATUREZA_TRABALHISTA:
+        return ALERTA_CONFERIR_NATUREZA_PROCESSO
+    return None
+
+
+def regra_6_recurso_autonomo_cadastrado_como_principal(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+) -> str | None:
+    """Regra 6 — Recurso autônomo cadastrado como Principal.
+
+    - Condições: ``Pub.Classe="AGRAVO DE INSTRUMENTO"`` (estrita — sem
+      qualificadores como "EM RECURSO ESPECIAL" ou "EM RECURSO DE
+      REVISTA") **e** ``Proc.tipo_de_processo=Principal``.
+    - Alerta: ``Conferir tipo de processo``.
+    - Explicação: apenas o Agravo de Instrumento *stricto sensu* (art.
+      1.015 CPC, contra decisão interlocutória em 1ª instância) gera
+      CNJ próprio no escritório e exige registro com
+      ``Tipo de processo=Recurso autônomo``. Demais recursos (AI em
+      RESP/RR, AgRESP, etc) tramitam nos autos do principal por
+      decisão administrativa e não disparam esta regra.
+    """
+    if processo_record is None:
+        return None
+    classe = (publicacao.get("nomeClasse") or "").strip().upper()
+    if classe != "AGRAVO DE INSTRUMENTO":  # exact match — sem qualificadores
+        return None
+    tipo = (processo_record.get("tipo_de_processo") or "").strip()
+    if tipo == TIPO_PROCESSO_PRINCIPAL:
+        return ALERTA_CONFERIR_TIPO_PROCESSO
+    return None
+
+
+def regra_39_recurso_autonomo_sem_processo_pai(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+) -> str | None:
+    """Regra 39 — Recurso autônomo sem processo pai.
+
+    - Condições: ``Proc.tipo_de_processo IN (Recurso autônomo,
+      Reclamação constitucional, Incidente)`` **e** ``Proc.processo_pai``
+      está vazio.
+    - Alerta: ``Recurso autônomo sem processo pai``.
+    - Explicação: independente da Pub — checagem interna do cadastro.
+      Combina com Regra 6 (uma vez detectado o tipo, conferir se tem
+      pai vinculado).
+    """
+    if processo_record is None:
+        return None
+    tipo = (processo_record.get("tipo_de_processo") or "").strip()
+    if tipo not in TIPOS_PROCESSO_DEPENDENTES:
+        return None
+    pai = processo_record.get("processo_pai")
+    # processo_pai pode ser lista vazia, None, ou string vazia
+    if isinstance(pai, list):
+        if pai:
+            return None
+    elif pai:
+        return None
+    return ALERTA_RECURSO_AUTONOMO_SEM_PROCESSO_PAI
 
 
 def regra_2_capturar_numeracao_stj_tst(
@@ -909,25 +1095,29 @@ def aplicar_regras_monitoramento(
     - Alerta operacional Processo não cadastrado (refinado: não
       dispara em distribuições, que já têm Camada base).
 
-    Round 7a — implementadas neste commit:
+    Round 7a — Regras 2, 3, 12, 13 (Tribunal e numerações superiores).
 
-    - Regra 2 (Capturar numeração STJ/TST).
-    - Regra 3 (Capturar numeração STF).
-    - Regra 12 (Tribunal de origem fora do vocabulário).
-    - Regra 13 (Verificação de origem em 1ª instância).
+    Round 7b — implementadas neste commit:
+
+    - Regra 4 (Natureza inconsistente com Tribunal).
+    - Regra 5 (Natureza inconsistente com Classe).
+    - Regra 6 (Recurso autônomo cadastrado como Principal).
+    - Regra 39 (Recurso autônomo sem processo pai).
 
     Pendentes (a serem acrescentadas em commits subsequentes):
 
     - Regra 1 (Conferir número CNJ do processo).
-    - Regras 4-6 (Classificação processual).
     - Regras 7-9 (Cliente do escritório).
     - Regra 10 (Posição do cliente).
     - Regras 19-25 (Cidade, Vara, Turma, Relator).
-    - Regras 29-34, 36-39 (demais de Estado processual + outros).
+    - Regras 29-34, 36-38 (demais de Estado processual + outros).
     """
     candidatos: list[str | None] = [
         regra_2_capturar_numeracao_stj_tst(publicacao, processo_record),
         regra_3_capturar_numeracao_stf(publicacao, processo_record),
+        regra_4_natureza_inconsistente_com_tribunal(publicacao, processo_record),
+        regra_5_natureza_inconsistente_com_classe(publicacao, processo_record),
+        regra_6_recurso_autonomo_cadastrado_como_principal(publicacao, processo_record),
         regra_12_tribunal_fora_vocabulario(publicacao, processo_record),
         regra_13_conferir_tribunal_origem(publicacao, processo_record),
         regra_14_subida_nao_detectada(publicacao, processo_record),
@@ -939,6 +1129,7 @@ def aplicar_regras_monitoramento(
         regra_27_fase_liquidacao_por_classe(publicacao, processo_record),
         regra_28_fase_cognitiva_contradita_por_classe(publicacao, processo_record),
         regra_35_transito_pendente(publicacao, processo_record),
+        regra_39_recurso_autonomo_sem_processo_pai(publicacao, processo_record),
         regra_texto_imprestavel(publicacao, processo_record),
         regra_processo_nao_cadastrado(publicacao, processo_record),
     ]

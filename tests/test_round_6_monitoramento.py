@@ -18,6 +18,8 @@ from notion_rpadv.services.dje_regras_v8 import (
     ALERTA_ACORDAO_EM_1GRAU,
     ALERTA_CAPTURAR_NUMERACAO_STF,
     ALERTA_CAPTURAR_NUMERACAO_STJ_TST,
+    ALERTA_CONFERIR_NATUREZA_PROCESSO,
+    ALERTA_CONFERIR_TIPO_PROCESSO,
     ALERTA_CONFERIR_TRIBUNAL_ORIGEM,
     ALERTA_FASE_DESATUALIZADA_COGNITIVA,
     ALERTA_FASE_DESATUALIZADA_EXECUTIVA,
@@ -31,6 +33,7 @@ from notion_rpadv.services.dje_regras_v8 import (
     ALERTA_PARTE_ADVERSA_PREVI,
     ALERTA_PAUTA_EM_1GRAU,
     ALERTA_PROCESSO_NAO_CADASTRADO,
+    ALERTA_RECURSO_AUTONOMO_SEM_PROCESSO_PAI,
     ALERTA_SENTENCA_EM_COLEGIADO,
     ALERTA_TEXTO_IMPRESTAVEL,
     ALERTA_TRANSITO_PENDENTE,
@@ -48,6 +51,9 @@ from notion_rpadv.services.dje_regras_v8 import (
     instancia_implicada,
     regra_2_capturar_numeracao_stj_tst,
     regra_3_capturar_numeracao_stf,
+    regra_4_natureza_inconsistente_com_tribunal,
+    regra_5_natureza_inconsistente_com_classe,
+    regra_6_recurso_autonomo_cadastrado_como_principal,
     regra_11_partes_adversas_ausentes,
     regra_12_tribunal_fora_vocabulario,
     regra_13_conferir_tribunal_origem,
@@ -60,6 +66,7 @@ from notion_rpadv.services.dje_regras_v8 import (
     regra_27_fase_liquidacao_por_classe,
     regra_28_fase_cognitiva_contradita_por_classe,
     regra_35_transito_pendente,
+    regra_39_recurso_autonomo_sem_processo_pai,
     regra_processo_nao_cadastrado,
     regra_texto_imprestavel,
 )
@@ -974,3 +981,177 @@ def test_R7a_composicao_pub_trt18_dispara_so_tribunal_fora_vocab() -> None:
     alertas = aplicar_regras_monitoramento(pub, None)
     assert ALERTA_TRIBUNAL_FORA_VOCABULARIO in alertas
     assert ALERTA_PROCESSO_NAO_CADASTRADO in alertas
+
+
+# ===========================================================================
+# Round 7b — Regra 4: Natureza inconsistente com Tribunal
+# ===========================================================================
+
+
+def test_R7b_R4_dispara_trt_proc_civel() -> None:
+    pub = _pub(siglaTribunal="TRT10")
+    proc = _proc(natureza="Cível")
+    assert regra_4_natureza_inconsistente_com_tribunal(pub, proc) == ALERTA_CONFERIR_NATUREZA_PROCESSO
+
+
+def test_R7b_R4_dispara_tjdft_proc_trabalhista() -> None:
+    pub = _pub(siglaTribunal="TJDFT")
+    proc = _proc(natureza="Trabalhista")
+    assert regra_4_natureza_inconsistente_com_tribunal(pub, proc) == ALERTA_CONFERIR_NATUREZA_PROCESSO
+
+
+def test_R7b_R4_NAO_dispara_se_consistente() -> None:
+    """TRT trabalhista, TJDFT cível — ambos consistentes."""
+    assert regra_4_natureza_inconsistente_com_tribunal(_pub(siglaTribunal="TRT10"), _proc(natureza="Trabalhista")) is None
+    assert regra_4_natureza_inconsistente_com_tribunal(_pub(siglaTribunal="TJDFT"), _proc(natureza="Cível")) is None
+
+
+def test_R7b_R4_NAO_dispara_para_stj_stf() -> None:
+    """STJ/STF julgam ambas as naturezas — não dispara."""
+    assert regra_4_natureza_inconsistente_com_tribunal(_pub(siglaTribunal="STJ"), _proc(natureza="Trabalhista")) is None
+    assert regra_4_natureza_inconsistente_com_tribunal(_pub(siglaTribunal="STJ"), _proc(natureza="Cível")) is None
+    assert regra_4_natureza_inconsistente_com_tribunal(_pub(siglaTribunal="STF"), _proc(natureza="Cível")) is None
+
+
+def test_R7b_R4_NAO_dispara_se_natureza_vazia() -> None:
+    """Cadastro sem natureza definida → não dispara."""
+    pub = _pub(siglaTribunal="TRT10")
+    assert regra_4_natureza_inconsistente_com_tribunal(pub, _proc(natureza="")) is None
+
+
+# ===========================================================================
+# Round 7b — Regra 5: Natureza inconsistente com Classe
+# ===========================================================================
+
+
+def test_R7b_R5_dispara_classe_trabalhista_proc_civel() -> None:
+    pub = _pub(nomeClasse="AÇÃO TRABALHISTA - RITO ORDINÁRIO")
+    proc = _proc(natureza="Cível")
+    assert regra_5_natureza_inconsistente_com_classe(pub, proc) == ALERTA_CONFERIR_NATUREZA_PROCESSO
+
+
+def test_R7b_R5_dispara_classe_civel_proc_trabalhista() -> None:
+    pub = _pub(nomeClasse="PROCEDIMENTO COMUM CÍVEL")
+    proc = _proc(natureza="Trabalhista")
+    assert regra_5_natureza_inconsistente_com_classe(pub, proc) == ALERTA_CONFERIR_NATUREZA_PROCESSO
+
+
+def test_R7b_R5_NAO_dispara_se_consistente() -> None:
+    assert regra_5_natureza_inconsistente_com_classe(
+        _pub(nomeClasse="AGRAVO DE PETIÇÃO"), _proc(natureza="Trabalhista"),
+    ) is None
+    assert regra_5_natureza_inconsistente_com_classe(
+        _pub(nomeClasse="APELAÇÃO CÍVEL"), _proc(natureza="Cível"),
+    ) is None
+
+
+def test_R7b_R5_NAO_dispara_para_classes_ambiguas() -> None:
+    """RESP, AI sem qualif, AGRAVO simples, CUMPRIMENTO — ambíguas, herdam."""
+    classes_ambiguas = [
+        "RECURSO ESPECIAL",
+        "AGRAVO DE INSTRUMENTO",
+        "AGRAVO",
+        "CUMPRIMENTO DE SENTENÇA",
+        "AGRAVO EM RECURSO ESPECIAL",
+        "AGRAVO DE INSTRUMENTO EM RECURSO ESPECIAL",
+        "CONFLITO DE COMPETÊNCIA",
+    ]
+    for c in classes_ambiguas:
+        # Mesmo com natureza arbitrária, ambíguas não disparam
+        assert regra_5_natureza_inconsistente_com_classe(
+            _pub(nomeClasse=c), _proc(natureza="Trabalhista"),
+        ) is None, c
+        assert regra_5_natureza_inconsistente_com_classe(
+            _pub(nomeClasse=c), _proc(natureza="Cível"),
+        ) is None, c
+
+
+# ===========================================================================
+# Round 7b — Regra 6: Recurso autônomo cadastrado como Principal
+# ===========================================================================
+
+
+def test_R7b_R6_dispara_AI_estrita_em_proc_principal() -> None:
+    pub = _pub(nomeClasse="AGRAVO DE INSTRUMENTO")
+    proc = _proc(tipo_de_processo="Principal")
+    assert regra_6_recurso_autonomo_cadastrado_como_principal(pub, proc) == ALERTA_CONFERIR_TIPO_PROCESSO
+
+
+def test_R7b_R6_NAO_dispara_para_AI_em_RESP_ou_RR() -> None:
+    """AI em RESP/RR não cria registro próprio (decisão administrativa
+    do escritório); fica no principal."""
+    for c in ("AGRAVO DE INSTRUMENTO EM RECURSO ESPECIAL", "AGRAVO DE INSTRUMENTO EM RECURSO DE REVISTA"):
+        pub = _pub(nomeClasse=c)
+        assert regra_6_recurso_autonomo_cadastrado_como_principal(pub, _proc(tipo_de_processo="Principal")) is None, c
+
+
+def test_R7b_R6_NAO_dispara_se_proc_ja_recurso_autonomo() -> None:
+    pub = _pub(nomeClasse="AGRAVO DE INSTRUMENTO")
+    proc = _proc(tipo_de_processo="Recurso autônomo")
+    assert regra_6_recurso_autonomo_cadastrado_como_principal(pub, proc) is None
+
+
+def test_R7b_R6_NAO_dispara_para_outras_classes_recursais() -> None:
+    """Apelação, RESP, RO Trabalhista — não criam registro próprio."""
+    for c in ("APELAÇÃO CÍVEL", "RECURSO ESPECIAL", "RECURSO ORDINÁRIO TRABALHISTA"):
+        pub = _pub(nomeClasse=c)
+        assert regra_6_recurso_autonomo_cadastrado_como_principal(pub, _proc(tipo_de_processo="Principal")) is None, c
+
+
+# ===========================================================================
+# Round 7b — Regra 39: Recurso autônomo sem processo pai
+# ===========================================================================
+
+
+def test_R7b_R39_dispara_recurso_autonomo_sem_pai() -> None:
+    proc = _proc(tipo_de_processo="Recurso autônomo", processo_pai=[])
+    assert regra_39_recurso_autonomo_sem_processo_pai(_pub(), proc) == ALERTA_RECURSO_AUTONOMO_SEM_PROCESSO_PAI
+
+
+def test_R7b_R39_dispara_reclamacao_sem_pai() -> None:
+    proc = _proc(tipo_de_processo="Reclamação constitucional", processo_pai=None)
+    assert regra_39_recurso_autonomo_sem_processo_pai(_pub(), proc) == ALERTA_RECURSO_AUTONOMO_SEM_PROCESSO_PAI
+
+
+def test_R7b_R39_dispara_incidente_sem_pai() -> None:
+    proc = _proc(tipo_de_processo="Incidente", processo_pai="")
+    assert regra_39_recurso_autonomo_sem_processo_pai(_pub(), proc) == ALERTA_RECURSO_AUTONOMO_SEM_PROCESSO_PAI
+
+
+def test_R7b_R39_NAO_dispara_se_principal() -> None:
+    proc = _proc(tipo_de_processo="Principal", processo_pai=[])
+    assert regra_39_recurso_autonomo_sem_processo_pai(_pub(), proc) is None
+
+
+def test_R7b_R39_NAO_dispara_se_pai_populado() -> None:
+    proc = _proc(tipo_de_processo="Recurso autônomo", processo_pai=["page-id-pai"])
+    assert regra_39_recurso_autonomo_sem_processo_pai(_pub(), proc) is None
+
+
+def test_R7b_R39_NAO_dispara_sem_processo_cadastrado() -> None:
+    assert regra_39_recurso_autonomo_sem_processo_pai(_pub(), None) is None
+
+
+# ===========================================================================
+# Composição Round 7b — Regra 6 + 39 simultâneas
+# ===========================================================================
+
+
+def test_R7b_composicao_AI_principal_sem_pai_dispara_R6_apenas() -> None:
+    """Regra 6 dispara (Principal), mas Regra 39 só dispara para
+    Recurso autônomo/Reclamação/Incidente — Principal não."""
+    pub = _pub(nomeClasse="AGRAVO DE INSTRUMENTO")
+    proc = _proc(tipo_de_processo="Principal", processo_pai=[])
+    alertas = aplicar_regras_monitoramento(pub, proc)
+    assert ALERTA_CONFERIR_TIPO_PROCESSO in alertas
+    assert ALERTA_RECURSO_AUTONOMO_SEM_PROCESSO_PAI not in alertas
+
+
+def test_R7b_composicao_AI_recurso_autonomo_sem_pai_dispara_R39() -> None:
+    """Regra 6 NÃO dispara (já é Recurso autônomo, OK) mas Regra 39
+    dispara (sem processo pai)."""
+    pub = _pub(nomeClasse="AGRAVO DE INSTRUMENTO")
+    proc = _proc(tipo_de_processo="Recurso autônomo", processo_pai=[])
+    alertas = aplicar_regras_monitoramento(pub, proc)
+    assert ALERTA_CONFERIR_TIPO_PROCESSO not in alertas
+    assert ALERTA_RECURSO_AUTONOMO_SEM_PROCESSO_PAI in alertas
