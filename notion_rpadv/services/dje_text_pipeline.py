@@ -375,6 +375,22 @@ _PROCESSO_BLOCO_RE: re.Pattern[str] = re.compile(
 )
 
 
+# Round 4.5 frente 2 — Atas de Sessão TJDFT (tipoDocumento bruto = "57")
+# têm estrutura distinta de pautas: lista crua de CNJs sob cabeçalho
+# "JULGADOS" em vez de blocos "Processo\n{CNJ}".
+
+#: Tipos brutos do DJEN que indicam Ata de Sessão TJDFT pós-julgamento.
+#: Mantido como frozenset por consistência com ``PAUTA_TJDFT_TIPOS_DOC``.
+ATA_TJDFT_TIPOS_DOC: frozenset[str] = frozenset({"57"})
+
+#: Linha que contém apenas um CNJ (com possível espaço ou whitespace).
+#: Capture group 1 = CNJ canônico.
+_CNJ_LINHA_RE: re.Pattern[str] = re.compile(
+    r"^\s*(\d{7}-\d{2}\.\d{4}\.\d\.\d{2}\.\d{4})\s*$",
+    re.MULTILINE,
+)
+
+
 def deve_filtrar_pauta_tjdft(
     tribunal: str | None,
     tipo_documento: str | None,
@@ -432,6 +448,95 @@ def filtrar_pauta_tjdft(texto: str) -> str | None:
         f"Conteúdo integral disponível na certidão oficial.]\n"
     )
     return cabecalho + nota_d9
+
+
+def deve_filtrar_ata_tjdft(
+    tribunal: str | None,
+    tipo_documento_bruto: str | None,
+) -> bool:
+    """Round 4.5 frente 2: dispara filtragem de Ata de Sessão TJDFT.
+    Tribunal=TJDFT + tipoDocumento bruto = "57". Não há limite mínimo de
+    chars (Atas pequenas — djen=542171781 com 2,3KB — também caem aqui).
+    """
+    if not tribunal or not tipo_documento_bruto:
+        return False
+    return (
+        str(tribunal).strip().upper() == "TJDFT"
+        and str(tipo_documento_bruto).strip() in ATA_TJDFT_TIPOS_DOC
+    )
+
+
+def filtrar_ata_tjdft_57(
+    texto: str,
+    cnj_escritorio: str | None,
+) -> str | None:
+    """Aplica filtragem em Ata de Sessão TJDFT tipo "57". Estrutura:
+
+    ::
+
+        cabeçalho da sessão (presidência, presentes, etc.)
+        JULGADOS
+        0716816-23.2019.8.07.0020
+         0711719-65.2020.8.07.0001
+         0734331-83.2023.8.07.0003
+         …
+        {trailer opcional — encerramento, assinaturas, outras seções}
+
+    Devolve:
+
+    - ``texto filtrado``: cabeçalho até e incluindo "JULGADOS" + apenas
+      o CNJ do escritório + nota explicativa + trailer pós-lista.
+    - ``None``: ``cnj_escritorio`` ausente OU "JULGADOS" não detectado
+      OU CNJ não está na lista de julgados (ex: caso djen=525274051,
+      onde o cliente pode ter sido pautado mas retirado/adiado).
+      Caller faz fallback pra caso B (truncamento + callout).
+    """
+    if not cnj_escritorio:
+        return None
+
+    julgados_match = re.search(
+        r"^\s*JULGADOS\s*$", texto, re.MULTILINE,
+    )
+    if julgados_match is None:
+        # Tenta encontrar como substring (alguns layouts colam JULGADOS
+        # com texto adjacente — vide djen=524038068 onde fica
+        # "...conforme abaixo relacionados:\n JULGADOS\n").
+        idx_j = texto.find("JULGADOS")
+        if idx_j < 0:
+            return None
+        cabecalho_end = idx_j + len("JULGADOS")
+    else:
+        cabecalho_end = julgados_match.end()
+
+    cabecalho = texto[:cabecalho_end].rstrip()
+    resto = texto[cabecalho_end:]
+
+    # Coleta CNJs em linhas próprias após "JULGADOS". Mantém posição
+    # da última linha-CNJ pra delimitar o trailer.
+    cnjs_encontrados: list[str] = []
+    pos_ultimo_cnj_end = 0  # offset relativo a `resto`
+    for m in _CNJ_LINHA_RE.finditer(resto):
+        cnjs_encontrados.append(m.group(1))
+        pos_ultimo_cnj_end = m.end()
+
+    if not cnjs_encontrados:
+        return None
+    if cnj_escritorio not in cnjs_encontrados:
+        # Caso edge: CNJ payload não está na lista de JULGADOS (pode ter
+        # sido retirado de pauta ou adiado). Fallback gracioso.
+        return None
+
+    trailer = resto[pos_ultimo_cnj_end:].strip()
+    nota = (
+        f"\n\n[Ata filtrada automaticamente: 1 de {len(cnjs_encontrados)} "
+        f"processos pertence ao escritório. Os demais CNJs foram omitidos. "
+        f"Texto integral disponível pela Certidão.]\n"
+    )
+
+    partes = [cabecalho, "", cnj_escritorio, nota]
+    if trailer:
+        partes.append(trailer)
+    return "\n".join(partes)
 
 
 def truncar_corpo_simples(
@@ -494,25 +599,59 @@ def aplicar_caso_15(
     tipo_documento: str | None,
     texto: str | None,
     hash_djen: str | None,
+    tipo_documento_bruto: str | None = None,
+    cnj_escritorio: str | None = None,
 ) -> tuple[str, list[dict]]:
     """Pipeline completa do estágio 2 da text pipeline.
 
     Recebe texto JÁ pré-processado (1.7) e devolve:
 
     - ``texto_para_corpo``: texto que vai pro split em blocos (1.4).
-      Pode ser o original (publicação curta), filtrado (caso A) ou
-      truncado (caso B).
+      Pode ser o original (publicação curta), filtrado (caso A —
+      Pauta TJDFT, Round 1), filtrado (Round 4.5 frente 2 — Ata TJDFT
+      tipo "57") ou truncado (caso B).
     - ``blocos_callout``: lista (vazia ou 1 bloco) com callout
-      "abrir certidão" — anexar AO FIM dos blocos do corpo. Caso A
-      filtrado não emite callout (filtragem é suficiente). Caso B
+      "abrir certidão" — anexar AO FIM dos blocos do corpo. Casos
+      filtrados não emitem callout (filtragem é suficiente). Caso B
       sempre emite.
 
     ``hash_djen`` é usado pra montar a URL da certidão. ``None`` ou vazio
     desabilita o link mas mantém o callout texto-only.
+
+    Round 4.5 frente 2 — novos kwargs:
+
+    - ``tipo_documento_bruto``: valor original do DJEN antes do
+      mapping canônico. Usado pra detectar Ata TJDFT tipo "57"
+      (que canoniza pra "Outros" e ficaria invisível pelo
+      ``tipo_documento``).
+    - ``cnj_escritorio``: ``numeroprocessocommascara`` da publicação,
+      usado pra filtrar a lista de JULGADOS na Ata.
+
+    Ambos opcionais — se ausentes, a frente 2 não dispara e o
+    fluxo é o do Round 1 (caso A pauta + caso B truncamento).
     """
     if not texto:
         return "", []
     s = str(texto)
+
+    # Round 4.5 frente 2 — Ata TJDFT tipo "57" (antes da pauta porque
+    # tipo "57" canonizado vira "Outros", não dispararia caso A).
+    if deve_filtrar_ata_tjdft(tribunal, tipo_documento_bruto):
+        filtrado_ata = filtrar_ata_tjdft_57(s, cnj_escritorio)
+        if filtrado_ata is not None:
+            logger.info(
+                "DJE.text.pipeline: ata TJDFT tipo 57 filtrada "
+                "(%d → %d chars)", len(s), len(filtrado_ata),
+            )
+            return filtrado_ata, []
+        # Falha (CNJ payload não está na lista, ou JULGADOS não detectado).
+        # Cai pro caso B — truncamento + callout.
+        logger.warning(
+            "DJE.text.pipeline: ata TJDFT tipo 57 não filtrada "
+            "(CNJ %r não na lista JULGADOS ou parsing falhou) — "
+            "caindo pra truncamento simples",
+            cnj_escritorio,
+        )
 
     if deve_filtrar_pauta_tjdft(tribunal, tipo_documento, s):
         filtrado = filtrar_pauta_tjdft(s)

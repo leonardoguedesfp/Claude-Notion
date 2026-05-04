@@ -226,6 +226,15 @@ def _build_corpo_blocks_full(
     texto_bruto = publicacao.get("texto")
     tribunal = publicacao.get("siglaTribunal") or ""
     hash_djen = publicacao.get("hash") or ""
+    # Round 4.5 frente 2 — passa tipoDocumento bruto e CNJ pro filtro de
+    # Ata TJDFT tipo "57" (que vira "Outros" canônico, então o filtro
+    # precisa do bruto).
+    tipo_documento_bruto = publicacao.get("tipoDocumento")
+    cnj_escritorio = (
+        publicacao.get("numeroprocessocommascara")
+        or publicacao.get("numero_processo")
+        or None
+    )
 
     texto_pre = preprocessar_texto_djen(texto_bruto)
     texto_corpo, callouts = aplicar_caso_15(
@@ -233,6 +242,8 @@ def _build_corpo_blocks_full(
         tipo_documento=tipo_documento_canonico,
         texto=texto_pre,
         hash_djen=hash_djen,
+        tipo_documento_bruto=tipo_documento_bruto,
+        cnj_escritorio=cnj_escritorio,
     )
 
     blocos_texto = quebrar_em_blocos(texto_corpo) if texto_corpo else []
