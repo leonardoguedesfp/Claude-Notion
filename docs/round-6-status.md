@@ -182,6 +182,35 @@ Comandos planejados (não executados ainda):
 
 ---
 
+## 6.1 Diferença 2.152 vs 1.608 (esclarecimento)
+
+**SQLite** (`leitor_dje.db`): `publicacoes` tem 2.152 linhas.
+**Notion** (📬 Publicações antes do reset manual): 1.608 páginas.
+
+Diferença de 544 = **duplicatas suprimidas pelo dedup** (Round 1 fix
+1.6, commit `2bcf9f6` e flush em `dje_dedup.py:flush_atualizacoes_canonicas`).
+
+Cada uma das 544 linhas tem `dup_canonical_djen_id` populado apontando
+para a canônica correspondente que ficou no Notion. O detector
+implementa a chave canônica
+``sha256(CNJ|data|tribunal|tipo_canonico|texto[:500])`` (D-2 do
+Round 1) para identificar publicações duplicadas (DJEN às vezes
+retorna 2+ linhas com `djen_id` próprios para o mesmo ato processual,
+tipicamente quando a intimação tem múltiplos polos).
+
+Composição:
+- 1.608 canônicas (`notion_page_id` populado, `dup_canonical_djen_id IS NULL`)
+- 544 duplicatas (`dup_canonical_djen_id IS NOT NULL`, sem `notion_page_id`
+  porque a duplicata não vira página própria — é mesclada com a canônica
+  via `Duplicatas suprimidas`)
+- Total = 2.152
+
+Após `scripts/reset_estado_leitor_round_6.py`, todas as 2.152 são
+truncadas. A próxima ingestão recapturará tudo do zero. As duplicatas
+são re-detectadas pelo mesmo dedup.
+
+---
+
 ## 7. Decisão de fatiamento
 
 **Decisão**: pausa pré-smoke com 16/43 regras (37%) implementadas.
