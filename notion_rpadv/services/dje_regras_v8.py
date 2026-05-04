@@ -70,8 +70,22 @@ ALERTA_FASE_DESATUALIZADA_EXECUTIVA: str = "Fase desatualizada (executiva)"
 ALERTA_FASE_DESATUALIZADA_LIQUIDACAO: str = "Fase desatualizada (liquidação)"
 ALERTA_FASE_DESATUALIZADA_COGNITIVA: str = "Fase desatualizada (cognitiva)"
 
-# Os demais 31 alertas (Regras 1-13, 19-25, 29-39) serão re-introduzidos
-# em commits subsequentes deste Round 6.
+# Regra 35 — Trânsito em julgado pendente (mantido do Round 4.4)
+ALERTA_TRANSITO_PENDENTE: str = "Trânsito em julgado pendente"
+
+# Regra 11 — Partes adversas típicas ausentes (5 alertas distintos)
+ALERTA_PARTE_ADVERSA_BB: str = "Banco do Brasil ausente em partes adversas"
+ALERTA_PARTE_ADVERSA_PREVI: str = "PREVI ausente em partes adversas"
+ALERTA_PARTE_ADVERSA_CASSI: str = "CASSI ausente em partes adversas"
+ALERTA_PARTE_ADVERSA_BRADESCO_SAUDE: str = "Bradesco Saúde ausente em partes adversas"
+ALERTA_PARTE_ADVERSA_BB_CONSORCIOS: str = "BB Adm. Consórcios ausente em partes adversas"
+
+# Alertas mantidos do Round 4 (técnicos/operacionais — sem número no doc v8)
+ALERTA_PROCESSO_NAO_CADASTRADO: str = "Processo não cadastrado"
+ALERTA_TEXTO_IMPRESTAVEL: str = "Texto imprestável"
+
+# Os demais 24 alertas (Regras 1-10, 12-13, 19-25, 29-34, 36-39) serão
+# re-introduzidos em commits subsequentes deste Round 6.
 
 # ---------------------------------------------------------------------------
 # Vocabulário canônico de Proc.Instância (para regras de cruzamento)
@@ -496,6 +510,213 @@ def regra_27_fase_liquidacao_por_classe(
     return None
 
 
+def regra_35_transito_pendente(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+) -> str | None:
+    """Regra 35 — Trânsito cognitivo pendente.
+
+    - Condições: Pub.Classe = "CUMPRIMENTO DE SENTENÇA" (não inclui
+      CUMPRIMENTO PROVISÓRIO) **e** Proc.Data do trânsito em julgado
+      (cognitiva) vazia.
+    - Alerta: ``Trânsito em julgado pendente`` (mantido do Round 4.4).
+    - Explicação: cumprimento definitivo só roda após trânsito da fase
+      cognitiva. 100% dos 71 alertas vivos do Round 4 tinham
+      classe=CUMPRIMENTO DE SENTENÇA. Mantém alerta sem alteração.
+    """
+    if processo_record is None:
+        return None
+    classe = (publicacao.get("nomeClasse") or "").strip().upper()
+    # Cumprimento DEFINITIVO apenas — provisório é antes do trânsito
+    if classe != "CUMPRIMENTO DE SENTENÇA":
+        return None
+    t_cog = processo_record.get("data_do_transito_em_julgado_cognitiva")
+    t_exec = processo_record.get("data_do_transito_em_julgado_executiva")
+    if not t_cog and not t_exec:
+        return ALERTA_TRANSITO_PENDENTE
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Regra 11 — Partes adversas típicas ausentes
+# ---------------------------------------------------------------------------
+
+#: Tabela de mapeamento: substring em Pub.Partes → (item esperado em
+#: Proc.Partes adversas, alerta a disparar). Cada match em Pub.Partes
+#: que não tem entrada correspondente em Proc.Partes adversas dispara
+#: o alerta. 5 alertas distintos (decisão de design da v8 X.5).
+_PARTES_ADVERSAS_TIPICAS: tuple[tuple[tuple[str, ...], str, str], ...] = (
+    # (substrings em Pub.Partes; nome canônico em Proc.Partes adversas; alerta)
+    (
+        ("BANCO DO BRASIL S/A", "BANCO DO BRASIL S.A.", "BANCO DO BRASIL SA", "BANCO DO BRASIL"),
+        "Banco do Brasil",
+        ALERTA_PARTE_ADVERSA_BB,
+    ),
+    (
+        (
+            "CAIXA DE PREVIDENCIA DOS FUNC",
+            "CAIXA DE PREVIDÊNCIA DOS FUNC",
+            "PREVI",
+        ),
+        "PREVI",
+        ALERTA_PARTE_ADVERSA_PREVI,
+    ),
+    (
+        ("CASSI",),
+        "CASSI",
+        ALERTA_PARTE_ADVERSA_CASSI,
+    ),
+    (
+        ("BRADESCO SAÚDE", "BRADESCO SAUDE", "BRADESCO SEGUROS"),
+        "Bradesco Saúde",
+        ALERTA_PARTE_ADVERSA_BRADESCO_SAUDE,
+    ),
+    (
+        ("BB ADMINISTRADORA DE CONSÓRCIOS", "BB ADMINISTRADORA DE CONSORCIOS"),
+        "BB Adm. Consórcios",
+        ALERTA_PARTE_ADVERSA_BB_CONSORCIOS,
+    ),
+)
+
+
+def _normalizar_partes_adversas_proc(
+    processo_record: dict[str, Any],
+) -> set[str]:
+    """Lê ``Proc.Partes adversas`` (lista canônica) e devolve set
+    normalizado em uppercase para comparação."""
+    raw = processo_record.get("partes_adversas") or []
+    if isinstance(raw, str):
+        # Pode vir como string com vírgulas (ex: rollup ou import bruto)
+        raw = [p.strip() for p in raw.split(",")]
+    out: set[str] = set()
+    for item in raw:
+        s = str(item).strip().upper()
+        if s:
+            out.add(s)
+    return out
+
+
+def _texto_partes_pub(publicacao: dict[str, Any]) -> str:
+    """Junta nomes dos destinatários da Pub em uma string única
+    uppercase para busca por substring."""
+    destinatarios = publicacao.get("destinatarios") or []
+    nomes: list[str] = []
+    for d in destinatarios:
+        if isinstance(d, dict):
+            nome = str(d.get("nome") or "").strip()
+            if nome:
+                nomes.append(nome)
+    return " | ".join(nomes).upper()
+
+
+def regra_11_partes_adversas_ausentes(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+) -> list[str]:
+    """Regra 11 — Parte adversa típica ausente do cadastro.
+
+    Para cada parte adversa do catálogo do escritório (BB, PREVI, CASSI,
+    Bradesco Saúde, BB Adm. Consórcios) que aparece em ``Pub.Partes`` mas
+    NÃO está em ``Proc.Partes adversas``, dispara o alerta correspondente.
+    Pode disparar múltiplos alertas (até 5) em uma única publicação.
+    """
+    if processo_record is None:
+        return []
+    texto = _texto_partes_pub(publicacao)
+    if not texto:
+        return []
+    proc_partes = _normalizar_partes_adversas_proc(processo_record)
+
+    alertas: list[str] = []
+    for substrings, canonico, alerta in _PARTES_ADVERSAS_TIPICAS:
+        # Match em Pub.Partes
+        if not any(sub in texto for sub in substrings):
+            continue
+        # Já está em Proc.Partes adversas?
+        canon_upper = canonico.upper()
+        if canon_upper in proc_partes:
+            continue
+        # Heurística adicional: alguns nomes em Proc.Partes podem usar
+        # variantes (ex: "BANCO DO BRASIL" sem S/A). Aceita se substring
+        # aparece em alguma das partes cadastradas.
+        if any(canon_upper in p or p in canon_upper for p in proc_partes if p):
+            continue
+        alertas.append(alerta)
+    return alertas
+
+
+# ---------------------------------------------------------------------------
+# Alertas mantidos do Round 4 (sem número formal na v8)
+# ---------------------------------------------------------------------------
+
+
+def _texto_e_imprestavel(texto: str) -> bool:
+    """Detecção conservadora de texto imprestável — apenas as classes
+    conhecidas vistas em produção. NÃO dispara em despachos breves
+    legítimos.
+
+    Classes detectadas:
+    - TJGO: ``"ARQUIVOS DIGITAIS INDISPONÍVEIS (NÃO SÃO DO TIPO PÚBLICO)"``.
+    - Despachos minimalistas: ``"Intime-se."``, ``"Intimem-se."``.
+    - TRT10 só com referência a ID: ``"Tomar ciência do(a) Intimação de
+      ID..."`` SEM CNJ no texto.
+    """
+    if not texto:
+        return False
+    t = texto.strip()
+    if "ARQUIVOS DIGITAIS INDISPONÍVEIS" in t:
+        return True
+    if t in ("Intime-se.", "Intimem-se."):
+        return True
+    if "Tomar ciência" in t and "Intimação de ID" in t:
+        if not re.search(r"\d{7}-\d{2}", t):
+            return True
+    return False
+
+
+def regra_texto_imprestavel(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+) -> str | None:
+    """Alerta técnico — texto imprestável para análise (mantido do
+    Round 4.4). Não corresponde a nenhuma Regra numerada do doc v8;
+    é classificação de qualidade do conteúdo recebido do DJEN.
+
+    Independe de ``processo_record`` — é alerta puro sobre o conteúdo
+    da publicação.
+    """
+    texto = publicacao.get("texto") or ""
+    if len(texto) < 200 and _texto_e_imprestavel(texto):
+        return ALERTA_TEXTO_IMPRESTAVEL
+    return None
+
+
+def regra_processo_nao_cadastrado(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+) -> str | None:
+    """Alerta operacional — processo da publicação não está cadastrado
+    em ⚖️ Processos.
+
+    Refinamento da v8 (X.5): este alerta dispara apenas em pubs que
+    **não** são distribuição. Distribuições (Lista de Distribuição
+    qualquer doc, ou Intimação + Distribuição) já recebem
+    ``Processo/recurso distribuído`` da Camada base (Regra 40), que é
+    a forma correta de sinalizar "cadastrar este processo" no fluxo
+    novo. Disparar os dois redundantemente polui o multi-select.
+    """
+    if processo_record is not None:
+        return None
+    # Filtra: distribuições já têm o sinal certo da Camada base
+    tipo_com = mapear_tipo_comunicacao(publicacao.get("tipoComunicacao"))
+    tipo_doc = mapear_tipo_documento(publicacao.get("tipoDocumento"))
+    if tipo_com == "Lista de Distribuição":
+        return None
+    if tipo_com == "Intimação" and tipo_doc == "Distribuição":
+        return None
+    return ALERTA_PROCESSO_NAO_CADASTRADO
+
+
 def regra_28_fase_cognitiva_contradita_por_classe(
     publicacao: dict[str, Any],
     processo_record: dict[str, Any] | None,
@@ -540,17 +761,23 @@ def aplicar_regras_monitoramento(
     - Regras 14, 15 (subida e descida de instância).
     - Regras 16, 17, 18 (impossibilidades categóricas).
     - Regras 26, 27, 28 (fase desatualizada por classe).
+    - Regra 11 (partes adversas típicas ausentes — 5 alertas).
+    - Regra 35 (trânsito cognitivo pendente).
+    - Alerta técnico Texto imprestável (sem número formal na v8).
+    - Alerta operacional Processo não cadastrado (refinado: não
+      dispara em distribuições, que já têm Camada base).
 
     Pendentes (a serem acrescentadas em commits subsequentes):
 
     - Regras 1-3 (Identificação e numeração).
     - Regras 4-6 (Classificação processual).
-    - Regras 7-11 (Partes).
+    - Regras 7-9 (Cliente do escritório).
+    - Regras 10 (Posição do cliente).
     - Regras 12-13 (Tribunal).
     - Regras 19-25 (Cidade, Vara, Turma, Relator).
-    - Regras 29-39 (demais de Estado processual + outros).
+    - Regras 29-34, 36-39 (demais de Estado processual + outros).
     """
-    candidatos = [
+    candidatos: list[str | None] = [
         regra_14_subida_nao_detectada(publicacao, processo_record),
         regra_15_descida_nao_detectada(publicacao, processo_record),
         regra_16_acordao_em_1grau(publicacao, processo_record),
@@ -559,7 +786,12 @@ def aplicar_regras_monitoramento(
         regra_26_fase_executiva_por_classe(publicacao, processo_record),
         regra_27_fase_liquidacao_por_classe(publicacao, processo_record),
         regra_28_fase_cognitiva_contradita_por_classe(publicacao, processo_record),
+        regra_35_transito_pendente(publicacao, processo_record),
+        regra_texto_imprestavel(publicacao, processo_record),
+        regra_processo_nao_cadastrado(publicacao, processo_record),
     ]
+    # Regra 11 devolve lista — espalha individualmente
+    candidatos.extend(regra_11_partes_adversas_ausentes(publicacao, processo_record))
 
     alertas: list[str] = []
     seen: set[str] = set()

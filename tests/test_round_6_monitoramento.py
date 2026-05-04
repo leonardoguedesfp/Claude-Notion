@@ -21,8 +21,16 @@ from notion_rpadv.services.dje_regras_v8 import (
     ALERTA_FASE_DESATUALIZADA_LIQUIDACAO,
     ALERTA_INSTANCIA_DESATUALIZADA_DESCIDA,
     ALERTA_INSTANCIA_DESATUALIZADA_SUBIDA,
+    ALERTA_PARTE_ADVERSA_BB,
+    ALERTA_PARTE_ADVERSA_BB_CONSORCIOS,
+    ALERTA_PARTE_ADVERSA_BRADESCO_SAUDE,
+    ALERTA_PARTE_ADVERSA_CASSI,
+    ALERTA_PARTE_ADVERSA_PREVI,
     ALERTA_PAUTA_EM_1GRAU,
+    ALERTA_PROCESSO_NAO_CADASTRADO,
     ALERTA_SENTENCA_EM_COLEGIADO,
+    ALERTA_TEXTO_IMPRESTAVEL,
+    ALERTA_TRANSITO_PENDENTE,
     FASE_COGNITIVA,
     FASE_EXECUTIVA,
     FASE_LIQUIDACAO,
@@ -34,6 +42,7 @@ from notion_rpadv.services.dje_regras_v8 import (
     aplicar_todas_regras,
     fase_implicada,
     instancia_implicada,
+    regra_11_partes_adversas_ausentes,
     regra_14_subida_nao_detectada,
     regra_15_descida_nao_detectada,
     regra_16_acordao_em_1grau,
@@ -42,6 +51,9 @@ from notion_rpadv.services.dje_regras_v8 import (
     regra_26_fase_executiva_por_classe,
     regra_27_fase_liquidacao_por_classe,
     regra_28_fase_cognitiva_contradita_por_classe,
+    regra_35_transito_pendente,
+    regra_processo_nao_cadastrado,
+    regra_texto_imprestavel,
 )
 
 
@@ -267,13 +279,28 @@ def test_R6_todas_regras_pauta_em_1grau_dispara_2_alertas() -> None:
     )
 
 
-def test_R6_todas_regras_sem_cadastro_nem_camada_nem_monitor() -> None:
+def test_R6_todas_regras_sem_cadastro_intimacao_decisao_dispara_so_proc_nao_cad() -> None:
     """Pub Intimação + Decisão sem cadastro: camada base não dispara,
-    monitoramento exige processo_record para todas as regras 16-18."""
+    Regras 14-18, 26-28, 35 exigem cadastro, mas o alerta operacional
+    'Processo não cadastrado' dispara — única exceção."""
     pub = _pub(tipoComunicacao="Intimação", tipoDocumento="Decisão")
     tarefas, alertas = aplicar_todas_regras(pub, None)
     assert tarefas == []
-    assert alertas == []
+    assert alertas == [ALERTA_PROCESSO_NAO_CADASTRADO]
+
+
+def test_R6_todas_regras_lista_distribuicao_sem_cadastro_so_camada_base() -> None:
+    """Pub Lista de Distribuição sem cadastro:
+    - Camada base (Regra 40): Tarefa 'Nada para fazer' + Alerta
+      'Processo/recurso distribuído'.
+    - 'Processo não cadastrado' NÃO dispara (refinamento v8 — distribuição
+      tem sinal próprio).
+    """
+    pub = _pub(tipoComunicacao="Lista de Distribuição", tipoDocumento="Distribuição")
+    tarefas, alertas = aplicar_todas_regras(pub, None)
+    assert tarefas == ["Nada para fazer"]
+    assert "Processo/recurso distribuído" in alertas
+    assert ALERTA_PROCESSO_NAO_CADASTRADO not in alertas
 
 
 # ===========================================================================
@@ -587,3 +614,193 @@ def test_R6_composicao_cumprimento_em_proc_2grau_cognitiva() -> None:
     alertas = aplicar_regras_monitoramento(pub, proc)
     assert ALERTA_INSTANCIA_DESATUALIZADA_DESCIDA not in alertas  # filtrado
     assert ALERTA_FASE_DESATUALIZADA_EXECUTIVA in alertas
+
+
+# ===========================================================================
+# Regra 35 — Trânsito em julgado pendente
+# ===========================================================================
+
+
+def test_R6_R35_dispara_cumprimento_sem_transito() -> None:
+    pub = _pub(nomeClasse="CUMPRIMENTO DE SENTENÇA")
+    proc = _proc(
+        instancia="1º grau",
+        data_do_transito_em_julgado_cognitiva=None,
+        data_do_transito_em_julgado_executiva=None,
+    )
+    assert regra_35_transito_pendente(pub, proc) == ALERTA_TRANSITO_PENDENTE
+
+
+def test_R6_R35_NAO_dispara_em_provisorio() -> None:
+    """Cumprimento PROVISÓRIO está antes do trânsito por design."""
+    pub = _pub(nomeClasse="CUMPRIMENTO PROVISÓRIO DE SENTENÇA")
+    proc = _proc(
+        instancia="1º grau",
+        data_do_transito_em_julgado_cognitiva=None,
+        data_do_transito_em_julgado_executiva=None,
+    )
+    assert regra_35_transito_pendente(pub, proc) is None
+
+
+def test_R6_R35_nao_dispara_se_data_presente() -> None:
+    pub = _pub(nomeClasse="CUMPRIMENTO DE SENTENÇA")
+    proc = _proc(
+        instancia="1º grau",
+        data_do_transito_em_julgado_cognitiva="2024-12-10",
+        data_do_transito_em_julgado_executiva=None,
+    )
+    assert regra_35_transito_pendente(pub, proc) is None
+
+
+def test_R6_R35_nao_dispara_para_classe_diferente() -> None:
+    pub = _pub(nomeClasse="PROCEDIMENTO COMUM CÍVEL")
+    proc = _proc(
+        instancia="1º grau",
+        data_do_transito_em_julgado_cognitiva=None,
+        data_do_transito_em_julgado_executiva=None,
+    )
+    assert regra_35_transito_pendente(pub, proc) is None
+
+
+def test_R6_R35_nao_dispara_sem_processo_cadastrado() -> None:
+    pub = _pub(nomeClasse="CUMPRIMENTO DE SENTENÇA")
+    assert regra_35_transito_pendente(pub, None) is None
+
+
+# ===========================================================================
+# Regra 11 — Partes adversas típicas ausentes
+# ===========================================================================
+
+
+def _pub_com_destinatarios(*nomes_polos):
+    return _pub(destinatarios=[{"nome": nome, "polo": polo} for nome, polo in nomes_polos])
+
+
+def test_R6_R11_dispara_BB_ausente() -> None:
+    pub = _pub_com_destinatarios(("BANCO DO BRASIL SA", "P"), ("AUTOR FULANO", "A"))
+    proc = _proc(partes_adversas=[])
+    alertas = regra_11_partes_adversas_ausentes(pub, proc)
+    assert ALERTA_PARTE_ADVERSA_BB in alertas
+
+
+def test_R6_R11_NAO_dispara_BB_ja_cadastrado() -> None:
+    pub = _pub_com_destinatarios(("BANCO DO BRASIL SA", "P"), ("AUTOR", "A"))
+    proc = _proc(partes_adversas=["Banco do Brasil"])
+    alertas = regra_11_partes_adversas_ausentes(pub, proc)
+    assert ALERTA_PARTE_ADVERSA_BB not in alertas
+
+
+def test_R6_R11_dispara_PREVI_via_caixa_de_previdencia() -> None:
+    pub = _pub_com_destinatarios(
+        ("CAIXA DE PREVIDENCIA DOS FUNCIONARIOS DO BANCO DO BRASIL", "P"),
+        ("AUTOR", "A"),
+    )
+    proc = _proc(partes_adversas=[])
+    alertas = regra_11_partes_adversas_ausentes(pub, proc)
+    assert ALERTA_PARTE_ADVERSA_PREVI in alertas
+
+
+def test_R6_R11_dispara_CASSI() -> None:
+    pub = _pub_com_destinatarios(("CASSI - CAIXA DE ASSISTÊNCIA", "P"), ("AUTOR", "A"))
+    proc = _proc(partes_adversas=[])
+    alertas = regra_11_partes_adversas_ausentes(pub, proc)
+    assert ALERTA_PARTE_ADVERSA_CASSI in alertas
+
+
+def test_R6_R11_dispara_bradesco_saude() -> None:
+    pub = _pub_com_destinatarios(("BRADESCO SAÚDE S.A.", "P"), ("AUTOR", "A"))
+    proc = _proc(partes_adversas=[])
+    alertas = regra_11_partes_adversas_ausentes(pub, proc)
+    assert ALERTA_PARTE_ADVERSA_BRADESCO_SAUDE in alertas
+
+
+def test_R6_R11_dispara_BB_consorcios() -> None:
+    pub = _pub_com_destinatarios(
+        ("BB ADMINISTRADORA DE CONSÓRCIOS S.A.", "P"),
+        ("AUTOR", "A"),
+    )
+    proc = _proc(partes_adversas=[])
+    alertas = regra_11_partes_adversas_ausentes(pub, proc)
+    assert ALERTA_PARTE_ADVERSA_BB_CONSORCIOS in alertas
+
+
+def test_R6_R11_dispara_multiplos_simultaneamente() -> None:
+    """Pub com BB + PREVI ausentes em Proc.Partes adversas dispara 2."""
+    pub = _pub_com_destinatarios(
+        ("BANCO DO BRASIL SA", "P"),
+        ("CAIXA DE PREVIDENCIA DOS FUNCIONARIOS DO BANCO DO BRASIL", "P"),
+        ("AUTOR", "A"),
+    )
+    proc = _proc(partes_adversas=[])
+    alertas = regra_11_partes_adversas_ausentes(pub, proc)
+    assert ALERTA_PARTE_ADVERSA_BB in alertas
+    assert ALERTA_PARTE_ADVERSA_PREVI in alertas
+    assert len(alertas) == 2
+
+
+def test_R6_R11_NAO_dispara_sem_processo_cadastrado() -> None:
+    pub = _pub_com_destinatarios(("BANCO DO BRASIL SA", "P"), ("AUTOR", "A"))
+    assert regra_11_partes_adversas_ausentes(pub, None) == []
+
+
+# ===========================================================================
+# Texto imprestável (alerta técnico mantido do Round 4.4)
+# ===========================================================================
+
+
+def test_R6_texto_imprestavel_tjgo_indisponivel() -> None:
+    pub = _pub(texto="ARQUIVOS DIGITAIS INDISPONÍVEIS (NÃO SÃO DO TIPO PÚBLICO)")
+    assert regra_texto_imprestavel(pub, _proc()) == ALERTA_TEXTO_IMPRESTAVEL
+
+
+def test_R6_texto_imprestavel_intime_se_minimalista() -> None:
+    pub = _pub(texto="Intime-se.")
+    assert regra_texto_imprestavel(pub, _proc()) == ALERTA_TEXTO_IMPRESTAVEL
+
+
+def test_R6_texto_imprestavel_trt10_so_id_sem_cnj() -> None:
+    pub = _pub(
+        texto=(
+            "Tomar ciência do(a) Intimação de ID 8217f34.\n\n"
+            "Intimado(s) / Citado(s)\n - I.S.L.A."
+        ),
+    )
+    assert regra_texto_imprestavel(pub, _proc()) == ALERTA_TEXTO_IMPRESTAVEL
+
+
+def test_R6_texto_imprestavel_NAO_dispara_em_despacho_curto_legitimo() -> None:
+    pub = _pub(texto="Despacho curto: defiro o pedido. Intime-se.")
+    assert regra_texto_imprestavel(pub, _proc()) is None
+
+
+def test_R6_texto_imprestavel_funciona_sem_cadastro() -> None:
+    """Alerta técnico não depende de Proc cadastrado."""
+    pub = _pub(texto="Intime-se.")
+    assert regra_texto_imprestavel(pub, None) == ALERTA_TEXTO_IMPRESTAVEL
+
+
+# ===========================================================================
+# Processo não cadastrado (alerta operacional refinado v8)
+# ===========================================================================
+
+
+def test_R6_processo_nao_cadastrado_dispara_em_intimacao_decisao() -> None:
+    pub = _pub(tipoComunicacao="Intimação", tipoDocumento="Decisão")
+    assert regra_processo_nao_cadastrado(pub, None) == ALERTA_PROCESSO_NAO_CADASTRADO
+
+
+def test_R6_processo_nao_cadastrado_NAO_dispara_em_lista_distribuicao() -> None:
+    """Refinamento v8 X.5: distribuições já têm sinal certo da Camada
+    base ('Processo/recurso distribuído') — não duplicar com este alerta."""
+    pub = _pub(tipoComunicacao="Lista de Distribuição", tipoDocumento="Distribuição")
+    assert regra_processo_nao_cadastrado(pub, None) is None
+
+
+def test_R6_processo_nao_cadastrado_NAO_dispara_em_intimacao_distribuicao() -> None:
+    pub = _pub(tipoComunicacao="Intimação", tipoDocumento="Distribuição")
+    assert regra_processo_nao_cadastrado(pub, None) is None
+
+
+def test_R6_processo_nao_cadastrado_NAO_dispara_se_processo_cadastrado() -> None:
+    pub = _pub(tipoComunicacao="Intimação", tipoDocumento="Decisão")
+    assert regra_processo_nao_cadastrado(pub, _proc()) is None
