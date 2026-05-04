@@ -19,13 +19,18 @@ import json
 from notion_rpadv.services.dje_regras_v8 import (
     ALERTA_ACORDAO_EM_1GRAU,
     ALERTA_ATIVIDADE_EM_PROCESSO_ARQUIVADO,
+    ALERTA_ATIVIDADE_POS_ENCERRAMENTO_EXECUTIVO,
+    ALERTA_CAPTURAR_DATA_DISTRIBUICAO,
     ALERTA_CAPTURAR_LINK_EXTERNO,
     ALERTA_CAPTURAR_NUMERACAO_STF,
     ALERTA_CAPTURAR_NUMERACAO_STJ_TST,
     ALERTA_CIDADE_DESATUALIZADA,
+    ALERTA_CONFERIR_DATA_DISTRIBUICAO,
     ALERTA_CONFERIR_NATUREZA_PROCESSO,
+    ALERTA_CONFERIR_NUMERO_CNJ,
     ALERTA_CONFERIR_POSICAO_DO_CLIENTE,
     ALERTA_CONFERIR_SENTENCA_FASE_POS_COGNITIVA,
+    ALERTA_CONFERIR_TEMA_955,
     ALERTA_CONFERIR_TIPO_PROCESSO,
     ALERTA_CONFERIR_TRIBUNAL_ORIGEM,
     ALERTA_CONFERIR_VINCULACAO_CLIENTE_PROCESSO,
@@ -63,6 +68,7 @@ from notion_rpadv.services.dje_regras_v8 import (
     carregar_indice_clientes,
     fase_implicada,
     instancia_implicada,
+    regra_1_conferir_numero_cnj,
     regra_2_capturar_numeracao_stj_tst,
     regra_3_capturar_numeracao_stf,
     regra_4_natureza_inconsistente_com_tribunal,
@@ -90,7 +96,11 @@ from notion_rpadv.services.dje_regras_v8 import (
     regra_29_sentenca_em_fase_pos_cognitiva,
     regra_30_pauta_em_processo_arquivado,
     regra_31_atividade_em_processo_arquivado,
+    regra_32_conferir_tema_955,
+    regra_33_capturar_data_distribuicao,
+    regra_34_conferir_data_distribuicao,
     regra_35_transito_pendente,
+    regra_36_atividade_pos_encerramento_executivo,
     regra_38_capturar_link_externo,
     regra_39_recurso_autonomo_sem_processo_pai,
     regra_processo_nao_cadastrado,
@@ -1824,3 +1834,241 @@ def test_R7e_R24_juiz_convocado_dispara() -> None:
     )
     proc = _proc(instancia=INSTANCIA_SEGUNDO_GRAU, relator_no_2o_grau="")
     assert regra_24_relator_faltando(pub, proc) == ALERTA_RELATOR_DESATUALIZADO
+
+
+# ===========================================================================
+# Round 7f — Regra 1: Conferir número CNJ
+# ===========================================================================
+
+
+def test_R7f_R1_dispara_cnj_divergente() -> None:
+    pub = _pub(numeroprocessocommascara="0001234-56.2025.5.10.0001")
+    proc = _proc(numero_do_processo="0009999-99.2025.5.10.0001")
+    assert regra_1_conferir_numero_cnj(pub, proc) == ALERTA_CONFERIR_NUMERO_CNJ
+
+
+def test_R7f_R1_NAO_dispara_se_cnj_iguais_apos_normalizacao() -> None:
+    """Mesmo CNJ com formatos ligeiramente diferentes (zfill, máscara)."""
+    pub = _pub(numeroprocessocommascara="0001234-56.2025.5.10.0001")
+    proc = _proc(numero_do_processo="00012345620255100001")  # apenas dígitos
+    assert regra_1_conferir_numero_cnj(pub, proc) is None
+
+
+def test_R7f_R1_NAO_dispara_se_cnj_pub_vazio() -> None:
+    pub = _pub(numeroprocessocommascara="")
+    proc = _proc(numero_do_processo="0009999-99.2025.5.10.0001")
+    assert regra_1_conferir_numero_cnj(pub, proc) is None
+
+
+def test_R7f_R1_NAO_dispara_sem_processo_cadastrado() -> None:
+    pub = _pub(numeroprocessocommascara="0001234-56.2025.5.10.0001")
+    assert regra_1_conferir_numero_cnj(pub, None) is None
+
+
+# ===========================================================================
+# Round 7f — Regra 32: Conferir Tema 955
+# ===========================================================================
+
+
+def _pub_previ_resp(**kwargs) -> dict:
+    base = _pub(
+        nomeClasse="RECURSO ESPECIAL",
+        tipoDocumento="Decisão",
+        destinatarios=[
+            {"nome": "CAIXA DE PREVIDENCIA DOS FUNCIONARIOS DO BANCO DO BRASIL", "polo": "P"},
+            {"nome": "AUTOR FULANO", "polo": "A"},
+        ],
+    )
+    base.update(kwargs)
+    return base
+
+
+def test_R7f_R32_dispara_previ_resp_decisao_sem_sobrestamento() -> None:
+    pub = _pub_previ_resp()
+    proc = _proc(status="Ativo", tema_955_sobrestado=False)
+    assert regra_32_conferir_tema_955(pub, proc) == ALERTA_CONFERIR_TEMA_955
+
+
+def test_R7f_R32_NAO_dispara_se_status_arquivado_tema955() -> None:
+    pub = _pub_previ_resp()
+    proc = _proc(status="Arquivado provisoriamente (tema 955)", tema_955_sobrestado=False)
+    assert regra_32_conferir_tema_955(pub, proc) is None
+
+
+def test_R7f_R32_NAO_dispara_se_tema_955_marcado() -> None:
+    pub = _pub_previ_resp()
+    proc = _proc(status="Ativo", tema_955_sobrestado=True)
+    assert regra_32_conferir_tema_955(pub, proc) is None
+
+
+def test_R7f_R32_NAO_dispara_sem_previ_em_partes() -> None:
+    pub = _pub(
+        nomeClasse="RECURSO ESPECIAL",
+        tipoDocumento="Decisão",
+        destinatarios=[
+            {"nome": "AUTOR FULANO", "polo": "A"},
+            {"nome": "RÉU OUTRA COISA", "polo": "P"},
+        ],
+    )
+    proc = _proc(status="Ativo", tema_955_sobrestado=False)
+    assert regra_32_conferir_tema_955(pub, proc) is None
+
+
+def test_R7f_R32_NAO_dispara_para_outras_classes() -> None:
+    pub = _pub_previ_resp(nomeClasse="PROCEDIMENTO COMUM CÍVEL")
+    proc = _proc(status="Ativo", tema_955_sobrestado=False)
+    assert regra_32_conferir_tema_955(pub, proc) is None
+
+
+def test_R7f_R32_NAO_dispara_para_outros_tipos_documento() -> None:
+    pub = _pub_previ_resp(tipoDocumento="Acórdão")
+    proc = _proc(status="Ativo", tema_955_sobrestado=False)
+    assert regra_32_conferir_tema_955(pub, proc) is None
+
+
+# ===========================================================================
+# Round 7f — Regra 33: Capturar data de distribuição
+# ===========================================================================
+
+
+def test_R7f_R33_dispara_distribuicao_inicial_proc_sem_data() -> None:
+    pub = _pub(
+        tipoDocumento="Distribuição",
+        nomeClasse="AÇÃO TRABALHISTA - RITO ORDINÁRIO",
+    )
+    proc = _proc(data_de_distribuicao=None)
+    assert regra_33_capturar_data_distribuicao(pub, proc) == ALERTA_CAPTURAR_DATA_DISTRIBUICAO
+
+
+def test_R7f_R33_NAO_dispara_se_data_populada() -> None:
+    pub = _pub(
+        tipoDocumento="Distribuição",
+        nomeClasse="PROCEDIMENTO COMUM CÍVEL",
+    )
+    proc = _proc(data_de_distribuicao="2024-01-15")
+    assert regra_33_capturar_data_distribuicao(pub, proc) is None
+
+
+def test_R7f_R33_NAO_dispara_para_classes_recursais() -> None:
+    """Distribuição recursal (ex: Agravo de Petição) não dispara —
+    é distribuição da fase recursal, não inicial."""
+    pub = _pub(
+        tipoDocumento="Distribuição",
+        nomeClasse="AGRAVO DE PETIÇÃO",
+    )
+    proc = _proc(data_de_distribuicao=None)
+    assert regra_33_capturar_data_distribuicao(pub, proc) is None
+
+
+def test_R7f_R33_NAO_dispara_para_outros_tipos_documento() -> None:
+    pub = _pub(
+        tipoDocumento="Decisão",
+        nomeClasse="AÇÃO TRABALHISTA - RITO ORDINÁRIO",
+    )
+    proc = _proc(data_de_distribuicao=None)
+    assert regra_33_capturar_data_distribuicao(pub, proc) is None
+
+
+# ===========================================================================
+# Round 7f — Regra 34: Conferir data de distribuição
+# ===========================================================================
+
+
+def test_R7f_R34_dispara_data_30dias_anterior() -> None:
+    pub = _pub(
+        tipoDocumento="Distribuição",
+        nomeClasse="AÇÃO TRABALHISTA - RITO ORDINÁRIO",
+        data_disponibilizacao="2026-04-15",
+    )
+    proc = _proc(data_de_distribuicao="2026-03-01")  # 45 dias antes
+    assert regra_34_conferir_data_distribuicao(pub, proc) == ALERTA_CONFERIR_DATA_DISTRIBUICAO
+
+
+def test_R7f_R34_NAO_dispara_data_proxima() -> None:
+    pub = _pub(
+        tipoDocumento="Distribuição",
+        nomeClasse="AÇÃO TRABALHISTA - RITO ORDINÁRIO",
+        data_disponibilizacao="2026-04-15",
+    )
+    proc = _proc(data_de_distribuicao="2026-04-14")  # 1 dia antes
+    assert regra_34_conferir_data_distribuicao(pub, proc) is None
+
+
+def test_R7f_R34_NAO_dispara_se_data_proc_vazia() -> None:
+    pub = _pub(
+        tipoDocumento="Distribuição",
+        nomeClasse="AÇÃO TRABALHISTA - RITO ORDINÁRIO",
+        data_disponibilizacao="2026-04-15",
+    )
+    proc = _proc(data_de_distribuicao=None)
+    assert regra_34_conferir_data_distribuicao(pub, proc) is None
+
+
+def test_R7f_R34_NAO_dispara_para_classe_recursal() -> None:
+    pub = _pub(
+        tipoDocumento="Distribuição",
+        nomeClasse="AGRAVO DE PETIÇÃO",
+        data_disponibilizacao="2026-04-15",
+    )
+    proc = _proc(data_de_distribuicao="2026-03-01")
+    assert regra_34_conferir_data_distribuicao(pub, proc) is None
+
+
+# ===========================================================================
+# Round 7f — Regra 36: Atividade pós-encerramento executivo
+# ===========================================================================
+
+
+def test_R7f_R36_dispara_pub_apos_transito_executivo() -> None:
+    pub = _pub(data_disponibilizacao="2026-04-15")
+    proc = _proc(data_do_transito_em_julgado_executiva="2025-12-10")
+    assert regra_36_atividade_pos_encerramento_executivo(pub, proc) == ALERTA_ATIVIDADE_POS_ENCERRAMENTO_EXECUTIVO
+
+
+def test_R7f_R36_NAO_dispara_pub_anterior_ao_transito() -> None:
+    pub = _pub(data_disponibilizacao="2025-11-20")
+    proc = _proc(data_do_transito_em_julgado_executiva="2025-12-10")
+    assert regra_36_atividade_pos_encerramento_executivo(pub, proc) is None
+
+
+def test_R7f_R36_NAO_dispara_se_proc_sem_data() -> None:
+    pub = _pub(data_disponibilizacao="2026-04-15")
+    proc = _proc(data_do_transito_em_julgado_executiva=None)
+    assert regra_36_atividade_pos_encerramento_executivo(pub, proc) is None
+
+
+def test_R7f_R36_NAO_dispara_se_pub_sem_data() -> None:
+    pub = _pub(data_disponibilizacao="")
+    proc = _proc(data_do_transito_em_julgado_executiva="2025-12-10")
+    assert regra_36_atividade_pos_encerramento_executivo(pub, proc) is None
+
+
+# ===========================================================================
+# Composição final — múltiplas regras Round 7
+# ===========================================================================
+
+
+def test_R7_composicao_pub_distribuicao_3_alertas_simultaneos() -> None:
+    """Pub Intimação Distribuição + Proc.tipo=Principal + Proc sem clientes,
+    sem data, sem tribunal:
+    - Camada base R40 → Tarefa Nada para fazer + Alerta Processo/recurso distribuído
+    - Regra 33 → Capturar data de distribuição
+    """
+    pub = _pub(
+        siglaTribunal="TJDFT",
+        tipoComunicacao="Intimação",
+        tipoDocumento="Distribuição",
+        nomeClasse="PROCEDIMENTO COMUM CÍVEL",
+        data_disponibilizacao="2026-04-15",
+    )
+    proc = _proc(
+        tipo_de_processo="Principal",
+        tribunal="TJDFT",
+        instancia="1º grau",
+        clientes=[],
+        data_de_distribuicao=None,
+    )
+    tarefas, alertas = aplicar_todas_regras(pub, proc)
+    assert tarefas == ["Nada para fazer"]
+    assert "Processo/recurso distribuído" in alertas  # camada base R40
+    assert ALERTA_CAPTURAR_DATA_DISTRIBUICAO in alertas  # R33

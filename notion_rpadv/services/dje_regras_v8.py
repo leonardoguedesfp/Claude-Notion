@@ -115,6 +115,15 @@ ALERTA_VARA_DESATUALIZADA: str = "Vara desatualizada"
 ALERTA_TURMA_DESATUALIZADA: str = "Turma desatualizada"
 ALERTA_RELATOR_DESATUALIZADO: str = "Relator desatualizado"
 
+# Regra 1 — Identificação
+ALERTA_CONFERIR_NUMERO_CNJ: str = "Conferir número CNJ do processo"
+
+# Regras 32-34, 36 — Estado processual + datas
+ALERTA_CONFERIR_TEMA_955: str = "Conferir Tema 955"
+ALERTA_CAPTURAR_DATA_DISTRIBUICAO: str = "Capturar data de distribuição"
+ALERTA_CONFERIR_DATA_DISTRIBUICAO: str = "Conferir data de distribuição"
+ALERTA_ATIVIDADE_POS_ENCERRAMENTO_EXECUTIVO: str = "Atividade pós-encerramento executivo"
+
 # Alertas mantidos do Round 4 (técnicos/operacionais — sem número no doc v8)
 ALERTA_PROCESSO_NAO_CADASTRADO: str = "Processo não cadastrado"
 ALERTA_TEXTO_IMPRESTAVEL: str = "Texto imprestável"
@@ -594,6 +603,223 @@ def regra_39_recurso_autonomo_sem_processo_pai(
     elif pai:
         return None
     return ALERTA_RECURSO_AUTONOMO_SEM_PROCESSO_PAI
+
+
+# ---------------------------------------------------------------------------
+# Regra 1 — Conferir número CNJ do processo
+# ---------------------------------------------------------------------------
+
+
+def _normalizar_cnj_simples(cnj: str | None) -> str:
+    """Devolve CNJ apenas com dígitos (remove pontos, traços, espaços).
+    Útil para comparação tolerante entre formatos."""
+    if not cnj:
+        return ""
+    return re.sub(r"\D", "", str(cnj))
+
+
+def regra_1_conferir_numero_cnj(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+) -> str | None:
+    """Regra 1 — Vinculação cruzada do CNJ.
+
+    - Condições: ``Pub.Processo`` populada (já há vinculação) **e** o
+      CNJ extraído de ``Pub.numeroprocessocommascara`` ≠
+      ``Proc.numero_do_processo`` (após normalização — só dígitos).
+    - Alerta: ``Conferir número CNJ do processo``.
+    - Explicação: pré-requisito de todas as outras regras. Se o CNJ
+      diverge, a vinculação Pub.Processo está errada e qualquer
+      análise dependente fica inválida. Em produção raramente dispara
+      (lookup_processo_record só devolve match), mas é defensivo —
+      protege contra cache desatualizado ou inserção manual.
+    """
+    if processo_record is None:
+        return None
+    cnj_pub = _normalizar_cnj_simples(
+        publicacao.get("numeroprocessocommascara")
+        or publicacao.get("numero_processo"),
+    )
+    cnj_proc = _normalizar_cnj_simples(processo_record.get("numero_do_processo"))
+    if not cnj_pub or not cnj_proc:
+        return None
+    if cnj_pub != cnj_proc:
+        return ALERTA_CONFERIR_NUMERO_CNJ
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Regras 32-34, 36 — Estado processual e datas
+# ---------------------------------------------------------------------------
+
+#: Classes de distribuição INICIAL — usadas pelas Regras 33 e 34
+#: (cognitivas que iniciam um processo). Recursos e fases avançadas
+#: ficam fora.
+_CLASSES_DISTRIBUICAO_INICIAL: frozenset[str] = frozenset({
+    "AÇÃO TRABALHISTA - RITO ORDINÁRIO",
+    "AÇÃO TRABALHISTA - RITO SUMARÍSSIMO",
+    "PROCEDIMENTO COMUM CÍVEL",
+    "PROCEDIMENTO DO JUIZADO ESPECIAL CÍVEL",
+    "JUIZADO ESPECIAL DA FAZENDA PÚBLICA",
+})
+
+#: Classes de RESP/AgRESP usadas pelas Regras 32 e 37 (Tema 955).
+_CLASSES_RECURSO_ESPECIAL: frozenset[str] = frozenset({
+    "RECURSO ESPECIAL",
+    "AGRAVO EM RECURSO ESPECIAL",
+})
+
+
+#: Regex que detecta PREVI como palavra isolada (evita match em
+#: substrings como "SEM PREVI"... ou "PREVISTO").
+_RX_PREVI_WORD = re.compile(r"\bPREVI\b")
+
+
+def _texto_partes_pub_contem_previ(publicacao: dict[str, Any]) -> bool:
+    """Heurística: detecta se PREVI aparece nos destinatários da pub
+    como palavra isolada, ou se 'CAIXA DE PREVIDÊNCIA DOS FUNC...'
+    aparece como substring."""
+    texto = _texto_partes_pub(publicacao)
+    if _RX_PREVI_WORD.search(texto):
+        return True
+    if "CAIXA DE PREVIDENCIA DOS FUNC" in texto:
+        return True
+    if "CAIXA DE PREVIDÊNCIA DOS FUNC" in texto:
+        return True
+    return False
+
+
+def regra_32_conferir_tema_955(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+) -> str | None:
+    """Regra 32 — Sobrestamento Tema 955 não refletido.
+
+    - Condições: ``Pub.Partes`` contém PREVI **e** ``Pub.Classe`` em
+      RESP/AgRESP **e** ``Pub.Tipo de documento = Decisão`` **e**
+      ``Proc.status ≠ Arquivado provisoriamente (tema 955)`` **e**
+      ``Proc.tema_955_sobrestado=False``.
+    - Alerta: ``Conferir Tema 955``.
+    - Explicação: heurística (não confirma). Suspensão por Tema 955
+      normalmente é declarada no texto, e detecção robusta exigiria
+      leitura do Texto. Disparar revisão manual.
+    """
+    if processo_record is None:
+        return None
+    classe = (publicacao.get("nomeClasse") or "").strip().upper()
+    if classe not in _CLASSES_RECURSO_ESPECIAL:
+        return None
+    tipo_doc = mapear_tipo_documento(publicacao.get("tipoDocumento"))
+    if tipo_doc != "Decisão":
+        return None
+    if not _texto_partes_pub_contem_previ(publicacao):
+        return None
+    status = (processo_record.get("status") or "").strip()
+    if status == STATUS_ARQUIVADO_TEMA_955:
+        return None
+    if processo_record.get("tema_955_sobrestado"):
+        return None
+    return ALERTA_CONFERIR_TEMA_955
+
+
+def regra_33_capturar_data_distribuicao(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+) -> str | None:
+    """Regra 33 — Data de distribuição vazia.
+
+    - Condições: ``Pub.Tipo de documento = Distribuição`` **e**
+      ``Pub.Classe`` em classes de distribuição inicial **e**
+      ``Proc.data_de_distribuicao`` vazia.
+    - Alerta: ``Capturar data de distribuição``.
+    - Explicação: ``Pub.Data de disponibilização`` é proxy direta da
+      data de distribuição inicial. Recursos (Agravo de Petição,
+      Apelação) ficam fora — distribuição recursal não é distribuição
+      inicial.
+    """
+    if processo_record is None:
+        return None
+    tipo_doc = mapear_tipo_documento(publicacao.get("tipoDocumento"))
+    if tipo_doc != "Distribuição":
+        return None
+    classe = (publicacao.get("nomeClasse") or "").strip().upper()
+    if classe not in _CLASSES_DISTRIBUICAO_INICIAL:
+        return None
+    data_distrib = processo_record.get("data_de_distribuicao")
+    if data_distrib:
+        return None
+    return ALERTA_CAPTURAR_DATA_DISTRIBUICAO
+
+
+def regra_34_conferir_data_distribuicao(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+) -> str | None:
+    """Regra 34 — Data de distribuição muito anterior à publicação.
+
+    - Condições: mesma combinação da Regra 33, mas com
+      ``Proc.data_de_distribuicao`` populada com data ≥ 30 dias
+      anterior à ``Pub.Data de disponibilização``.
+    - Alerta: ``Conferir data de distribuição``.
+    - Explicação: pode ser caso de redistribuição (rara). Anotar em
+      ``Proc.observações`` se confirmado.
+    """
+    if processo_record is None:
+        return None
+    tipo_doc = mapear_tipo_documento(publicacao.get("tipoDocumento"))
+    if tipo_doc != "Distribuição":
+        return None
+    classe = (publicacao.get("nomeClasse") or "").strip().upper()
+    if classe not in _CLASSES_DISTRIBUICAO_INICIAL:
+        return None
+    data_distrib_str = processo_record.get("data_de_distribuicao")
+    data_pub_str = publicacao.get("data_disponibilizacao")
+    if not data_distrib_str or not data_pub_str:
+        return None
+    # Datas devem ser ISO YYYY-MM-DD
+    try:
+        from datetime import date
+        data_distrib = date.fromisoformat(str(data_distrib_str)[:10])
+        data_pub = date.fromisoformat(str(data_pub_str)[:10])
+    except (ValueError, TypeError):
+        return None
+    delta_dias = (data_pub - data_distrib).days
+    if delta_dias >= 30:
+        return ALERTA_CONFERIR_DATA_DISTRIBUICAO
+    return None
+
+
+def regra_36_atividade_pos_encerramento_executivo(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+) -> str | None:
+    """Regra 36 — Atividade pós-encerramento executivo.
+
+    - Condições: ``Proc.data_do_transito_em_julgado_executiva``
+      populada **e** ``Pub.Data de disponibilização`` posterior a
+      essa data.
+    - Alerta: ``Atividade pós-encerramento executivo``.
+    - Explicação: em tese processo encerrado executivamente não recebe
+      mais comunicações. Possíveis exceções (alvarás remanescentes,
+      certidões finais) — heurística para revisão manual.
+    """
+    if processo_record is None:
+        return None
+    data_transito_str = processo_record.get("data_do_transito_em_julgado_executiva")
+    if not data_transito_str:
+        return None
+    data_pub_str = publicacao.get("data_disponibilizacao")
+    if not data_pub_str:
+        return None
+    try:
+        from datetime import date
+        data_transito = date.fromisoformat(str(data_transito_str)[:10])
+        data_pub = date.fromisoformat(str(data_pub_str)[:10])
+    except (ValueError, TypeError):
+        return None
+    if data_pub > data_transito:
+        return ALERTA_ATIVIDADE_POS_ENCERRAMENTO_EXECUTIVO
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -1696,21 +1922,23 @@ def aplicar_regras_monitoramento(
 
     Round 7d — Regras 7, 8, 9, 10 (Cliente e posição).
 
-    Round 7e — implementadas neste commit:
+    Round 7e — Regras 19-24 (Localização — Cidade, Vara, Turma, Relator).
 
-    - Regras 19+20 (Cidade desatualizada — faltando ou divergente).
-    - Regras 21+22 (Vara desatualizada — idem).
-    - Regra 23 (Turma desatualizada).
-    - Regra 24 (Relator desatualizado/faltando).
+    Round 7f — implementadas neste commit:
 
-    Regra 25 (troca de relator detectada por sequência de publicações)
-    fica para round seguinte — exige histórico de pubs anteriores.
+    - Regra 1 (Conferir número CNJ do processo) — defensiva.
+    - Regra 32 (Conferir Tema 955 — sobrestamento não refletido).
+    - Regra 33 (Capturar data de distribuição).
+    - Regra 34 (Conferir data de distribuição muito anterior).
+    - Regra 36 (Atividade pós-encerramento executivo).
 
-    Pendentes (a serem acrescentadas em commits subsequentes):
+    Regras 25 (troca de relator) e 37 (inatividade prolongada PREVI/RESP)
+    ficam fora deste round — exigem histórico de pubs anteriores ao
+    momento da inserção, que não está disponível neste pipeline
+    sem-estado.
 
-    - Regra 1 (Conferir número CNJ do processo).
-    - Regra 25 (troca de relator).
-    - Regras 32-34, 36, 37 (datas, sobrestamento, encerramento executivo).
+    Total v8 implementado: 36 de 43 regras (84%) + camada base 4/4.
+    Faltam: Regras 25 e 37 (~5% do volume estimado).
     """
     # Lazy-load do índice de clientes (apenas para Regras 7-10)
     indice_clientes = (
@@ -1718,6 +1946,7 @@ def aplicar_regras_monitoramento(
     )
 
     candidatos: list[str | None] = [
+        regra_1_conferir_numero_cnj(publicacao, processo_record),
         regra_2_capturar_numeracao_stj_tst(publicacao, processo_record),
         regra_3_capturar_numeracao_stf(publicacao, processo_record),
         regra_4_natureza_inconsistente_com_tribunal(publicacao, processo_record),
@@ -1742,6 +1971,10 @@ def aplicar_regras_monitoramento(
         regra_21_22_vara_desatualizada(publicacao, processo_record),
         regra_23_turma_desatualizada(publicacao, processo_record),
         regra_24_relator_faltando(publicacao, processo_record),
+        regra_32_conferir_tema_955(publicacao, processo_record),
+        regra_33_capturar_data_distribuicao(publicacao, processo_record),
+        regra_34_conferir_data_distribuicao(publicacao, processo_record),
+        regra_36_atividade_pos_encerramento_executivo(publicacao, processo_record),
         regra_15_descida_nao_detectada(publicacao, processo_record),
         regra_16_acordao_em_1grau(publicacao, processo_record),
         regra_17_sentenca_em_colegiado(publicacao, processo_record),
