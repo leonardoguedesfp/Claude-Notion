@@ -472,13 +472,14 @@ def montar_payload_publicacao(
         publicacao, tipo_documento_canonico=tipo_documento_canonico,
     )
 
-    # Round 6 (2026-05-04): regras antigas (Round 4.3 + 4.4) removidas.
-    # Camada base (Regras 40-43) e regras de monitoramento (1-39) da v8
-    # entram em commits subsequentes. Neste estado intermediário o
-    # payload sai com Tarefa sugerida (app) e Alerta contadoria (app)
-    # vazios — schema do Notion aceita multi-select vazio.
-    alertas_contadoria: list[str] = []
-    tarefas_sugeridas: list[str] = []
+    # Round 6 (2026-05-04): aplica Regras v8 (Camada base 40-43 +
+    # monitoramento 1-39). As regras de monitoramento são preenchidas
+    # incrementalmente por seção; a Camada base já está completa.
+    from notion_rpadv.services.dje_regras_v8 import aplicar_todas_regras
+
+    tarefas_sugeridas, alertas_contadoria = aplicar_todas_regras(
+        publicacao, processo_record, cache_conn=cache_conn,
+    )
     # Round 4.5 frente 1: Status inicial pode virar "Nada para fazer"
     # em casos óbvios (Listas TRT10/TST com Processo cadastrado).
     status_inicial = _calcular_status_inicial(
