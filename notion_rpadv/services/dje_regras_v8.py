@@ -55,9 +55,32 @@ TAREFAS_VALIDAS: frozenset[str] = frozenset({
 ALERTA_PROCESSO_RECURSO_DISTRIBUIDO: str = "Processo/recurso distribuído"
 ALERTA_INCLUIR_JULGAMENTO_NO_CONTROLE: str = "Incluir julgamento no controle"
 
-# Os demais 39 alertas (correspondendo às Regras 1-39) serão re-introduzidos
-# em commits subsequentes deste Round 6, à medida que as regras forem
-# implementadas. Por ora apenas as constantes da Camada base são usadas.
+# Regras 16-18 — impossibilidades categóricas (Tipo de documento × Proc.Instância)
+ALERTA_ACORDAO_EM_1GRAU: str = "Acórdão em processo de 1º grau"
+ALERTA_SENTENCA_EM_COLEGIADO: str = "Sentença em processo de colegiado"
+ALERTA_PAUTA_EM_1GRAU: str = "Pauta em processo de 1º grau"
+
+# Os demais 36 alertas (correspondendo às Regras 1-15, 19-39) serão
+# re-introduzidos em commits subsequentes deste Round 6.
+
+# ---------------------------------------------------------------------------
+# Vocabulário canônico de Proc.Instância (para regras de cruzamento)
+# ---------------------------------------------------------------------------
+
+INSTANCIA_PRIMEIRO_GRAU: str = "1º grau"
+INSTANCIA_SEGUNDO_GRAU: str = "2º grau"
+INSTANCIA_TST: str = "TST"
+INSTANCIA_STJ: str = "STJ"
+INSTANCIA_STF: str = "STF"
+
+#: Instâncias colegiadas (≥ 2º grau) — qualquer ato de Sentença
+#: cadastrado nelas indica inconsistência (Regra 17).
+INSTANCIAS_COLEGIADAS: frozenset[str] = frozenset({
+    INSTANCIA_SEGUNDO_GRAU,
+    INSTANCIA_TST,
+    INSTANCIA_STJ,
+    INSTANCIA_STF,
+})
 
 
 # ---------------------------------------------------------------------------
@@ -137,6 +160,77 @@ def aplicar_camada_base(
 # ---------------------------------------------------------------------------
 
 
+def regra_16_acordao_em_1grau(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+) -> str | None:
+    """Regra 16 — Acórdão em 1º grau (categoricamente impossível).
+
+    - Condições: Pub.Tipo de documento canônico = Acórdão **e**
+      Proc.Instância = "1º grau".
+    - Alerta: ``Acórdão em processo de 1º grau``.
+    - Explicação: acórdão é ato de colegiado; juízo singular não emite.
+      Se a publicação traz acórdão, a instância cadastrada está abaixo
+      da real — operador deve conferir o cadastro.
+    """
+    if processo_record is None:
+        return None
+    tipo_doc = mapear_tipo_documento(publicacao.get("tipoDocumento"))
+    if tipo_doc != "Acórdão":
+        return None
+    instancia = (processo_record.get("instancia") or "").strip()
+    if instancia == INSTANCIA_PRIMEIRO_GRAU:
+        return ALERTA_ACORDAO_EM_1GRAU
+    return None
+
+
+def regra_17_sentenca_em_colegiado(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+) -> str | None:
+    """Regra 17 — Sentença em colegiado (categoricamente impossível).
+
+    - Condições: Pub.Tipo de documento canônico = Sentença **e**
+      Proc.Instância em {2º grau, TST, STJ, STF}.
+    - Alerta: ``Sentença em processo de colegiado``.
+    - Explicação: sentença é ato de juiz singular; colegiado emite
+      acórdão. Se a publicação traz sentença, a instância cadastrada
+      está acima da real (provavelmente o processo voltou para 1º
+      grau e o cadastro não acompanhou).
+    """
+    if processo_record is None:
+        return None
+    tipo_doc = mapear_tipo_documento(publicacao.get("tipoDocumento"))
+    if tipo_doc != "Sentença":
+        return None
+    instancia = (processo_record.get("instancia") or "").strip()
+    if instancia in INSTANCIAS_COLEGIADAS:
+        return ALERTA_SENTENCA_EM_COLEGIADO
+    return None
+
+
+def regra_18_pauta_em_1grau(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+) -> str | None:
+    """Regra 18 — Pauta de Julgamento em 1º grau (categoricamente impossível).
+
+    - Condições: Pub.Tipo de documento canônico = Pauta de Julgamento
+      **e** Proc.Instância = "1º grau".
+    - Alerta: ``Pauta em processo de 1º grau``.
+    - Explicação: pauta de julgamento só existe em colegiado.
+    """
+    if processo_record is None:
+        return None
+    tipo_doc = mapear_tipo_documento(publicacao.get("tipoDocumento"))
+    if tipo_doc != "Pauta de Julgamento":
+        return None
+    instancia = (processo_record.get("instancia") or "").strip()
+    if instancia == INSTANCIA_PRIMEIRO_GRAU:
+        return ALERTA_PAUTA_EM_1GRAU
+    return None
+
+
 def aplicar_regras_monitoramento(
     publicacao: dict[str, Any],
     processo_record: dict[str, Any] | None,
@@ -144,16 +238,45 @@ def aplicar_regras_monitoramento(
     cache_conn: Any = None,  # sqlite3.Connection (opt) — para cruzamentos
 ) -> list[str]:
     """Aplica as Regras 1-39 (monitoramento) e devolve a lista de
-    alertas adicionais que dispararam.
+    alertas adicionais que dispararam, deduplicada e em ordem
+    determinística.
 
-    Round 6 — placeholder: as regras serão implementadas em commits
-    incrementais por seção (I-VI). Por ora devolve lista vazia.
+    As regras de monitoramento ADICIONAM alertas ao conjunto produzido
+    pela camada base — não substituem. A ordem deste output reflete
+    a ordem de avaliação das regras (atualmente: 16, 17, 18; demais
+    serão acrescentadas em commits subsequentes).
 
-    Composição com a camada base é responsabilidade do caller (mapper):
-    o conjunto final de alertas é a união ``alertas_base ∪
-    alertas_monitor`` deduplicada preservando ordem.
+    Round 6 — implementadas até o momento:
+
+    - Regras 16, 17, 18 (impossibilidades categóricas — Tipo de
+      documento × Proc.Instância).
+
+    Pendentes (placeholder até commits subsequentes):
+
+    - Regras 1-3 (Identificação e numeração).
+    - Regras 4-6 (Classificação processual).
+    - Regras 7-11 (Partes).
+    - Regras 12-15, 19-25 (Localização: Tribunal, Instância, Cidade,
+      Vara, Turma, Relator).
+    - Regras 26-37 (Estado processual: Fase, Status, datas).
+    - Regras 38-39 (Outros: link externo, processo pai).
     """
-    return []
+    alertas: list[str] = []
+
+    # Avalia cada regra; cada uma devolve o nome do alerta ou None.
+    candidatos = [
+        regra_16_acordao_em_1grau(publicacao, processo_record),
+        regra_17_sentenca_em_colegiado(publicacao, processo_record),
+        regra_18_pauta_em_1grau(publicacao, processo_record),
+    ]
+
+    seen: set[str] = set()
+    for alerta in candidatos:
+        if alerta is None or alerta in seen:
+            continue
+        seen.add(alerta)
+        alertas.append(alerta)
+    return alertas
 
 
 # ---------------------------------------------------------------------------
