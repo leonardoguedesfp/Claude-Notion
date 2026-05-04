@@ -24,6 +24,7 @@ no Notion.
 """
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
@@ -80,12 +81,55 @@ ALERTA_PARTE_ADVERSA_CASSI: str = "CASSI ausente em partes adversas"
 ALERTA_PARTE_ADVERSA_BRADESCO_SAUDE: str = "Bradesco Saúde ausente em partes adversas"
 ALERTA_PARTE_ADVERSA_BB_CONSORCIOS: str = "BB Adm. Consórcios ausente em partes adversas"
 
+# Regras 2-3 — capturar numerações de tribunais superiores
+ALERTA_CAPTURAR_NUMERACAO_STJ_TST: str = "Capturar numeração STJ/TST"
+ALERTA_CAPTURAR_NUMERACAO_STF: str = "Capturar numeração STF"
+
+# Regras 12-13 — Tribunal de origem
+ALERTA_TRIBUNAL_FORA_VOCABULARIO: str = "Tribunal fora do vocabulário"
+ALERTA_CONFERIR_TRIBUNAL_ORIGEM: str = "Conferir tribunal de origem"
+
+# Regras 4-6 — Classificação processual
+ALERTA_CONFERIR_NATUREZA_PROCESSO: str = "Conferir natureza do processo"
+ALERTA_CONFERIR_TIPO_PROCESSO: str = "Conferir tipo de processo"
+
+# Regra 39 — Recurso autônomo sem processo pai
+ALERTA_RECURSO_AUTONOMO_SEM_PROCESSO_PAI: str = "Recurso autônomo sem processo pai"
+
+# Regras 29-31 — Estado processual (fase, arquivado)
+ALERTA_CONFERIR_SENTENCA_FASE_POS_COGNITIVA: str = "Conferir sentença em fase pós-cognitiva"
+ALERTA_PAUTA_EM_PROCESSO_ARQUIVADO: str = "Pauta em processo arquivado"
+ALERTA_ATIVIDADE_EM_PROCESSO_ARQUIVADO: str = "Atividade em processo arquivado"
+
+# Regra 38 — Link externo
+ALERTA_CAPTURAR_LINK_EXTERNO: str = "Capturar link externo"
+
+# Regras 7-10 — Cliente e posição
+ALERTA_VINCULAR_CLIENTE_AO_PROCESSO: str = "Vincular cliente ao processo"
+ALERTA_CONFERIR_VINCULACAO_CLIENTE_PROCESSO: str = "Conferir vinculação cliente-processo"
+ALERTA_CONFERIR_POSICAO_DO_CLIENTE: str = "Conferir posição do cliente"
+
+# Regras 19-25 — Localização (Cidade, Vara, Turma, Relator)
+ALERTA_CIDADE_DESATUALIZADA: str = "Cidade desatualizada"
+ALERTA_VARA_DESATUALIZADA: str = "Vara desatualizada"
+ALERTA_TURMA_DESATUALIZADA: str = "Turma desatualizada"
+ALERTA_RELATOR_DESATUALIZADO: str = "Relator desatualizado"
+
+# Regra 1 — Identificação
+ALERTA_CONFERIR_NUMERO_CNJ: str = "Conferir número CNJ do processo"
+
+# Regras 32-34, 36 — Estado processual + datas
+ALERTA_CONFERIR_TEMA_955: str = "Conferir Tema 955"
+ALERTA_CAPTURAR_DATA_DISTRIBUICAO: str = "Capturar data de distribuição"
+ALERTA_CONFERIR_DATA_DISTRIBUICAO: str = "Conferir data de distribuição"
+ALERTA_ATIVIDADE_POS_ENCERRAMENTO_EXECUTIVO: str = "Atividade pós-encerramento executivo"
+
 # Alertas mantidos do Round 4 (técnicos/operacionais — sem número no doc v8)
 ALERTA_PROCESSO_NAO_CADASTRADO: str = "Processo não cadastrado"
 ALERTA_TEXTO_IMPRESTAVEL: str = "Texto imprestável"
 
-# Os demais 24 alertas (Regras 1-10, 12-13, 19-25, 29-34, 36-39) serão
-# re-introduzidos em commits subsequentes deste Round 6.
+# Os demais 20 alertas (Regras 1, 4-10, 19-25, 29-34, 36-39) serão
+# re-introduzidos em commits subsequentes deste Round 7.
 
 # ---------------------------------------------------------------------------
 # Vocabulário canônico de Proc.Instância (para regras de cruzamento)
@@ -197,6 +241,31 @@ FASE_LIQUIDACAO: str = "Liquidação de sentença"
 FASE_LIQUIDACAO_PENDENTE: str = "Liquidação pendente"
 FASE_EXECUTIVA: str = "Executiva"
 
+# ---------------------------------------------------------------------------
+# Status processual (Proc.status)
+# ---------------------------------------------------------------------------
+
+STATUS_ATIVO: str = "Ativo"
+STATUS_ARQUIVADO: str = "Arquivado"
+STATUS_ARQUIVADO_TEMA_955: str = "Arquivado provisoriamente (tema 955)"
+
+# ---------------------------------------------------------------------------
+# Posição do cliente (Proc.posicao_do_cliente)
+# ---------------------------------------------------------------------------
+
+POSICAO_CLIENTE_AUTOR: str = "Autor"
+POSICAO_CLIENTE_REU: str = "Réu"
+POSICAO_CLIENTE_RECORRENTE: str = "Recorrente"
+POSICAO_CLIENTE_RECORRIDO: str = "Recorrido"
+
+#: Mapeamento Proc.posicao_do_cliente → polo Pub esperado em 1ª instância
+#: (Recorrente/Recorrido só fazem sentido em 2º grau ou superior;
+#: Regra 10 só dispara em 1º grau).
+_POSICAO_PARA_POLO_ESPERADO: dict[str, str] = {
+    POSICAO_CLIENTE_AUTOR: "A",
+    POSICAO_CLIENTE_REU: "P",
+}
+
 #: Classes que indicam fase cognitiva (peças iniciais do processo).
 _CLASSES_COGNITIVAS: frozenset[str] = frozenset({
     "AÇÃO TRABALHISTA - RITO ORDINÁRIO",
@@ -242,6 +311,111 @@ def fase_implicada(publicacao: dict[str, Any]) -> str | None:
     if classe in _CLASSES_EXECUTIVAS:
         return FASE_EXECUTIVA
     return None
+
+
+# ---------------------------------------------------------------------------
+# Vocabulário canônico de Proc.natureza e Proc.tipo_de_processo
+# ---------------------------------------------------------------------------
+
+NATUREZA_TRABALHISTA: str = "Trabalhista"
+NATUREZA_CIVEL: str = "Cível"
+
+TIPO_PROCESSO_PRINCIPAL: str = "Principal"
+TIPO_PROCESSO_RECURSO_AUTONOMO: str = "Recurso autônomo"
+TIPO_PROCESSO_RECLAMACAO: str = "Reclamação constitucional"
+TIPO_PROCESSO_INCIDENTE: str = "Incidente"
+
+#: Tipos de processo que NÃO são "Principal" (logo, exigem processo_pai
+#: pela Regra 39).
+TIPOS_PROCESSO_DEPENDENTES: frozenset[str] = frozenset({
+    TIPO_PROCESSO_RECURSO_AUTONOMO,
+    TIPO_PROCESSO_RECLAMACAO,
+    TIPO_PROCESSO_INCIDENTE,
+})
+
+
+# ---------------------------------------------------------------------------
+# Tribunais por natureza (Regra 4)
+# ---------------------------------------------------------------------------
+
+#: Pub.Tribunal trabalhistas — Proc.natureza deve ser Trabalhista.
+TRIBUNAIS_TRABALHISTAS: frozenset[str] = frozenset({
+    "TRT10", "TRT18", "TST",
+})
+
+#: Pub.Tribunal cíveis — Proc.natureza deve ser Cível. STJ/STF ficam
+#: fora porque julgam ambas as naturezas.
+TRIBUNAIS_CIVEIS: frozenset[str] = frozenset({
+    "TJDFT", "TJSP", "TJMG", "TJPR", "TJRJ", "TJRS",
+    "TJSC", "TJBA", "TJMS", "TJGO",
+    "TRF1",
+})
+
+
+# ---------------------------------------------------------------------------
+# Classes por natureza (Regra 5)
+# ---------------------------------------------------------------------------
+
+#: Classes que SÓ existem em justiça trabalhista.
+CLASSES_TRABALHISTAS: frozenset[str] = frozenset({
+    "AÇÃO TRABALHISTA - RITO ORDINÁRIO",
+    "AÇÃO TRABALHISTA - RITO SUMARÍSSIMO",
+    "RECURSO ORDINÁRIO TRABALHISTA",
+    "RECURSO ORDINÁRIO - RITO SUMARÍSSIMO",
+    "AGRAVO DE PETIÇÃO",
+    "AGRAVO REGIMENTAL TRABALHISTA",
+    "RECURSO DE REVISTA",
+    "RECURSO DE REVISTA COM AGRAVO",
+    "AGRAVO DE INSTRUMENTO EM RECURSO DE REVISTA",
+})
+
+#: Classes que SÓ existem em justiça cível.
+CLASSES_CIVEIS: frozenset[str] = frozenset({
+    "PROCEDIMENTO COMUM CÍVEL",
+    "EMBARGOS DE DECLARAÇÃO CÍVEL",
+    "APELAÇÃO CÍVEL",
+    "AGRAVO INTERNO CÍVEL",
+    "PROCEDIMENTO DO JUIZADO ESPECIAL CÍVEL",
+    "JUIZADO ESPECIAL DA FAZENDA PÚBLICA",
+    "INVENTÁRIO",
+    "PETIÇÃO CÍVEL",
+})
+
+
+# ---------------------------------------------------------------------------
+# Tabela auxiliar — normalização de Tribunal entre Pub e Proc
+# ---------------------------------------------------------------------------
+
+#: ``Pub.Tribunal`` usa formato sem separador (``TRT10``, ``TRF1``).
+#: ``Proc.tribunal`` usa formato com barra (``TRT/10``, ``TRF/1``).
+#: Esta tabela converte Pub → Proc para comparação canônica.
+#: Tribunais não mapeados aqui (TRT18, TRF1 quando ainda não estão no
+#: select de Proc.tribunal) são tratados pela Regra 12.
+_PUB_TRIB_PARA_PROC: dict[str, str] = {
+    "TRT10": "TRT/10",
+    "TRT18": "TRT/18",
+    "TRF1": "TRF/1",
+    # Demais tribunais usam formato idêntico em Pub e Proc
+    # (TJDFT, TJSP, TJMG, TJPR, TJRJ, TJRS, TJSC, TJBA, TJMS, TJGO, STJ, TST, STF).
+}
+
+#: Tribunais que ``Pub.Tribunal`` aceita mas ``Proc.tribunal``
+#: ainda **não** tem no vocabulário canônico — disparam Regra 12.
+TRIBUNAIS_FORA_VOCABULARIO_PROC: frozenset[str] = frozenset({
+    "TRT18",
+    "TRF1",
+})
+
+
+def _pub_trib_normalizado_para_proc(pub_tribunal: str | None) -> str | None:
+    """Mapeia ``Pub.Tribunal`` (formato sem barra) para o formato canônico
+    de ``Proc.tribunal`` (com barra em TRT/N e TRF/N). Devolve ``None``
+    se a entrada for vazia.
+    """
+    if not pub_tribunal:
+        return None
+    s = str(pub_tribunal).strip().upper()
+    return _PUB_TRIB_PARA_PROC.get(s, s)
 
 
 # ---------------------------------------------------------------------------
@@ -319,6 +493,979 @@ def aplicar_camada_base(
 # ---------------------------------------------------------------------------
 # Regras de monitoramento (1-39) — placeholder
 # ---------------------------------------------------------------------------
+
+
+def regra_4_natureza_inconsistente_com_tribunal(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+) -> str | None:
+    """Regra 4 — Natureza inconsistente com Tribunal.
+
+    - Condições:
+      - ``Pub.Tribunal IN (TRT10, TRT18, TST)`` E ``Proc.natureza=Cível``, OU
+      - ``Pub.Tribunal IN (TJDFT, TJ-*, TRF1)`` E ``Proc.natureza=Trabalhista``.
+    - Alerta: ``Conferir natureza do processo``.
+    - Explicação: tribunais trabalhistas só processam matéria trabalhista
+      (e vice-versa). STJ e STF ficam fora — julgam ambas as naturezas.
+    """
+    if processo_record is None:
+        return None
+    sigla = (publicacao.get("siglaTribunal") or "").strip().upper()
+    natureza = (processo_record.get("natureza") or "").strip()
+    if not natureza:
+        return None
+    if sigla in TRIBUNAIS_TRABALHISTAS and natureza == NATUREZA_CIVEL:
+        return ALERTA_CONFERIR_NATUREZA_PROCESSO
+    if sigla in TRIBUNAIS_CIVEIS and natureza == NATUREZA_TRABALHISTA:
+        return ALERTA_CONFERIR_NATUREZA_PROCESSO
+    return None
+
+
+def regra_5_natureza_inconsistente_com_classe(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+) -> str | None:
+    """Regra 5 — Natureza inconsistente com Classe.
+
+    - Condições:
+      - ``Pub.Classe`` é classe trabalhista E ``Proc.natureza=Cível``, OU
+      - ``Pub.Classe`` é classe cível E ``Proc.natureza=Trabalhista``.
+    - Alerta: ``Conferir natureza do processo``.
+    - Explicação: classes ambíguas (RESP, AI sem qualif, AGRAVO simples,
+      CUMPRIMENTO, CONFLITO DE COMPETÊNCIA) herdam natureza do principal
+      e não disparam.
+    """
+    if processo_record is None:
+        return None
+    classe = (publicacao.get("nomeClasse") or "").strip().upper()
+    natureza = (processo_record.get("natureza") or "").strip()
+    if not classe or not natureza:
+        return None
+    if classe in CLASSES_TRABALHISTAS and natureza == NATUREZA_CIVEL:
+        return ALERTA_CONFERIR_NATUREZA_PROCESSO
+    if classe in CLASSES_CIVEIS and natureza == NATUREZA_TRABALHISTA:
+        return ALERTA_CONFERIR_NATUREZA_PROCESSO
+    return None
+
+
+def regra_6_recurso_autonomo_cadastrado_como_principal(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+) -> str | None:
+    """Regra 6 — Recurso autônomo cadastrado como Principal.
+
+    - Condições: ``Pub.Classe="AGRAVO DE INSTRUMENTO"`` (estrita — sem
+      qualificadores como "EM RECURSO ESPECIAL" ou "EM RECURSO DE
+      REVISTA") **e** ``Proc.tipo_de_processo=Principal``.
+    - Alerta: ``Conferir tipo de processo``.
+    - Explicação: apenas o Agravo de Instrumento *stricto sensu* (art.
+      1.015 CPC, contra decisão interlocutória em 1ª instância) gera
+      CNJ próprio no escritório e exige registro com
+      ``Tipo de processo=Recurso autônomo``. Demais recursos (AI em
+      RESP/RR, AgRESP, etc) tramitam nos autos do principal por
+      decisão administrativa e não disparam esta regra.
+    """
+    if processo_record is None:
+        return None
+    classe = (publicacao.get("nomeClasse") or "").strip().upper()
+    if classe != "AGRAVO DE INSTRUMENTO":  # exact match — sem qualificadores
+        return None
+    tipo = (processo_record.get("tipo_de_processo") or "").strip()
+    if tipo == TIPO_PROCESSO_PRINCIPAL:
+        return ALERTA_CONFERIR_TIPO_PROCESSO
+    return None
+
+
+def regra_39_recurso_autonomo_sem_processo_pai(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+) -> str | None:
+    """Regra 39 — Recurso autônomo sem processo pai.
+
+    - Condições: ``Proc.tipo_de_processo IN (Recurso autônomo,
+      Reclamação constitucional, Incidente)`` **e** ``Proc.processo_pai``
+      está vazio.
+    - Alerta: ``Recurso autônomo sem processo pai``.
+    - Explicação: independente da Pub — checagem interna do cadastro.
+      Combina com Regra 6 (uma vez detectado o tipo, conferir se tem
+      pai vinculado).
+    """
+    if processo_record is None:
+        return None
+    tipo = (processo_record.get("tipo_de_processo") or "").strip()
+    if tipo not in TIPOS_PROCESSO_DEPENDENTES:
+        return None
+    pai = processo_record.get("processo_pai")
+    # processo_pai pode ser lista vazia, None, ou string vazia
+    if isinstance(pai, list):
+        if pai:
+            return None
+    elif pai:
+        return None
+    return ALERTA_RECURSO_AUTONOMO_SEM_PROCESSO_PAI
+
+
+# ---------------------------------------------------------------------------
+# Regra 1 — Conferir número CNJ do processo
+# ---------------------------------------------------------------------------
+
+
+def _normalizar_cnj_simples(cnj: str | None) -> str:
+    """Devolve CNJ apenas com dígitos (remove pontos, traços, espaços).
+    Útil para comparação tolerante entre formatos."""
+    if not cnj:
+        return ""
+    return re.sub(r"\D", "", str(cnj))
+
+
+def regra_1_conferir_numero_cnj(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+) -> str | None:
+    """Regra 1 — Vinculação cruzada do CNJ.
+
+    - Condições: ``Pub.Processo`` populada (já há vinculação) **e** o
+      CNJ extraído de ``Pub.numeroprocessocommascara`` ≠
+      ``Proc.numero_do_processo`` (após normalização — só dígitos).
+    - Alerta: ``Conferir número CNJ do processo``.
+    - Explicação: pré-requisito de todas as outras regras. Se o CNJ
+      diverge, a vinculação Pub.Processo está errada e qualquer
+      análise dependente fica inválida. Em produção raramente dispara
+      (lookup_processo_record só devolve match), mas é defensivo —
+      protege contra cache desatualizado ou inserção manual.
+    """
+    if processo_record is None:
+        return None
+    cnj_pub = _normalizar_cnj_simples(
+        publicacao.get("numeroprocessocommascara")
+        or publicacao.get("numero_processo"),
+    )
+    cnj_proc = _normalizar_cnj_simples(processo_record.get("numero_do_processo"))
+    if not cnj_pub or not cnj_proc:
+        return None
+    if cnj_pub != cnj_proc:
+        return ALERTA_CONFERIR_NUMERO_CNJ
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Regras 32-34, 36 — Estado processual e datas
+# ---------------------------------------------------------------------------
+
+#: Classes de distribuição INICIAL — usadas pelas Regras 33 e 34
+#: (cognitivas que iniciam um processo). Recursos e fases avançadas
+#: ficam fora.
+_CLASSES_DISTRIBUICAO_INICIAL: frozenset[str] = frozenset({
+    "AÇÃO TRABALHISTA - RITO ORDINÁRIO",
+    "AÇÃO TRABALHISTA - RITO SUMARÍSSIMO",
+    "PROCEDIMENTO COMUM CÍVEL",
+    "PROCEDIMENTO DO JUIZADO ESPECIAL CÍVEL",
+    "JUIZADO ESPECIAL DA FAZENDA PÚBLICA",
+})
+
+#: Classes de RESP/AgRESP usadas pelas Regras 32 e 37 (Tema 955).
+_CLASSES_RECURSO_ESPECIAL: frozenset[str] = frozenset({
+    "RECURSO ESPECIAL",
+    "AGRAVO EM RECURSO ESPECIAL",
+})
+
+
+#: Regex que detecta PREVI como palavra isolada (evita match em
+#: substrings como "SEM PREVI"... ou "PREVISTO").
+_RX_PREVI_WORD = re.compile(r"\bPREVI\b")
+
+
+def _texto_partes_pub_contem_previ(publicacao: dict[str, Any]) -> bool:
+    """Heurística: detecta se PREVI aparece nos destinatários da pub
+    como palavra isolada, ou se 'CAIXA DE PREVIDÊNCIA DOS FUNC...'
+    aparece como substring."""
+    texto = _texto_partes_pub(publicacao)
+    if _RX_PREVI_WORD.search(texto):
+        return True
+    if "CAIXA DE PREVIDENCIA DOS FUNC" in texto:
+        return True
+    if "CAIXA DE PREVIDÊNCIA DOS FUNC" in texto:
+        return True
+    return False
+
+
+def regra_32_conferir_tema_955(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+) -> str | None:
+    """Regra 32 — Sobrestamento Tema 955 não refletido.
+
+    - Condições: ``Pub.Partes`` contém PREVI **e** ``Pub.Classe`` em
+      RESP/AgRESP **e** ``Pub.Tipo de documento = Decisão`` **e**
+      ``Proc.status ≠ Arquivado provisoriamente (tema 955)`` **e**
+      ``Proc.tema_955_sobrestado=False``.
+    - Alerta: ``Conferir Tema 955``.
+    - Explicação: heurística (não confirma). Suspensão por Tema 955
+      normalmente é declarada no texto, e detecção robusta exigiria
+      leitura do Texto. Disparar revisão manual.
+    """
+    if processo_record is None:
+        return None
+    classe = (publicacao.get("nomeClasse") or "").strip().upper()
+    if classe not in _CLASSES_RECURSO_ESPECIAL:
+        return None
+    tipo_doc = mapear_tipo_documento(publicacao.get("tipoDocumento"))
+    if tipo_doc != "Decisão":
+        return None
+    if not _texto_partes_pub_contem_previ(publicacao):
+        return None
+    status = (processo_record.get("status") or "").strip()
+    if status == STATUS_ARQUIVADO_TEMA_955:
+        return None
+    if processo_record.get("tema_955_sobrestado"):
+        return None
+    return ALERTA_CONFERIR_TEMA_955
+
+
+def regra_33_capturar_data_distribuicao(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+) -> str | None:
+    """Regra 33 — Data de distribuição vazia.
+
+    - Condições: ``Pub.Tipo de documento = Distribuição`` **e**
+      ``Pub.Classe`` em classes de distribuição inicial **e**
+      ``Proc.data_de_distribuicao`` vazia.
+    - Alerta: ``Capturar data de distribuição``.
+    - Explicação: ``Pub.Data de disponibilização`` é proxy direta da
+      data de distribuição inicial. Recursos (Agravo de Petição,
+      Apelação) ficam fora — distribuição recursal não é distribuição
+      inicial.
+    """
+    if processo_record is None:
+        return None
+    tipo_doc = mapear_tipo_documento(publicacao.get("tipoDocumento"))
+    if tipo_doc != "Distribuição":
+        return None
+    classe = (publicacao.get("nomeClasse") or "").strip().upper()
+    if classe not in _CLASSES_DISTRIBUICAO_INICIAL:
+        return None
+    data_distrib = processo_record.get("data_de_distribuicao")
+    if data_distrib:
+        return None
+    return ALERTA_CAPTURAR_DATA_DISTRIBUICAO
+
+
+def regra_34_conferir_data_distribuicao(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+) -> str | None:
+    """Regra 34 — Data de distribuição muito anterior à publicação.
+
+    - Condições: mesma combinação da Regra 33, mas com
+      ``Proc.data_de_distribuicao`` populada com data ≥ 30 dias
+      anterior à ``Pub.Data de disponibilização``.
+    - Alerta: ``Conferir data de distribuição``.
+    - Explicação: pode ser caso de redistribuição (rara). Anotar em
+      ``Proc.observações`` se confirmado.
+    """
+    if processo_record is None:
+        return None
+    tipo_doc = mapear_tipo_documento(publicacao.get("tipoDocumento"))
+    if tipo_doc != "Distribuição":
+        return None
+    classe = (publicacao.get("nomeClasse") or "").strip().upper()
+    if classe not in _CLASSES_DISTRIBUICAO_INICIAL:
+        return None
+    data_distrib_str = processo_record.get("data_de_distribuicao")
+    data_pub_str = publicacao.get("data_disponibilizacao")
+    if not data_distrib_str or not data_pub_str:
+        return None
+    # Datas devem ser ISO YYYY-MM-DD
+    try:
+        from datetime import date
+        data_distrib = date.fromisoformat(str(data_distrib_str)[:10])
+        data_pub = date.fromisoformat(str(data_pub_str)[:10])
+    except (ValueError, TypeError):
+        return None
+    delta_dias = (data_pub - data_distrib).days
+    if delta_dias >= 30:
+        return ALERTA_CONFERIR_DATA_DISTRIBUICAO
+    return None
+
+
+def regra_36_atividade_pos_encerramento_executivo(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+) -> str | None:
+    """Regra 36 — Atividade pós-encerramento executivo.
+
+    - Condições: ``Proc.data_do_transito_em_julgado_executiva``
+      populada **e** ``Pub.Data de disponibilização`` posterior a
+      essa data.
+    - Alerta: ``Atividade pós-encerramento executivo``.
+    - Explicação: em tese processo encerrado executivamente não recebe
+      mais comunicações. Possíveis exceções (alvarás remanescentes,
+      certidões finais) — heurística para revisão manual.
+    """
+    if processo_record is None:
+        return None
+    data_transito_str = processo_record.get("data_do_transito_em_julgado_executiva")
+    if not data_transito_str:
+        return None
+    data_pub_str = publicacao.get("data_disponibilizacao")
+    if not data_pub_str:
+        return None
+    try:
+        from datetime import date
+        data_transito = date.fromisoformat(str(data_transito_str)[:10])
+        data_pub = date.fromisoformat(str(data_pub_str)[:10])
+    except (ValueError, TypeError):
+        return None
+    if data_pub > data_transito:
+        return ALERTA_ATIVIDADE_POS_ENCERRAMENTO_EXECUTIVO
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Regras 19-24 — Extração de Cidade, Vara, Turma, Relator do Pub.Órgão
+# ---------------------------------------------------------------------------
+
+#: Vara de 1º grau com cidade explícita: ``Nª Vara X de Cidade [- UF]``.
+#: Captura: (1) prefixo "Nª Vara X", (2) cidade.
+_RX_VARA_COM_CIDADE = re.compile(
+    r"^(\d+ª\s*Vara\s+(?:do Trabalho|Cível|da Fazenda(?:\s+Pública)?|"
+    r"de Família|Criminal|de Execuções|do Juizado|de Execução Fiscal))"
+    r"\s+de\s+([A-ZÀ-Ú][A-Za-zà-úÀ-Ú\s]+?)(?:\s*-\s*[A-Z]{2})?\s*$",
+    re.IGNORECASE,
+)
+
+#: Vara sem cidade (fallback) — só captura o "Nª Vara X" pra normalização.
+_RX_VARA_PREFIXO = re.compile(
+    r"^(\d+ª\s*Vara\s+(?:do Trabalho|Cível|da Fazenda(?:\s+Pública)?|"
+    r"de Família|Criminal|de Execuções|do Juizado|de Execução Fiscal))",
+    re.IGNORECASE,
+)
+
+#: Turma/Câmara de 2º grau ou superior.
+_RX_TURMA_CAMARA_NUMERADA = re.compile(
+    r"^(\d+ª\s*(?:Turma|Câmara)(?:\s*Cível)?(?:\s+(?:de|do)\s+\S+)*)\s*$",
+    re.IGNORECASE,
+)
+
+#: Relator no Pub.Órgão (Desembargador, Juiz Convocado, Ministro).
+_RX_RELATOR = re.compile(
+    r"^\s*(?:Gabinete\s+(?:do|da)\s+)?"
+    r"(Desembargador[a]?|Juiz[a]?\s+Convocad[oa]|Ministr[oa])"
+    r"\s+(.+?)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _extrair_cidade_do_orgao(orgao: str | None) -> str | None:
+    """Extrai cidade do nome do Órgão se for do padrão ``Nª Vara X de
+    Cidade [- UF]``. Devolve cidade em title-case ou ``None``.
+    """
+    if not orgao:
+        return None
+    m = _RX_VARA_COM_CIDADE.match(orgao.strip())
+    if m:
+        cidade = m.group(2).strip()
+        # Normaliza espaços múltiplos
+        cidade = re.sub(r"\s+", " ", cidade)
+        return cidade
+    return None
+
+
+def _normalizar_vara(orgao: str | None) -> str | None:
+    """Devolve só o prefixo ``Nª Vara X`` do nome do Órgão, em formato
+    canônico title-case com normalizações de espaço. Devolve ``None``
+    se não bater no padrão.
+    """
+    if not orgao:
+        return None
+    m = _RX_VARA_PREFIXO.match(orgao.strip())
+    if m:
+        prefix = m.group(1).strip()
+        prefix = re.sub(r"\s+", " ", prefix)
+        return prefix
+    return None
+
+
+def _extrair_turma_camara(orgao: str | None) -> str | None:
+    """Devolve string da Turma/Câmara (ex: ``"2ª Turma"``, ``"6ª Turma
+    Cível"``) ou ``None``.
+    """
+    if not orgao:
+        return None
+    m = _RX_TURMA_CAMARA_NUMERADA.match(orgao.strip())
+    if m:
+        return re.sub(r"\s+", " ", m.group(1).strip())
+    return None
+
+
+def _extrair_relator(orgao: str | None) -> str | None:
+    """Devolve o nome do relator do Pub.Órgão se for do padrão
+    ``Desembargador/Juiz Convocado/Ministro NOME``. Devolve ``None``
+    se não bater.
+    """
+    if not orgao:
+        return None
+    m = _RX_RELATOR.match(orgao.strip())
+    if m:
+        nome = m.group(2).strip()
+        nome = re.sub(r"\s+", " ", nome)
+        return nome
+    return None
+
+
+def _campo_turma_para_instancia(instancia: str) -> str | None:
+    """Mapeia Proc.instancia → nome do campo ``turma_no_*`` em Proc."""
+    return {
+        INSTANCIA_SEGUNDO_GRAU: "turma_no_2o_grau",
+        INSTANCIA_TST: "turma_no_stj_tst",
+        INSTANCIA_STJ: "turma_no_stj_tst",
+        INSTANCIA_STF: "turma_no_stf",
+    }.get(instancia)
+
+
+def _campo_relator_para_instancia(instancia: str) -> str | None:
+    """Mapeia Proc.instancia → nome do campo ``relator_no_*`` em Proc."""
+    return {
+        INSTANCIA_SEGUNDO_GRAU: "relator_no_2o_grau",
+        INSTANCIA_TST: "relator_no_stj_tst",
+        INSTANCIA_STJ: "relator_no_stj_tst",
+        INSTANCIA_STF: "relator_no_stf",
+    }.get(instancia)
+
+
+def regra_19_20_cidade_desatualizada(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+) -> str | None:
+    """Regras 19+20 — Cidade desatualizada (faltando OU divergente).
+
+    - Condições combinadas (mesmo alerta para os dois casos):
+      - 19: Pub.Órgão match `Vara X de Cidade` E Proc.cidade vazia.
+      - 20: Mesmo regex extrai cidade ≠ Proc.cidade.
+    - Alerta: ``Cidade desatualizada``.
+    - Explicação: órgão de 1º grau quase sempre nomeia a cidade —
+      basta extrair e popular. Divergência indica redistribuição entre
+      comarcas (raro) ou cadastro errado.
+    """
+    if processo_record is None:
+        return None
+    cidade_pub = _extrair_cidade_do_orgao(publicacao.get("nomeOrgao"))
+    if not cidade_pub:
+        return None
+    cidade_proc = (processo_record.get("cidade") or "").strip()
+    if not cidade_proc:
+        return ALERTA_CIDADE_DESATUALIZADA  # Regra 19
+    # Comparação case-insensitive
+    if cidade_pub.upper() != cidade_proc.upper():
+        return ALERTA_CIDADE_DESATUALIZADA  # Regra 20
+    return None
+
+
+def regra_21_22_vara_desatualizada(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+) -> str | None:
+    """Regras 21+22 — Vara desatualizada (faltando OU divergente).
+
+    - Condições combinadas:
+      - 21: instancia_implicada=1º grau E Pub.Órgão match `Nª Vara X`
+        E Proc.vara vazia E Proc.instancia=1º grau.
+      - 22: Mesma situação, mas Proc.vara populada e diferente do
+        normalizado.
+    - Alerta: ``Vara desatualizada``.
+    """
+    if processo_record is None:
+        return None
+    if (processo_record.get("instancia") or "") != INSTANCIA_PRIMEIRO_GRAU:
+        return None
+    if instancia_implicada(publicacao) != INSTANCIA_PRIMEIRO_GRAU:
+        return None
+    vara_pub = _normalizar_vara(publicacao.get("nomeOrgao"))
+    if not vara_pub:
+        return None
+    vara_proc = (processo_record.get("vara") or "").strip()
+    if not vara_proc:
+        return ALERTA_VARA_DESATUALIZADA
+    if vara_pub.upper() != vara_proc.upper():
+        return ALERTA_VARA_DESATUALIZADA
+    return None
+
+
+def regra_23_turma_desatualizada(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+) -> str | None:
+    """Regra 23 — Turma desatualizada (faltando ou divergente).
+
+    - Condições: instancia_implicada(Pub) ≥ 2º grau E Pub.Órgão match
+      ``\\d+ª (Turma|Câmara)( Cível)?$`` E o campo ``Proc.turma_no_*``
+      correspondente vazio ou diferente.
+    - Alerta: ``Turma desatualizada``.
+    - Explicação: quando Pub.Órgão é gabinete (não turma explícita),
+      a Tabela auxiliar Desembargador→Turma não é alimentada por esta
+      regra (X.9 do doc v8). Apenas turmas/câmaras explícitas disparam.
+    """
+    if processo_record is None:
+        return None
+    instancia_proc = (processo_record.get("instancia") or "").strip()
+    if instancia_proc not in INSTANCIAS_COLEGIADAS:
+        return None
+    turma_pub = _extrair_turma_camara(publicacao.get("nomeOrgao"))
+    if not turma_pub:
+        return None
+    campo = _campo_turma_para_instancia(instancia_proc)
+    if not campo:
+        return None
+    turma_proc = (processo_record.get(campo) or "").strip()
+    if not turma_proc:
+        return ALERTA_TURMA_DESATUALIZADA
+    if turma_pub.upper() != turma_proc.upper():
+        return ALERTA_TURMA_DESATUALIZADA
+    return None
+
+
+def regra_24_relator_faltando(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+) -> str | None:
+    """Regra 24 — Relator faltando (e divergente — combinada com 25
+    parcial; troca completa de relator entre publicações sequenciais
+    fica fora deste round).
+
+    - Condições: Pub.Órgão match ``^(Desembargador[a]?|Juiz[a]?
+      Convocad[oa]|Ministr[oa]) (.+)`` E o campo ``Proc.relator_no_*``
+      correspondente está vazio OU diferente.
+    - Alerta: ``Relator desatualizado``.
+    """
+    if processo_record is None:
+        return None
+    instancia_proc = (processo_record.get("instancia") or "").strip()
+    if instancia_proc not in INSTANCIAS_COLEGIADAS:
+        return None
+    relator_pub = _extrair_relator(publicacao.get("nomeOrgao"))
+    if not relator_pub:
+        return None
+    campo = _campo_relator_para_instancia(instancia_proc)
+    if not campo:
+        return None
+    relator_proc = (processo_record.get(campo) or "").strip()
+    if not relator_proc:
+        return ALERTA_RELATOR_DESATUALIZADO
+    if relator_pub.upper() != relator_proc.upper():
+        return ALERTA_RELATOR_DESATUALIZADO
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Regras 7-10 — Cliente e posição
+# ---------------------------------------------------------------------------
+
+#: Sentinela em ``Cliente.nome`` que NÃO deve participar do matching.
+_CLIENTE_TEMPLATE_MARKER: str = "🧱 MODELO"
+
+
+def carregar_indice_clientes(cache_conn: Any) -> dict[str, str]:
+    """Lê base ``Clientes`` do cache.db e devolve dict
+    ``{page_id: nome_uppercase}`` para matching nas regras 7-10.
+
+    Pula o template ``"🧱 Modelo — usar como template"``.
+    """
+    if cache_conn is None:
+        return {}
+    indice: dict[str, str] = {}
+    cur = cache_conn.execute(
+        "SELECT page_id, data_json FROM records WHERE base = ?",
+        ("Clientes",),
+    )
+    for row in cur:
+        try:
+            data = json.loads(row["data_json"])
+        except (json.JSONDecodeError, TypeError):
+            continue
+        nome = (data.get("nome") or "").strip()
+        if not nome:
+            continue
+        nome_up = nome.upper()
+        if _CLIENTE_TEMPLATE_MARKER in nome_up:
+            continue
+        indice[str(row["page_id"])] = nome_up
+    return indice
+
+
+def _destinatarios_por_polo(
+    publicacao: dict[str, Any],
+) -> dict[str, list[str]]:
+    """Agrupa ``publicacao["destinatarios"]`` por polo, devolvendo
+    ``{polo: [nome_uppercase, ...]}``. Polos canônicos: ``A``, ``P``,
+    ``T``."""
+    out: dict[str, list[str]] = {}
+    destinatarios = publicacao.get("destinatarios") or []
+    for d in destinatarios:
+        if not isinstance(d, dict):
+            continue
+        nome = str(d.get("nome") or "").strip().upper()
+        if not nome:
+            continue
+        polo = str(d.get("polo") or "").strip().upper() or "?"
+        out.setdefault(polo, []).append(nome)
+    return out
+
+
+def _matching_clientes_em_pub(
+    publicacao: dict[str, Any],
+    indice_clientes: dict[str, str],
+) -> dict[str, set[str]]:
+    """Para cada polo da Pub, identifica quais clientes cadastrados
+    aparecem (matching por substring uppercase). Devolve
+    ``{polo: {page_id_cliente, ...}}``.
+    """
+    if not indice_clientes:
+        return {}
+    polos = _destinatarios_por_polo(publicacao)
+    out: dict[str, set[str]] = {}
+    for polo, nomes_pub in polos.items():
+        # Concatena todos os nomes do polo em uma string só pra busca
+        texto_polo = " | ".join(nomes_pub)
+        if not texto_polo:
+            continue
+        encontrados: set[str] = set()
+        for page_id, nome_cliente in indice_clientes.items():
+            if not nome_cliente or len(nome_cliente) < 8:
+                # Nomes muito curtos podem dar match falso — pula
+                continue
+            if nome_cliente in texto_polo:
+                encontrados.add(page_id)
+        if encontrados:
+            out[polo] = encontrados
+    return out
+
+
+def regra_7_cliente_fora_relation(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+    *,
+    indice_clientes: dict[str, str] | None = None,
+) -> str | None:
+    """Regra 7 — Cliente do escritório fora da relation.
+
+    - Condições: ``Pub.Partes`` contém nome de cliente cadastrado em
+      👥 Clientes que não está em ``Proc.clientes``. Filtro
+      ``Proc.tipo_de_processo=Principal`` para evitar 113 falsos
+      positivos dos recursos (que têm Clientes vazio por design).
+    - Alerta: ``Vincular cliente ao processo``.
+    """
+    if processo_record is None or not indice_clientes:
+        return None
+    if (processo_record.get("tipo_de_processo") or "") != TIPO_PROCESSO_PRINCIPAL:
+        return None
+    matchings = _matching_clientes_em_pub(publicacao, indice_clientes)
+    if not matchings:
+        return None
+    encontrados_pub: set[str] = set()
+    for clientes_polo in matchings.values():
+        encontrados_pub.update(clientes_polo)
+    proc_clientes = set(str(c) for c in (processo_record.get("clientes") or []))
+    if not encontrados_pub.issubset(proc_clientes):
+        return ALERTA_VINCULAR_CLIENTE_AO_PROCESSO
+    return None
+
+
+def regra_8_litisconsorcio_nao_refletido(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+    *,
+    indice_clientes: dict[str, str] | None = None,
+) -> str | None:
+    """Regra 8 — Litisconsórcio ativo não refletido.
+
+    - Condições: ``Pub.Partes`` lista 2+ clientes do escritório no
+      mesmo polo **e** ``Proc.clientes`` tem apenas 1. Filtro
+      ``tipo_de_processo=Principal``.
+    - Alerta: ``Vincular cliente ao processo`` (mesmo da Regra 7).
+    """
+    if processo_record is None or not indice_clientes:
+        return None
+    if (processo_record.get("tipo_de_processo") or "") != TIPO_PROCESSO_PRINCIPAL:
+        return None
+    matchings = _matching_clientes_em_pub(publicacao, indice_clientes)
+    if not matchings:
+        return None
+    # Verifica se há polo com 2+ clientes
+    tem_litisconsorcio = any(len(clientes) >= 2 for clientes in matchings.values())
+    if not tem_litisconsorcio:
+        return None
+    proc_clientes = set(str(c) for c in (processo_record.get("clientes") or []))
+    if len(proc_clientes) < 2:
+        return ALERTA_VINCULAR_CLIENTE_AO_PROCESSO
+    return None
+
+
+def regra_9_cliente_cadastrado_nao_aparece(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+    *,
+    indice_clientes: dict[str, str] | None = None,
+) -> str | None:
+    """Regra 9 — Cliente cadastrado não aparece nas partes.
+
+    - Condições: ``Proc.clientes`` populado com cliente A **e**
+      ``Pub.Partes`` não menciona A em nenhuma posição. Filtro
+      ``tipo_de_processo=Principal``.
+    - Alerta: ``Conferir vinculação cliente-processo``.
+    - Explicação: possível vinculação errada de Pub.Processo ou
+      homonímia. Investigação manual.
+    """
+    if processo_record is None or not indice_clientes:
+        return None
+    if (processo_record.get("tipo_de_processo") or "") != TIPO_PROCESSO_PRINCIPAL:
+        return None
+    proc_clientes = [str(c) for c in (processo_record.get("clientes") or [])]
+    if not proc_clientes:
+        return None
+    matchings = _matching_clientes_em_pub(publicacao, indice_clientes)
+    encontrados_pub: set[str] = set()
+    for clientes_polo in matchings.values():
+        encontrados_pub.update(clientes_polo)
+    # Se nenhum dos clientes cadastrados aparece nas partes da pub,
+    # dispara alerta
+    for cliente_id in proc_clientes:
+        if cliente_id in encontrados_pub:
+            return None
+    return ALERTA_CONFERIR_VINCULACAO_CLIENTE_PROCESSO
+
+
+def regra_10_polo_inconsistente(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+    *,
+    indice_clientes: dict[str, str] | None = None,
+) -> str | None:
+    """Regra 10 — Polo inconsistente em 1ª instância.
+
+    - Condições: ``Proc.instancia=1º grau`` **e** algum cliente do
+      escritório aparece em ``Pub.Partes`` no polo oposto ao
+      ``Proc.posicao_do_cliente``:
+      - Cliente em Polo Ativo + Posição=Réu → dispara
+      - Cliente em Polo Passivo + Posição=Autor → dispara
+    - Alerta: ``Conferir posição do cliente``.
+    - Explicação: Em 2º grau ou superior, posição depende de quem
+      recorreu — não disparar alerta automático ali (Recorrente/
+      Recorrido).
+    """
+    if processo_record is None or not indice_clientes:
+        return None
+    instancia = (processo_record.get("instancia") or "").strip()
+    if instancia != INSTANCIA_PRIMEIRO_GRAU:
+        return None
+    posicao = (processo_record.get("posicao_do_cliente") or "").strip()
+    polo_esperado = _POSICAO_PARA_POLO_ESPERADO.get(posicao)
+    if polo_esperado is None:
+        return None  # Recorrente/Recorrido/vazio — não dispara
+    matchings = _matching_clientes_em_pub(publicacao, indice_clientes)
+    if not matchings:
+        return None
+    # Cliente do escritório aparece em algum polo da Pub. Verifica se
+    # algum desses clientes está no polo OPOSTO ao esperado.
+    polo_oposto = "P" if polo_esperado == "A" else "A"
+    if polo_oposto in matchings and matchings[polo_oposto]:
+        return ALERTA_CONFERIR_POSICAO_DO_CLIENTE
+    return None
+
+
+def regra_29_sentenca_em_fase_pos_cognitiva(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+) -> str | None:
+    """Regra 29 — Sentença em fase pós-cognitiva.
+
+    - Condições: ``Pub.Tipo de documento canônico = Sentença`` **e**
+      ``Proc.fase IN (Executiva, Liquidação de sentença)``.
+    - Alerta: ``Conferir sentença em fase pós-cognitiva``.
+    - Explicação: pode ser sentença legítima (embargos à execução,
+      impugnação) — não é erro automático. Disparar revisão manual
+      antes de alterar fase. Note que Regra 17 (Sentença em colegiado)
+      é mais grave (impossibilidade categórica) e dispara em paralelo
+      quando aplicável.
+    """
+    if processo_record is None:
+        return None
+    tipo_doc = mapear_tipo_documento(publicacao.get("tipoDocumento"))
+    if tipo_doc != "Sentença":
+        return None
+    fase_proc = (processo_record.get("fase") or "").strip()
+    if fase_proc in (FASE_EXECUTIVA, FASE_LIQUIDACAO):
+        return ALERTA_CONFERIR_SENTENCA_FASE_POS_COGNITIVA
+    return None
+
+
+def regra_30_pauta_em_processo_arquivado(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+) -> str | None:
+    """Regra 30 — Pauta em processo arquivado.
+
+    - Condições: ``Pub.Tipo de documento canônico = Pauta de Julgamento``
+      **e** ``Proc.status = "Arquivado"``.
+    - Alerta: ``Pauta em processo arquivado``.
+    - Explicação: não se pauta processo arquivado — ou voltou
+      (status precisa atualizar para Ativo), ou nunca esteve arquivado
+      (cadastro errado). Match exato em "Arquivado" (não inclui
+      "Arquivado provisoriamente (tema 955)").
+    """
+    if processo_record is None:
+        return None
+    tipo_doc = mapear_tipo_documento(publicacao.get("tipoDocumento"))
+    if tipo_doc != "Pauta de Julgamento":
+        return None
+    status = (processo_record.get("status") or "").strip()
+    if status == STATUS_ARQUIVADO:
+        return ALERTA_PAUTA_EM_PROCESSO_ARQUIVADO
+    return None
+
+
+def regra_31_atividade_em_processo_arquivado(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+) -> str | None:
+    """Regra 31 — Atividade em processo arquivado.
+
+    - Condições: qualquer publicação **e** ``Proc.status = "Arquivado"``.
+    - Alerta: ``Atividade em processo arquivado``.
+    - Explicação: processos arquivados em tese não recebem comunicações.
+      Heurística com possíveis exceções (alvarás finais, certidões
+      remanescentes); revisar caso a caso. Não dispara em "Arquivado
+      provisoriamente (tema 955)" (esses retomarão atividade quando o
+      tema for julgado).
+    """
+    if processo_record is None:
+        return None
+    status = (processo_record.get("status") or "").strip()
+    if status == STATUS_ARQUIVADO:
+        return ALERTA_ATIVIDADE_EM_PROCESSO_ARQUIVADO
+    return None
+
+
+def regra_38_capturar_link_externo(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+) -> str | None:
+    """Regra 38 — Link externo vazio.
+
+    - Condições: ``Proc.link_externo`` vazio **e** ``Pub.Link``
+      populado.
+    - Alerta: ``Capturar link externo``.
+    - Explicação: sugerir construção heurística de URL para o processo
+      a partir do domínio do ``Pub.Link`` + CNJ. Não prioritário —
+      mais um auxílio operacional do que um erro a corrigir.
+    """
+    if processo_record is None:
+        return None
+    link_proc = (processo_record.get("link_externo") or "").strip()
+    if link_proc:
+        return None
+    link_pub = (publicacao.get("link") or "").strip()
+    if not link_pub:
+        return None
+    return ALERTA_CAPTURAR_LINK_EXTERNO
+
+
+def regra_2_capturar_numeracao_stj_tst(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+) -> str | None:
+    """Regra 2 — Numeração STJ/TST ausente.
+
+    - Condições: ``Pub.Tribunal IN (STJ, TST)`` e ``Proc.numero_stj_tst``
+      está vazio.
+    - Alerta: ``Capturar numeração STJ/TST``.
+    - Explicação: numeração autônoma do tribunal superior precisa ser
+      capturada do ``Pub.Identificação``. Pré-aprovação operacional —
+      não verifica TODAS as pubs do processo (faz match na Pub atual,
+      que dispara o alerta de qualquer pub STJ/TST nova).
+    """
+    if processo_record is None:
+        return None
+    sigla = (publicacao.get("siglaTribunal") or "").strip().upper()
+    if sigla not in {"STJ", "TST"}:
+        return None
+    numero = (processo_record.get("numero_stj_tst") or "").strip()
+    if not numero:
+        return ALERTA_CAPTURAR_NUMERACAO_STJ_TST
+    return None
+
+
+def regra_3_capturar_numeracao_stf(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+) -> str | None:
+    """Regra 3 — Numeração STF ausente.
+
+    - Condições: ``Pub.Tribunal=STF`` e ``Proc.numero_stf`` está vazio.
+    - Alerta: ``Capturar numeração STF``.
+    - Explicação: análoga à Regra 2.
+    """
+    if processo_record is None:
+        return None
+    sigla = (publicacao.get("siglaTribunal") or "").strip().upper()
+    if sigla != "STF":
+        return None
+    numero = (processo_record.get("numero_stf") or "").strip()
+    if not numero:
+        return ALERTA_CAPTURAR_NUMERACAO_STF
+    return None
+
+
+def regra_12_tribunal_fora_vocabulario(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+) -> str | None:
+    """Regra 12 — Tribunal de origem fora do vocabulário canônico.
+
+    - Condições: ``Pub.Tribunal`` está em ``TRIBUNAIS_FORA_VOCABULARIO_PROC``
+      (TRT18, TRF1 — ausentes do select de ``Proc.tribunal``).
+    - Alerta: ``Tribunal fora do vocabulário``.
+    - Explicação: vocabulário de ``Proc.tribunal`` precisa ser ampliado
+      ou usar ``Outro``. Independe de processo cadastrado — sinaliza
+      atenção mesmo em pubs sem cadastro.
+    """
+    sigla = (publicacao.get("siglaTribunal") or "").strip().upper()
+    if sigla in TRIBUNAIS_FORA_VOCABULARIO_PROC:
+        return ALERTA_TRIBUNAL_FORA_VOCABULARIO
+    return None
+
+
+def regra_13_conferir_tribunal_origem(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+) -> str | None:
+    """Regra 13 — Verificação de origem em 1ª instância.
+
+    - Condições: ``Proc.instancia=1º grau`` e ``Pub.Tribunal`` (após
+      normalização) ≠ ``Proc.tribunal``.
+    - Alerta: ``Conferir tribunal de origem``.
+    - Explicação: em 1º grau, tribunal atual = tribunal de origem;
+      têm que coincidir. Divergência indica vinculação errada de
+      Pub.Processo ou cadastro de origem errado.
+
+      Não dispara nas instâncias superiores (recurso pode tramitar em
+      tribunal diferente do de origem por design — STJ recebe RESP de
+      qualquer TJ).
+    """
+    if processo_record is None:
+        return None
+    instancia = (processo_record.get("instancia") or "").strip()
+    if instancia != INSTANCIA_PRIMEIRO_GRAU:
+        return None
+    pub_trib_norm = _pub_trib_normalizado_para_proc(
+        publicacao.get("siglaTribunal"),
+    )
+    proc_trib = (processo_record.get("tribunal") or "").strip()
+    if not pub_trib_norm or not proc_trib:
+        return None
+    if pub_trib_norm != proc_trib:
+        return ALERTA_CONFERIR_TRIBUNAL_ORIGEM
+    return None
 
 
 def regra_14_subida_nao_detectada(
@@ -756,7 +1903,7 @@ def aplicar_regras_monitoramento(
     As regras de monitoramento ADICIONAM alertas ao conjunto produzido
     pela camada base — não substituem.
 
-    Round 6 — implementadas até o momento:
+    Round 6 — implementadas no PR #20:
 
     - Regras 14, 15 (subida e descida de instância).
     - Regras 16, 17, 18 (impossibilidades categóricas).
@@ -767,18 +1914,67 @@ def aplicar_regras_monitoramento(
     - Alerta operacional Processo não cadastrado (refinado: não
       dispara em distribuições, que já têm Camada base).
 
-    Pendentes (a serem acrescentadas em commits subsequentes):
+    Round 7a — Regras 2, 3, 12, 13 (Tribunal e numerações superiores).
 
-    - Regras 1-3 (Identificação e numeração).
-    - Regras 4-6 (Classificação processual).
-    - Regras 7-9 (Cliente do escritório).
-    - Regras 10 (Posição do cliente).
-    - Regras 12-13 (Tribunal).
-    - Regras 19-25 (Cidade, Vara, Turma, Relator).
-    - Regras 29-34, 36-39 (demais de Estado processual + outros).
+    Round 7b — Regras 4, 5, 6, 39 (Classificação processual + processo pai).
+
+    Round 7c — Regras 29, 30, 31, 38 (Estado processual + link).
+
+    Round 7d — Regras 7, 8, 9, 10 (Cliente e posição).
+
+    Round 7e — Regras 19-24 (Localização — Cidade, Vara, Turma, Relator).
+
+    Round 7f — implementadas neste commit:
+
+    - Regra 1 (Conferir número CNJ do processo) — defensiva.
+    - Regra 32 (Conferir Tema 955 — sobrestamento não refletido).
+    - Regra 33 (Capturar data de distribuição).
+    - Regra 34 (Conferir data de distribuição muito anterior).
+    - Regra 36 (Atividade pós-encerramento executivo).
+
+    Regras 25 (troca de relator) e 37 (inatividade prolongada PREVI/RESP)
+    ficam fora deste round — exigem histórico de pubs anteriores ao
+    momento da inserção, que não está disponível neste pipeline
+    sem-estado.
+
+    Total v8 implementado: 36 de 43 regras (84%) + camada base 4/4.
+    Faltam: Regras 25 e 37 (~5% do volume estimado).
     """
+    # Lazy-load do índice de clientes (apenas para Regras 7-10)
+    indice_clientes = (
+        carregar_indice_clientes(cache_conn) if cache_conn is not None else {}
+    )
+
     candidatos: list[str | None] = [
+        regra_1_conferir_numero_cnj(publicacao, processo_record),
+        regra_2_capturar_numeracao_stj_tst(publicacao, processo_record),
+        regra_3_capturar_numeracao_stf(publicacao, processo_record),
+        regra_4_natureza_inconsistente_com_tribunal(publicacao, processo_record),
+        regra_5_natureza_inconsistente_com_classe(publicacao, processo_record),
+        regra_6_recurso_autonomo_cadastrado_como_principal(publicacao, processo_record),
+        regra_7_cliente_fora_relation(
+            publicacao, processo_record, indice_clientes=indice_clientes,
+        ),
+        regra_8_litisconsorcio_nao_refletido(
+            publicacao, processo_record, indice_clientes=indice_clientes,
+        ),
+        regra_9_cliente_cadastrado_nao_aparece(
+            publicacao, processo_record, indice_clientes=indice_clientes,
+        ),
+        regra_10_polo_inconsistente(
+            publicacao, processo_record, indice_clientes=indice_clientes,
+        ),
+        regra_12_tribunal_fora_vocabulario(publicacao, processo_record),
+        regra_13_conferir_tribunal_origem(publicacao, processo_record),
         regra_14_subida_nao_detectada(publicacao, processo_record),
+        regra_19_20_cidade_desatualizada(publicacao, processo_record),
+        regra_21_22_vara_desatualizada(publicacao, processo_record),
+        regra_23_turma_desatualizada(publicacao, processo_record),
+        regra_24_relator_faltando(publicacao, processo_record),
+        regra_32_conferir_tema_955(publicacao, processo_record),
+        regra_33_capturar_data_distribuicao(publicacao, processo_record),
+        regra_34_conferir_data_distribuicao(publicacao, processo_record),
+        regra_36_atividade_pos_encerramento_executivo(publicacao, processo_record),
         regra_15_descida_nao_detectada(publicacao, processo_record),
         regra_16_acordao_em_1grau(publicacao, processo_record),
         regra_17_sentenca_em_colegiado(publicacao, processo_record),
@@ -786,7 +1982,12 @@ def aplicar_regras_monitoramento(
         regra_26_fase_executiva_por_classe(publicacao, processo_record),
         regra_27_fase_liquidacao_por_classe(publicacao, processo_record),
         regra_28_fase_cognitiva_contradita_por_classe(publicacao, processo_record),
+        regra_29_sentenca_em_fase_pos_cognitiva(publicacao, processo_record),
+        regra_30_pauta_em_processo_arquivado(publicacao, processo_record),
+        regra_31_atividade_em_processo_arquivado(publicacao, processo_record),
         regra_35_transito_pendente(publicacao, processo_record),
+        regra_38_capturar_link_externo(publicacao, processo_record),
+        regra_39_recurso_autonomo_sem_processo_pai(publicacao, processo_record),
         regra_texto_imprestavel(publicacao, processo_record),
         regra_processo_nao_cadastrado(publicacao, processo_record),
     ]
