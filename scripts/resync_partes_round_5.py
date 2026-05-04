@@ -27,7 +27,6 @@ from __future__ import annotations
 import csv
 import json
 import os
-import re
 import sqlite3
 import sys
 import time
