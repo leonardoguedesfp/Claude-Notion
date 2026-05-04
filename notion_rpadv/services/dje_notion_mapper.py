@@ -671,12 +671,14 @@ def montar_payload_publicacao(
         "Hash": _rich_text_prop(publicacao.get("hash")),
         "ID DJEN": _number_prop(publicacao.get("id")),
         # Round 4.6: checkbox "Processo não cadastrado" SAIU. A info passa
-        # a viver em "Alerta contadoria" — quando o usuário dropar a
-        # coluna do Notion, payloads futuros ainda funcionam.
+        # a viver em "Alerta contadoria (app)" — quando o usuário dropar
+        # a coluna do Notion, payloads futuros ainda funcionam.
         "Advogados não cadastrados": _checkbox_prop(advogados_nao_cadastrados),
-        # Round 4.3 + 4.4 — multi-selects
-        "Tarefa sugerida": _multi_select_prop(tarefas_sugeridas),
-        "Alerta contadoria": _multi_select_prop(alertas_contadoria),
+        # Round 4.3 + 4.4 — multi-selects. Pós Round 6 (2026-05-04) os
+        # nomes ganharam sufixo "(app)" no Notion para distinguir
+        # propriedades populadas automaticamente das editadas à mão.
+        "Tarefa sugerida (app)": _multi_select_prop(tarefas_sugeridas),
+        "Alerta contadoria (app)": _multi_select_prop(alertas_contadoria),
     }
 
     return {

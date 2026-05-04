@@ -464,9 +464,10 @@ def test_R4_6_mapper_nao_grava_checkbox_processo_nao_cadastrado() -> None:
             pub, dje_conn=dje_conn, cache_conn=cache_conn,
         )
         assert "Processo não cadastrado" not in payload["properties"]
-        # Mas Alerta contadoria contém o sinalizador
+        # Mas Alerta contadoria (app) contém o sinalizador
         alertas = [
-            a["name"] for a in payload["properties"]["Alerta contadoria"]["multi_select"]
+            a["name"]
+            for a in payload["properties"]["Alerta contadoria (app)"]["multi_select"]
         ]
         assert "Processo não cadastrado" in alertas
 
