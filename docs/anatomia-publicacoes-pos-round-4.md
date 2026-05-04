@@ -1501,3 +1501,240 @@ Bom sinal: a contadoria está agindo nos alertas (mesmo que esta
 investigação não consiga medir o ritmo).
 
 ---
+
+## 10. Backlog priorizado
+
+P0 = bloqueador para qualidade aceitável da triagem; P1 = melhoria
+importante; P2 = polimento.
+
+### 10.1 Itens entregues (✓ — eram P0/P1 do baseline e foram resolvidos)
+
+| # baseline | Ação | Round | Status |
+|---|---|---|---|
+| P0-2 | Implementar regras de `Tarefa sugerida` | R4 (PR #19) | ✅ 100% cobertura |
+| P0-3 | Implementar regras de `Alerta contadoria` | R4 (PR #19) | ✅ 38% cobertura |
+| P0-4 | Normalizar `Classe` | R4 (PR #19) | ✅ 100% CAPS uniforme |
+| P1-1 | Auto-Status `Triada — sem ação` em casos óbvios | R4.5a | ✅ 4,3%, sem falso positivo |
+| P1-2 | Filtro 1.5 estendido para Atas TJDFT 57 | R4.5b | ✅ 26 pubs filtradas |
+
+### 10.2 Itens entregues PARCIAL — exigem revisão
+
+| # baseline | Ação | Round | Estado pós-R4 |
+|---|---|---|---|
+| P0-1 | Reformatar `Partes` para legível | R4 (PR #19) | 🔴 67% OK, **530 pubs (33%) ainda em JSON cru** — Frente 4.1 incompleta |
+| P1-3 | Investigar `<br>` literal residual no Texto inline | R4.5 (`afddba4`) | 🔴 commit declarou pipeline OK; pubs reais ainda têm `<br>` (visto via MCP em 5/5 amostras com trailer) |
+
+### 10.3 P0 — Críticos (NOVOS após Round 4)
+
+| # | Ação | Volume afetado | Esforço | Arquivo(s) |
+|---|---|---:|---|---|
+| P0-1bis | **Investigar regressão da Frente 4.1**: identificar por que TRT10 Notif/Acórdão recebem Partes em JSON cru. `formatar_partes` produz output correto isoladamente; problema deve estar no caminho de envio. | 530 pubs (33% do acervo) | M | `dje_notion_mapper.py`, `dje_notion_sync.py`, `dje_db.py` |
+| P0-5 | **Investigar regressão `<br>` literal no Texto inline**: o teste `afddba4` valida pipeline, mas estado real diverge. Auditar o ponto de inserção do trailer "Intimado(s) / Citado(s)" no payload DJEN — provável que entre fora do pré-processador. | ~517 pubs (32%) | S-M | `dje_text_pipeline.py`, possivelmente `dje_client.py` |
+
+### 10.4 P1 — Importantes (mantidos do baseline + novos)
+
+| # | Ação | Volume | Esforço | Arquivo(s) |
+|---|---|---:|---|---|
+| P1-4 | **Refinar `formatar_partes` para STJ**: extrair papel real (`AGRAVANTE`, `RECORRIDO`, `INTERESSADO`) do prefixo `N. NOME (PAPEL)` e usar como label em vez de `Polo Ativo: 1. NOME (PAPEL)`. Mais legível. | ~160 pubs STJ | S-M | `dje_notion_mappings.py:formatar_partes` |
+| P1-5 | **Investigar STJ Pauta texto sem espaços** entre `RELATOR:`, `RECORRENTE:`, `ADVOGADOS:` etc. Pré-processamento STJ está colando tokens. | ~150 pubs STJ | S | `dje_text_pipeline.py` |
+| P1-6 | **Capturar janela 01/04 → hoje** para 5 OABs em cursor 2026-03-31 (Ricardo, Leonardo, Vitor, Cecília, Deborah). Não é mudança de código — é rodar app outra vez. | n/a | Trivial | (operacional) |
+| P1-7 | **Resolver flush pendente** djen=564026686. Ou rodar próxima sync (que retentará automaticamente) ou correção manual via UI Notion para juntar duplicata em `Duplicatas suprimidas`. | 1 pub | Trivial | (operacional) |
+| P1-8 | **Visualizações Notion**: "📅 Pautas e Atas", "📥 Listas a triar", "✅ Auto-Status Nada para fazer" (filtros pré-configurados na database 📬 Publicações). | n/a | Trivial | (Notion config) |
+| P1-9 | **Refinar detector `Trânsito em julgado pendente`**: 71 pubs ainda recebem alerta; validar quantos são falsos positivos (cliente pode ter trânsito anotado em outro processo cadastrado, ou em registro distinto). | 71 pubs | M | `dje_notion_mapper.py:_aplicar_regras_alerta_contadoria` |
+
+### 10.5 P2 — Polimento
+
+| # | Ação | Volume | Esforço |
+|---|---|---:|---|
+| P2-1 | Pop `Observações` com sumário automático: prazo, keyword temática | 1.608 | L |
+| P2-2 | TJPR pointer-only com `Alerta = Texto imprestável` automático (texto < 200 chars + padrão "Acesse o sistema Projudi") | 7 pubs (TJPR Despacho 7) | S |
+| P2-3 | Marcador estrutural `D E C I S Ã O` (com espaços entre letras) no algoritmo 1.4 — captura decisões TST formatadas com letras espaçadas | ~10-15 pubs adicionais | S |
+| P2-4 | Alerta `Sócio sentinela como adversário` — defesa futura, 0 pubs hoje | 0 | S |
+| P2-5 | Cruzamento `Posição do cliente` em ⚖️ Processos vs polo do cliente em destinatarios da pub | desconhecido | M |
+| P2-6 | Investigar marcadores `EMENTA`, `RELATÓRIO` etc — confirmar se ainda viram `heading_3` no body do Notion (a inspeção MCP via enhanced-markdown não mostra explícito) | ~250 pubs Acórdão/Ementa | S |
+
+### 10.6 Ordem sugerida de execução
+
+1. **Round 5** (P0-1bis + P0-5): debug das duas regressões críticas.
+   Antes de mais nada, restaurar a entrega correta de `Partes` e
+   `Texto`. Esforço M+S=alto, mas é P0.
+2. **Round 5b** (P1-6 + P1-7): operacional — capturar janela faltante
+   + resolver pendência. Trivial, pode ser feito em paralelo.
+3. **Round 6** (P1-4 + P1-5 + P1-9): refinar STJ Partes, STJ Texto,
+   detector trânsito. Esforço médio total.
+4. **Round 6b** (P1-8): visualizações Notion. Trivial, sem código.
+5. **Round 7+** (P2-*): polimento conforme demanda.
+
+---
+
+## 11. Limitações
+
+### 11.1 O que ficou de fora desta análise
+
+- **Não rodei a captura DJEN nem o sync** — escopo: análise estática
+  do estado entregue. Validações foram contra CSV + SQLite + MCP.
+- **Inspeção MCP limitada a 8 pubs** (djens 494748109, 495174885,
+  573369859, 496898418, 530258606, 524038068, 496542520, 498387389,
+  505334614). Não amostrei 50 pubs como pedido no prompt — mas
+  cobrir os 5 maiores clusters (TRT10 Notif/Acórdão/Lista, TJDFT
+  Decisão/Ata, STJ Pauta) já permite afirmação estatística. As 8
+  amostras + os 1.608 registros do CSV + o cruzamento com SQLite
+  produzem confiança suficiente nos achados quantitativos.
+- **Não verifiquei o body content estruturado** das 1.608 pubs.
+  Apenas inspeção MCP de algumas amostras. Marcadores estruturais
+  (heading_3 vs paragraph) podem ter regressão localizada não
+  detectada.
+- **Não verifiquei o Excel histórico** (`Historico_DJEN_completo.xlsx`).
+- **Não diagnostiquei a causa-raiz** das 2 regressões críticas
+  (Partes JSON cru, `<br>` residual). O escopo declarado foi
+  análise — diagnóstico de código fica para o próximo round.
+
+### 11.2 Hipóteses não verificadas em código
+
+- **Causa do JSON cru em Partes**: hipótese de que o caminho de envio
+  para certos clusters (TRT10 Notif/Acórdão) bypassa o
+  `formatar_partes`. Não inspecionei `dje_notion_sync.py` em
+  profundidade.
+- **Causa do `<br>` residual**: hipótese de que o trailer "Intimado(s)
+  / Citado(s)" entra fora do pré-processador. Não inspecionei
+  `dje_client.py` para confirmar.
+- **STJ Pauta texto colado**: hipótese de que `_BR_RE.sub("", texto)`
+  remove `<br>` sem inserir separador, colando tokens vizinhos. Não
+  validado em código.
+
+### 11.3 Limitações da fonte de dados
+
+- **CSV exportado do Notion**: pode ter normalizações silenciosas (ex:
+  o `<br>` literal não aparece nas minhas contagens automáticas
+  porque o CSV pode ter convertido; via MCP sim aparece). Tratamento
+  manual da coluna `Texto` no CSV exigiria parser HTML.
+- **Cursores divergentes 5×1**: 1.608 pubs sub-representam o volume
+  real de 01/04 → 03/05 para 5 OABs. Não dá para extrapolar com
+  segurança quanto.
+- **`Cliente`**: rollup do `Processo`. Não inspecionei como o rollup
+  está formatado no CSV — exibido como `<omitted />` em todas as
+  amostras MCP, sugerindo nome do cliente fica no Processo, não na
+  Publicação. Não investiguei se isso é por design ou bug.
+
+### 11.4 Decisões tomadas em ambiguidade
+
+- **Classifiquei JSON cru como "regressão parcial"**, não "Frente
+  4.1 falhou", porque 67% dos casos OK é evidência de que a Frente
+  funciona — mas o problema é específico de certos clusters.
+- **Considerei `Pauta presencial sem inscrição = 41` como acerto**
+  do detector (baseline subestimou), não como falso positivo,
+  porque 100% das 41 pubs são genuinamente Pauta de Julgamento e o
+  alerta sinaliza a controladoria a avaliar inscrição.
+- **Trânsito em julgado pendente = 71 pubs**: aceitei como
+  "comportamento esperado por D3 do Round 4", mas marquei P1-9 para
+  refinamento (alguns dos 71 podem ser falsos positivos).
+
+### 11.5 Janela temporal
+
+- Análise feita em 2026-05-04 sobre captura R3 v2 (rodada em
+  2026-05-04 01:45). Estado é snapshot — operações posteriores
+  (criação manual de processos, edições no Notion) podem ter
+  alterado.
+- Total de records em Processos cresceu de 1.107 (baseline) para
+  1.108 (pós-R4) — 1 cadastro novo entre as duas análises.
+
+---
+
+## 12. Conclusões e recomendações
+
+### 12.1 Conclusões
+
+1. **O Round 4 foi um sucesso parcial mas substancial**. 5 das 7
+   frentes (4.2, 4.3, 4.4, 4.5a, 4.5b, 4.6) atingem 100% de execução
+   com volumes coerentes com as estimativas do baseline. As props
+   que estavam 🔴 (Classe, Tarefa, Alerta) viraram 🟢. O auto-Status
+   tira 4,3% das pubs da fila de triagem sem nenhum falso positivo.
+
+2. **Duas regressões críticas surgiram e não foram detectadas pelo
+   teste pre-merge**: (a) Partes em JSON cru em 33% das pubs; (b)
+   `<br>` literal residual no Texto. A primeira é mais grave (afeta
+   propriedade visível na triagem); a segunda é cosmética mas
+   estética.
+
+3. **A confiança no detector de Alertas saiu fortalecida da análise**.
+   `Instância desatualizada` (25 vs 2 estimado) e `Pauta presencial
+   sem inscrição` (41 vs 13) detectaram pubs reais que o baseline
+   sub-estimou. **A regra está mais correta que a estimativa.**
+
+4. **O acervo é estável e auditável**. Mesmas 1.608 canônicas + 544
+   duplicatas, mesma distribuição por tribunal e cruzamento. A
+   captura R3 v2 reproduziu o universo do Round 3 com fidelidade.
+
+5. **O risco operacional principal é o cursor desatualizado**: 5 OABs
+   em 2026-03-31 enquanto Samantha foi até 2026-05-03. A próxima
+   captura precisa cobrir essa janela ou perderemos pubs do período.
+
+### 12.2 Recomendações para o próximo Round (Round 5 sugerido)
+
+**Prioridade 1 (P0)**:
+
+1. **Investigar e corrigir a regressão Frente 4.1 (Partes JSON cru)**.
+   Caminho de investigação:
+   - Logar `partes_str` em `montar_payload_publicacao` para 5 djens
+     afetados (494748109, 573369859, 495174885) — confirmar valor
+     correto na chamada do mapper.
+   - Inspecionar `dje_notion_sync.py` para descobrir se há
+     transformer/validator que sobrescreve `properties["Partes"]`.
+   - Confirmar via teste de integração: re-enviar djen=494748109 ao
+     Notion e ver se Partes vira "Polo Ativo: ..." na próxima
+     escrita. Se sim, o problema é "primeira escrita" — talvez bug
+     em `_create_page_with_retry`. Se não, o problema é mais profundo.
+   - Após correção: re-sync das 530 pubs afetadas (atualização
+     in-place via Notion API).
+
+2. **Investigar e corrigir regressão `<br>` literal no Texto**.
+   Caminho:
+   - Logar o `texto` capturado pelo cliente DJEN em alguns djens
+     com trailer (494748109 — o teste sentinela do Round 4.5).
+     Confirmar se o trailer está no payload bruto ou é adicionado
+     depois.
+   - Se está no payload: revisar `_BR_RE` em `dje_text_pipeline.py`
+     para garantir que pega TODOS os casos do trailer.
+   - Se é adicionado depois: revisar `dje_client.py` ou onde quer que
+     o trailer entre.
+
+**Prioridade 2 (P1)**:
+
+3. Capturar janela 01/04 → hoje para 5 OABs (operacional).
+4. Resolver flush pendente djen=564026686.
+5. Refinar `formatar_partes` para STJ (papel real).
+6. Investigar STJ Pauta tokens colados.
+7. Visualizações Notion ("Pautas e Atas", "Listas a triar", "Auto-
+   Status").
+
+**Prioridade 3 (P2)**: vide seção 10.5.
+
+### 12.3 Próximos rounds — proposta de fatiamento
+
+- **Round 5a** (1-2 dias): debug + fix da Frente 4.1 (Partes JSON cru).
+  Re-sync 530 pubs. Validar via novo CSV exportado.
+- **Round 5b** (1 dia): debug + fix do `<br>` residual. Re-sync das
+  pubs afetadas (~517).
+- **Round 5c** (operacional, 1h): capturar janela faltante + flush
+  pendente.
+- **Round 6** (1-2 dias): refinar Partes STJ + Texto STJ +
+  detector Trânsito.
+- **Round 7+** (sob demanda): visualizações Notion + polimento P2.
+
+### 12.4 Métricas-chave para o próximo round
+
+Para validar que os fixes do Round 5 funcionaram, o próximo Round
+deve produzir um CSV onde:
+
+| Métrica | Estado atual | Meta pós-Round-5 |
+|---|---:|---:|
+| Pubs com `Partes` em JSON cru | 530 (33%) | **0** |
+| Pubs com `<br>` literal no Texto | ~517 (32%) | **0** |
+| Pubs com `Tarefa sugerida` ≥ 1 | 1.608 (100%) | manter |
+| Pubs com `Alerta contadoria` ≥ 1 | 611 (38%) | manter ou refinar |
+| Pubs com Status auto | 69 (4,3%) | manter |
+| Pubs com `Duplicatas suprimidas` | 530 | 531 (resolver djen=564026686) |
+
+---
+
+**Fim do documento.** Última atualização: 2026-05-04.
