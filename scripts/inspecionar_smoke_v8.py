@@ -1,21 +1,26 @@
-"""Round 6 (2026-05-04) — Inspeção do smoke test (Passo G).
+"""Inspeção do smoke test das regras v8 (Round 6 + Round 7).
 
 Cruza ``leitor_dje.db`` (SQLite local pós-captura) com a database
 ``📬 Publicações`` no Notion (via ``NotionClient.query_all`` — mesmo
 cliente usado pelo app PySide6 para gravar). Gera relatório Markdown
-estruturado em ``logs/smoke_round_6_<timestamp>.md`` com 7 seções:
+estruturado em ``logs/smoke_v8_<timestamp>.md`` com 7 seções:
 
 1. Totais (SQLite × Notion + diferença).
 2. Distribuição por par (Tipo de comunicação × Tipo de documento).
 3. Camada base — validação por regra (40-43).
-4. Regras de monitoramento — disparos (12 regras + alertas técnicos).
+4. Regras de monitoramento — disparos (39 entradas cobrindo 41 das 43
+   regras v8: 16 do Round 6 + 23 do Round 7).
 5. Composição (pubs com 2+ alertas).
 6. Auditoria de valores depreciados (D.01-D.03, E.01/02/04, "Pauta
    presencial sem inscrição", "Instância desatualizada" sem qualif).
-7. Schema observado (cruzando com vocabulário canônico v8).
+7. Schema observado (cruzando com vocabulário canônico v8 — 3 tarefas
+   + 41 alertas).
+
+Regras 25 (troca de relator sequencial) e 37 (inatividade prolongada
+PREVI/RESP) ficam fora — exigem histórico de pubs anteriores.
 
 Uso:
-    python scripts/inspecionar_smoke_round_6.py [--verbose] [--no-notion]
+    python scripts/inspecionar_smoke_v8.py [--verbose] [--no-notion]
 
 Read-only: zero escrita em Notion ou SQLite. Idempotente.
 """
@@ -42,6 +47,22 @@ from notion_rpadv.services.dje_notion_constants import (  # noqa: E402
 )
 from notion_rpadv.services.dje_regras_v8 import (  # noqa: E402
     ALERTA_ACORDAO_EM_1GRAU,
+    ALERTA_ATIVIDADE_EM_PROCESSO_ARQUIVADO,
+    ALERTA_ATIVIDADE_POS_ENCERRAMENTO_EXECUTIVO,
+    ALERTA_CAPTURAR_DATA_DISTRIBUICAO,
+    ALERTA_CAPTURAR_LINK_EXTERNO,
+    ALERTA_CAPTURAR_NUMERACAO_STF,
+    ALERTA_CAPTURAR_NUMERACAO_STJ_TST,
+    ALERTA_CIDADE_DESATUALIZADA,
+    ALERTA_CONFERIR_DATA_DISTRIBUICAO,
+    ALERTA_CONFERIR_NATUREZA_PROCESSO,
+    ALERTA_CONFERIR_NUMERO_CNJ,
+    ALERTA_CONFERIR_POSICAO_DO_CLIENTE,
+    ALERTA_CONFERIR_SENTENCA_FASE_POS_COGNITIVA,
+    ALERTA_CONFERIR_TEMA_955,
+    ALERTA_CONFERIR_TIPO_PROCESSO,
+    ALERTA_CONFERIR_TRIBUNAL_ORIGEM,
+    ALERTA_CONFERIR_VINCULACAO_CLIENTE_PROCESSO,
     ALERTA_FASE_DESATUALIZADA_COGNITIVA,
     ALERTA_FASE_DESATUALIZADA_EXECUTIVA,
     ALERTA_FASE_DESATUALIZADA_LIQUIDACAO,
@@ -54,11 +75,18 @@ from notion_rpadv.services.dje_regras_v8 import (  # noqa: E402
     ALERTA_PARTE_ADVERSA_CASSI,
     ALERTA_PARTE_ADVERSA_PREVI,
     ALERTA_PAUTA_EM_1GRAU,
+    ALERTA_PAUTA_EM_PROCESSO_ARQUIVADO,
     ALERTA_PROCESSO_NAO_CADASTRADO,
     ALERTA_PROCESSO_RECURSO_DISTRIBUIDO,
+    ALERTA_RECURSO_AUTONOMO_SEM_PROCESSO_PAI,
+    ALERTA_RELATOR_DESATUALIZADO,
     ALERTA_SENTENCA_EM_COLEGIADO,
     ALERTA_TEXTO_IMPRESTAVEL,
     ALERTA_TRANSITO_PENDENTE,
+    ALERTA_TRIBUNAL_FORA_VOCABULARIO,
+    ALERTA_TURMA_DESATUALIZADA,
+    ALERTA_VARA_DESATUALIZADA,
+    ALERTA_VINCULAR_CLIENTE_AO_PROCESSO,
     TAREFA_ANALISAR_ACORDAO,
     TAREFA_ANALISAR_SENTENCA,
     TAREFA_NADA_PARA_FAZER,
@@ -401,25 +429,74 @@ def _md_section_camada_base(pubs_notion: list[dict]) -> str:
 # Seção 4 — Regras de monitoramento
 # ---------------------------------------------------------------------------
 
-#: Definição de cada regra de monitoramento implementada no Round 6.
-#: (alerta_canonico, descricao_curta)
+#: Definição de cada regra de monitoramento implementada (Round 6 + Round 7).
+#: (alerta_canonico, descricao_curta) — agrupadas por sub-round/seção da v8.
+#: Para regras que compartilham alerta (ex: R4+R5 → "Conferir natureza"),
+#: a contagem aparecerá igual em ambas as linhas — é o mesmo alerta no Notion.
 REGRAS_MONITORAMENTO: list[tuple[str, str]] = [
-    (ALERTA_INSTANCIA_DESATUALIZADA_SUBIDA, "Regra 14 — Subida de instância não detectada"),
-    (ALERTA_INSTANCIA_DESATUALIZADA_DESCIDA, "Regra 15 — Descida de instância não detectada"),
+    # --- Round 6 ---
+    # Identificação categórica (impossibilidades)
     (ALERTA_ACORDAO_EM_1GRAU, "Regra 16 — Acórdão em processo de 1º grau (impossível)"),
     (ALERTA_SENTENCA_EM_COLEGIADO, "Regra 17 — Sentença em colegiado (impossível)"),
     (ALERTA_PAUTA_EM_1GRAU, "Regra 18 — Pauta em processo de 1º grau (impossível)"),
+    # Instância (subida/descida)
+    (ALERTA_INSTANCIA_DESATUALIZADA_SUBIDA, "Regra 14 — Subida de instância não detectada"),
+    (ALERTA_INSTANCIA_DESATUALIZADA_DESCIDA, "Regra 15 — Descida de instância não detectada"),
+    # Fase
     (ALERTA_FASE_DESATUALIZADA_EXECUTIVA, "Regra 26 — Fase executiva confirmada por classe"),
     (ALERTA_FASE_DESATUALIZADA_LIQUIDACAO, "Regra 27 — Fase liquidação confirmada por classe"),
     (ALERTA_FASE_DESATUALIZADA_COGNITIVA, "Regra 28 — Fase cognitiva contradita por classe avançada"),
+    # Trânsito
     (ALERTA_TRANSITO_PENDENTE, "Regra 35 — Trânsito cognitivo pendente"),
+    # Partes adversas (Regra 11 — 5 alertas distintos)
     (ALERTA_PARTE_ADVERSA_BB, "Regra 11 — Banco do Brasil ausente em partes adversas"),
     (ALERTA_PARTE_ADVERSA_PREVI, "Regra 11 — PREVI ausente em partes adversas"),
     (ALERTA_PARTE_ADVERSA_CASSI, "Regra 11 — CASSI ausente em partes adversas"),
     (ALERTA_PARTE_ADVERSA_BRADESCO_SAUDE, "Regra 11 — Bradesco Saúde ausente em partes adversas"),
     (ALERTA_PARTE_ADVERSA_BB_CONSORCIOS, "Regra 11 — BB Adm. Consórcios ausente em partes adversas"),
+    # Técnicos / operacionais (sem número formal)
     (ALERTA_TEXTO_IMPRESTAVEL, "Técnico — Texto imprestável (sem regra numerada na v8)"),
     (ALERTA_PROCESSO_NAO_CADASTRADO, "Operacional — Processo não cadastrado (não dispara em distribuição)"),
+
+    # --- Round 7a — Tribunal e numerações superiores ---
+    (ALERTA_CAPTURAR_NUMERACAO_STJ_TST, "Regra 2 — Capturar numeração STJ/TST"),
+    (ALERTA_CAPTURAR_NUMERACAO_STF, "Regra 3 — Capturar numeração STF"),
+    (ALERTA_TRIBUNAL_FORA_VOCABULARIO, "Regra 12 — Tribunal fora do vocabulário"),
+    (ALERTA_CONFERIR_TRIBUNAL_ORIGEM, "Regra 13 — Conferir tribunal de origem"),
+
+    # --- Round 7b — Classificação processual + processo pai ---
+    # R4 e R5 disparam o MESMO alerta — duas entradas mostram a mesma
+    # contagem; é o conjunto de pubs com Conferir natureza, vindo de
+    # qualquer um dos dois critérios (Tribunal ou Classe).
+    (ALERTA_CONFERIR_NATUREZA_PROCESSO, "Regras 4+5 — Conferir natureza do processo (vs Tribunal/Classe)"),
+    (ALERTA_CONFERIR_TIPO_PROCESSO, "Regra 6 — Conferir tipo de processo (recurso autônomo cadastrado como Principal)"),
+    (ALERTA_RECURSO_AUTONOMO_SEM_PROCESSO_PAI, "Regra 39 — Recurso autônomo sem processo pai"),
+
+    # --- Round 7c — Estado processual + link ---
+    (ALERTA_CONFERIR_SENTENCA_FASE_POS_COGNITIVA, "Regra 29 — Conferir sentença em fase pós-cognitiva"),
+    (ALERTA_PAUTA_EM_PROCESSO_ARQUIVADO, "Regra 30 — Pauta em processo arquivado"),
+    (ALERTA_ATIVIDADE_EM_PROCESSO_ARQUIVADO, "Regra 31 — Atividade em processo arquivado"),
+    (ALERTA_CAPTURAR_LINK_EXTERNO, "Regra 38 — Capturar link externo"),
+
+    # --- Round 7d — Cliente e posição ---
+    # R7 e R8 compartilham alerta (mesma ação operacional: vincular cliente).
+    (ALERTA_VINCULAR_CLIENTE_AO_PROCESSO, "Regras 7+8 — Vincular cliente ao processo (cliente fora ou litisconsórcio)"),
+    (ALERTA_CONFERIR_VINCULACAO_CLIENTE_PROCESSO, "Regra 9 — Conferir vinculação cliente-processo"),
+    (ALERTA_CONFERIR_POSICAO_DO_CLIENTE, "Regra 10 — Conferir posição do cliente (em 1º grau)"),
+
+    # --- Round 7e — Localização (Cidade, Vara, Turma, Relator) ---
+    # R19+R20 e R21+R22 compartilham alertas (ações idênticas: extrair/conferir).
+    (ALERTA_CIDADE_DESATUALIZADA, "Regras 19+20 — Cidade desatualizada (faltando ou divergente)"),
+    (ALERTA_VARA_DESATUALIZADA, "Regras 21+22 — Vara desatualizada (faltando ou divergente)"),
+    (ALERTA_TURMA_DESATUALIZADA, "Regra 23 — Turma desatualizada"),
+    (ALERTA_RELATOR_DESATUALIZADO, "Regra 24 — Relator desatualizado"),
+
+    # --- Round 7f — CNJ + Tema 955 + datas ---
+    (ALERTA_CONFERIR_NUMERO_CNJ, "Regra 1 — Conferir número CNJ do processo"),
+    (ALERTA_CONFERIR_TEMA_955, "Regra 32 — Conferir Tema 955"),
+    (ALERTA_CAPTURAR_DATA_DISTRIBUICAO, "Regra 33 — Capturar data de distribuição"),
+    (ALERTA_CONFERIR_DATA_DISTRIBUICAO, "Regra 34 — Conferir data de distribuição (≥30 dias antes)"),
+    (ALERTA_ATIVIDADE_POS_ENCERRAMENTO_EXECUTIVO, "Regra 36 — Atividade pós-encerramento executivo"),
 ]
 
 
@@ -433,7 +510,16 @@ def _md_section_monitoramento(pubs_notion: list[dict]) -> str:
     lines = [
         "## Regras de monitoramento — disparos",
         "",
-        "12 regras de monitoramento implementadas no Round 6 (Regras 11, 14-18, 26-28, 35) + 2 alertas técnicos/operacionais mantidos.",
+        "**39 entradas** cobrindo 39 alertas distintos das 41 das 43 regras v8 implementadas:",
+        "",
+        "- Round 6 (16 entradas): Regras 11×5, 14, 15, 16, 17, 18, 26, 27, 28, 35 + Texto imprestável + Processo não cadastrado.",
+        "- Round 7 (23 entradas): Regras 1, 2, 3, 4+5, 6, 7+8, 9, 10, 12, 13, 19+20, 21+22, 23, 24, 29, 30, 31, 32, 33, 34, 36, 38, 39.",
+        "",
+        "Regras 25 (troca de relator sequencial) e 37 (inatividade prolongada PREVI/RESP) ficam fora — exigem histórico de pubs anteriores.",
+        "",
+        "Algumas linhas reportam **regras múltiplas** que compartilham alerta (R4+R5 → Conferir natureza; R7+R8 → Vincular cliente; R19+R20 → Cidade desatualizada; R21+R22 → Vara desatualizada). Nesses casos a contagem é por alerta no Notion, não por critério individual de gatilho.",
+        "",
+        "Dos 41 alertas do select v8, 39 são monitoramento (listados abaixo) + 2 da camada base (Processo/recurso distribuído na R40 e Incluir julgamento no controle na R41 — validados na Seção 3).",
         "",
         "| Regra / Alerta | Disparos | Exemplos (até 3 IDs DJEN) |",
         "|---|---:|---|",
@@ -593,17 +679,18 @@ def main() -> int:
     timestamp = datetime.now().strftime("%Y-%m-%d-%H%M")
     logs_dir = _REPO / "logs"
     logs_dir.mkdir(exist_ok=True)
-    out_path = logs_dir / f"smoke_round_6_{timestamp}.md"
+    out_path = logs_dir / f"smoke_v8_{timestamp}.md"
 
-    cmd = "python scripts/inspecionar_smoke_round_6.py"
+    cmd = "python scripts/inspecionar_smoke_v8.py"
     if args.verbose:
         cmd += " --verbose"
     if args.no_notion:
         cmd += " --no-notion"
     header = [
-        f"# Smoke test Round 6 — relatório de inspeção ({timestamp})",
+        f"# Smoke test v8 (Rounds 6+7) — relatório de inspeção ({timestamp})",
         "",
-        "- Branch: `feat/regras-v9`",
+        "- Cobertura: 41/43 regras v8 (Rounds 6+7 mergeados em main; "
+        "Regras 25 e 37 deferred — exigem histórico)",
         f"- Comando: `{cmd}`",
         f"- SQLite: `{db}`",
         f"- Notion: {notion_status}",
