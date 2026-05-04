@@ -95,6 +95,14 @@ ALERTA_CONFERIR_TIPO_PROCESSO: str = "Conferir tipo de processo"
 # Regra 39 — Recurso autônomo sem processo pai
 ALERTA_RECURSO_AUTONOMO_SEM_PROCESSO_PAI: str = "Recurso autônomo sem processo pai"
 
+# Regras 29-31 — Estado processual (fase, arquivado)
+ALERTA_CONFERIR_SENTENCA_FASE_POS_COGNITIVA: str = "Conferir sentença em fase pós-cognitiva"
+ALERTA_PAUTA_EM_PROCESSO_ARQUIVADO: str = "Pauta em processo arquivado"
+ALERTA_ATIVIDADE_EM_PROCESSO_ARQUIVADO: str = "Atividade em processo arquivado"
+
+# Regra 38 — Link externo
+ALERTA_CAPTURAR_LINK_EXTERNO: str = "Capturar link externo"
+
 # Alertas mantidos do Round 4 (técnicos/operacionais — sem número no doc v8)
 ALERTA_PROCESSO_NAO_CADASTRADO: str = "Processo não cadastrado"
 ALERTA_TEXTO_IMPRESTAVEL: str = "Texto imprestável"
@@ -211,6 +219,14 @@ FASE_COGNITIVA: str = "Cognitiva"
 FASE_LIQUIDACAO: str = "Liquidação de sentença"
 FASE_LIQUIDACAO_PENDENTE: str = "Liquidação pendente"
 FASE_EXECUTIVA: str = "Executiva"
+
+# ---------------------------------------------------------------------------
+# Status processual (Proc.status)
+# ---------------------------------------------------------------------------
+
+STATUS_ATIVO: str = "Ativo"
+STATUS_ARQUIVADO: str = "Arquivado"
+STATUS_ARQUIVADO_TEMA_955: str = "Arquivado provisoriamente (tema 955)"
 
 #: Classes que indicam fase cognitiva (peças iniciais do processo).
 _CLASSES_COGNITIVAS: frozenset[str] = frozenset({
@@ -549,6 +565,103 @@ def regra_39_recurso_autonomo_sem_processo_pai(
     elif pai:
         return None
     return ALERTA_RECURSO_AUTONOMO_SEM_PROCESSO_PAI
+
+
+def regra_29_sentenca_em_fase_pos_cognitiva(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+) -> str | None:
+    """Regra 29 — Sentença em fase pós-cognitiva.
+
+    - Condições: ``Pub.Tipo de documento canônico = Sentença`` **e**
+      ``Proc.fase IN (Executiva, Liquidação de sentença)``.
+    - Alerta: ``Conferir sentença em fase pós-cognitiva``.
+    - Explicação: pode ser sentença legítima (embargos à execução,
+      impugnação) — não é erro automático. Disparar revisão manual
+      antes de alterar fase. Note que Regra 17 (Sentença em colegiado)
+      é mais grave (impossibilidade categórica) e dispara em paralelo
+      quando aplicável.
+    """
+    if processo_record is None:
+        return None
+    tipo_doc = mapear_tipo_documento(publicacao.get("tipoDocumento"))
+    if tipo_doc != "Sentença":
+        return None
+    fase_proc = (processo_record.get("fase") or "").strip()
+    if fase_proc in (FASE_EXECUTIVA, FASE_LIQUIDACAO):
+        return ALERTA_CONFERIR_SENTENCA_FASE_POS_COGNITIVA
+    return None
+
+
+def regra_30_pauta_em_processo_arquivado(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+) -> str | None:
+    """Regra 30 — Pauta em processo arquivado.
+
+    - Condições: ``Pub.Tipo de documento canônico = Pauta de Julgamento``
+      **e** ``Proc.status = "Arquivado"``.
+    - Alerta: ``Pauta em processo arquivado``.
+    - Explicação: não se pauta processo arquivado — ou voltou
+      (status precisa atualizar para Ativo), ou nunca esteve arquivado
+      (cadastro errado). Match exato em "Arquivado" (não inclui
+      "Arquivado provisoriamente (tema 955)").
+    """
+    if processo_record is None:
+        return None
+    tipo_doc = mapear_tipo_documento(publicacao.get("tipoDocumento"))
+    if tipo_doc != "Pauta de Julgamento":
+        return None
+    status = (processo_record.get("status") or "").strip()
+    if status == STATUS_ARQUIVADO:
+        return ALERTA_PAUTA_EM_PROCESSO_ARQUIVADO
+    return None
+
+
+def regra_31_atividade_em_processo_arquivado(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+) -> str | None:
+    """Regra 31 — Atividade em processo arquivado.
+
+    - Condições: qualquer publicação **e** ``Proc.status = "Arquivado"``.
+    - Alerta: ``Atividade em processo arquivado``.
+    - Explicação: processos arquivados em tese não recebem comunicações.
+      Heurística com possíveis exceções (alvarás finais, certidões
+      remanescentes); revisar caso a caso. Não dispara em "Arquivado
+      provisoriamente (tema 955)" (esses retomarão atividade quando o
+      tema for julgado).
+    """
+    if processo_record is None:
+        return None
+    status = (processo_record.get("status") or "").strip()
+    if status == STATUS_ARQUIVADO:
+        return ALERTA_ATIVIDADE_EM_PROCESSO_ARQUIVADO
+    return None
+
+
+def regra_38_capturar_link_externo(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+) -> str | None:
+    """Regra 38 — Link externo vazio.
+
+    - Condições: ``Proc.link_externo`` vazio **e** ``Pub.Link``
+      populado.
+    - Alerta: ``Capturar link externo``.
+    - Explicação: sugerir construção heurística de URL para o processo
+      a partir do domínio do ``Pub.Link`` + CNJ. Não prioritário —
+      mais um auxílio operacional do que um erro a corrigir.
+    """
+    if processo_record is None:
+        return None
+    link_proc = (processo_record.get("link_externo") or "").strip()
+    if link_proc:
+        return None
+    link_pub = (publicacao.get("link") or "").strip()
+    if not link_pub:
+        return None
+    return ALERTA_CAPTURAR_LINK_EXTERNO
 
 
 def regra_2_capturar_numeracao_stj_tst(
@@ -1097,12 +1210,14 @@ def aplicar_regras_monitoramento(
 
     Round 7a — Regras 2, 3, 12, 13 (Tribunal e numerações superiores).
 
-    Round 7b — implementadas neste commit:
+    Round 7b — Regras 4, 5, 6, 39 (Classificação processual + processo pai).
 
-    - Regra 4 (Natureza inconsistente com Tribunal).
-    - Regra 5 (Natureza inconsistente com Classe).
-    - Regra 6 (Recurso autônomo cadastrado como Principal).
-    - Regra 39 (Recurso autônomo sem processo pai).
+    Round 7c — implementadas neste commit:
+
+    - Regra 29 (Sentença em fase pós-cognitiva).
+    - Regra 30 (Pauta em processo arquivado).
+    - Regra 31 (Atividade em processo arquivado).
+    - Regra 38 (Capturar link externo).
 
     Pendentes (a serem acrescentadas em commits subsequentes):
 
@@ -1110,7 +1225,7 @@ def aplicar_regras_monitoramento(
     - Regras 7-9 (Cliente do escritório).
     - Regra 10 (Posição do cliente).
     - Regras 19-25 (Cidade, Vara, Turma, Relator).
-    - Regras 29-34, 36-38 (demais de Estado processual + outros).
+    - Regras 32-34, 36, 37 (datas, sobrestamento, encerramento executivo).
     """
     candidatos: list[str | None] = [
         regra_2_capturar_numeracao_stj_tst(publicacao, processo_record),
@@ -1128,7 +1243,11 @@ def aplicar_regras_monitoramento(
         regra_26_fase_executiva_por_classe(publicacao, processo_record),
         regra_27_fase_liquidacao_por_classe(publicacao, processo_record),
         regra_28_fase_cognitiva_contradita_por_classe(publicacao, processo_record),
+        regra_29_sentenca_em_fase_pos_cognitiva(publicacao, processo_record),
+        regra_30_pauta_em_processo_arquivado(publicacao, processo_record),
+        regra_31_atividade_em_processo_arquivado(publicacao, processo_record),
         regra_35_transito_pendente(publicacao, processo_record),
+        regra_38_capturar_link_externo(publicacao, processo_record),
         regra_39_recurso_autonomo_sem_processo_pai(publicacao, processo_record),
         regra_texto_imprestavel(publicacao, processo_record),
         regra_processo_nao_cadastrado(publicacao, processo_record),

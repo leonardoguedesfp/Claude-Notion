@@ -16,9 +16,12 @@ from __future__ import annotations
 
 from notion_rpadv.services.dje_regras_v8 import (
     ALERTA_ACORDAO_EM_1GRAU,
+    ALERTA_ATIVIDADE_EM_PROCESSO_ARQUIVADO,
+    ALERTA_CAPTURAR_LINK_EXTERNO,
     ALERTA_CAPTURAR_NUMERACAO_STF,
     ALERTA_CAPTURAR_NUMERACAO_STJ_TST,
     ALERTA_CONFERIR_NATUREZA_PROCESSO,
+    ALERTA_CONFERIR_SENTENCA_FASE_POS_COGNITIVA,
     ALERTA_CONFERIR_TIPO_PROCESSO,
     ALERTA_CONFERIR_TRIBUNAL_ORIGEM,
     ALERTA_FASE_DESATUALIZADA_COGNITIVA,
@@ -32,6 +35,7 @@ from notion_rpadv.services.dje_regras_v8 import (
     ALERTA_PARTE_ADVERSA_CASSI,
     ALERTA_PARTE_ADVERSA_PREVI,
     ALERTA_PAUTA_EM_1GRAU,
+    ALERTA_PAUTA_EM_PROCESSO_ARQUIVADO,
     ALERTA_PROCESSO_NAO_CADASTRADO,
     ALERTA_RECURSO_AUTONOMO_SEM_PROCESSO_PAI,
     ALERTA_SENTENCA_EM_COLEGIADO,
@@ -65,7 +69,11 @@ from notion_rpadv.services.dje_regras_v8 import (
     regra_26_fase_executiva_por_classe,
     regra_27_fase_liquidacao_por_classe,
     regra_28_fase_cognitiva_contradita_por_classe,
+    regra_29_sentenca_em_fase_pos_cognitiva,
+    regra_30_pauta_em_processo_arquivado,
+    regra_31_atividade_em_processo_arquivado,
     regra_35_transito_pendente,
+    regra_38_capturar_link_externo,
     regra_39_recurso_autonomo_sem_processo_pai,
     regra_processo_nao_cadastrado,
     regra_texto_imprestavel,
@@ -1155,3 +1163,143 @@ def test_R7b_composicao_AI_recurso_autonomo_sem_pai_dispara_R39() -> None:
     alertas = aplicar_regras_monitoramento(pub, proc)
     assert ALERTA_CONFERIR_TIPO_PROCESSO not in alertas
     assert ALERTA_RECURSO_AUTONOMO_SEM_PROCESSO_PAI in alertas
+
+
+# ===========================================================================
+# Round 7c — Regra 29: Sentença em fase pós-cognitiva
+# ===========================================================================
+
+
+def test_R7c_R29_dispara_sentenca_em_fase_executiva() -> None:
+    pub = _pub(tipoDocumento="Sentença")
+    proc = _proc(instancia=INSTANCIA_PRIMEIRO_GRAU, fase=FASE_EXECUTIVA)
+    assert regra_29_sentenca_em_fase_pos_cognitiva(pub, proc) == ALERTA_CONFERIR_SENTENCA_FASE_POS_COGNITIVA
+
+
+def test_R7c_R29_dispara_sentenca_em_fase_liquidacao() -> None:
+    pub = _pub(tipoDocumento="Sentença")
+    proc = _proc(instancia=INSTANCIA_PRIMEIRO_GRAU, fase=FASE_LIQUIDACAO)
+    assert regra_29_sentenca_em_fase_pos_cognitiva(pub, proc) == ALERTA_CONFERIR_SENTENCA_FASE_POS_COGNITIVA
+
+
+def test_R7c_R29_NAO_dispara_em_fase_cognitiva() -> None:
+    pub = _pub(tipoDocumento="Sentença")
+    proc = _proc(instancia=INSTANCIA_PRIMEIRO_GRAU, fase=FASE_COGNITIVA)
+    assert regra_29_sentenca_em_fase_pos_cognitiva(pub, proc) is None
+
+
+def test_R7c_R29_NAO_dispara_para_outros_tipos() -> None:
+    proc = _proc(instancia=INSTANCIA_PRIMEIRO_GRAU, fase=FASE_EXECUTIVA)
+    for tipo in ("Acórdão", "Decisão", "Despacho", "Pauta de Julgamento"):
+        pub = _pub(tipoDocumento=tipo)
+        assert regra_29_sentenca_em_fase_pos_cognitiva(pub, proc) is None, tipo
+
+
+# ===========================================================================
+# Round 7c — Regra 30: Pauta em processo arquivado
+# ===========================================================================
+
+
+def test_R7c_R30_dispara_pauta_em_arquivado() -> None:
+    pub = _pub(tipoDocumento="Pauta de Julgamento")
+    proc = _proc(instancia=INSTANCIA_SEGUNDO_GRAU, status="Arquivado")
+    assert regra_30_pauta_em_processo_arquivado(pub, proc) == ALERTA_PAUTA_EM_PROCESSO_ARQUIVADO
+
+
+def test_R7c_R30_NAO_dispara_em_ativo() -> None:
+    pub = _pub(tipoDocumento="Pauta de Julgamento")
+    proc = _proc(instancia=INSTANCIA_SEGUNDO_GRAU, status="Ativo")
+    assert regra_30_pauta_em_processo_arquivado(pub, proc) is None
+
+
+def test_R7c_R30_NAO_dispara_em_arquivado_tema955() -> None:
+    """Match exato em 'Arquivado' — não pega 'Arquivado provisoriamente
+    (tema 955)' (esses retomarão atividade quando o tema for julgado)."""
+    pub = _pub(tipoDocumento="Pauta de Julgamento")
+    proc = _proc(instancia=INSTANCIA_SEGUNDO_GRAU, status="Arquivado provisoriamente (tema 955)")
+    assert regra_30_pauta_em_processo_arquivado(pub, proc) is None
+
+
+def test_R7c_R30_NAO_dispara_para_outros_tipos() -> None:
+    proc = _proc(instancia=INSTANCIA_SEGUNDO_GRAU, status="Arquivado")
+    for tipo in ("Acórdão", "Decisão", "Sentença", "Despacho"):
+        pub = _pub(tipoDocumento=tipo)
+        assert regra_30_pauta_em_processo_arquivado(pub, proc) is None, tipo
+
+
+# ===========================================================================
+# Round 7c — Regra 31: Atividade em processo arquivado
+# ===========================================================================
+
+
+def test_R7c_R31_dispara_qualquer_pub_em_arquivado() -> None:
+    """Heurística: qualquer atividade em processo arquivado é suspeita."""
+    proc = _proc(instancia=INSTANCIA_PRIMEIRO_GRAU, status="Arquivado")
+    for tipo in ("Acórdão", "Decisão", "Despacho", "Notificação"):
+        pub = _pub(tipoDocumento=tipo)
+        assert regra_31_atividade_em_processo_arquivado(pub, proc) == ALERTA_ATIVIDADE_EM_PROCESSO_ARQUIVADO, tipo
+
+
+def test_R7c_R31_NAO_dispara_em_ativo() -> None:
+    proc = _proc(status="Ativo")
+    assert regra_31_atividade_em_processo_arquivado(_pub(), proc) is None
+
+
+def test_R7c_R31_NAO_dispara_em_arquivado_tema955() -> None:
+    proc = _proc(status="Arquivado provisoriamente (tema 955)")
+    assert regra_31_atividade_em_processo_arquivado(_pub(), proc) is None
+
+
+def test_R7c_R31_NAO_dispara_sem_processo_cadastrado() -> None:
+    assert regra_31_atividade_em_processo_arquivado(_pub(), None) is None
+
+
+# ===========================================================================
+# Round 7c — Regra 38: Capturar link externo
+# ===========================================================================
+
+
+def test_R7c_R38_dispara_link_proc_vazio_pub_populado() -> None:
+    pub = _pub(link="https://pje.trt10.jus.br/pjekz/...")
+    proc = _proc(link_externo="")
+    assert regra_38_capturar_link_externo(pub, proc) == ALERTA_CAPTURAR_LINK_EXTERNO
+
+
+def test_R7c_R38_NAO_dispara_se_proc_link_populado() -> None:
+    pub = _pub(link="https://pje.trt10.jus.br/")
+    proc = _proc(link_externo="https://existing.example.com/proc")
+    assert regra_38_capturar_link_externo(pub, proc) is None
+
+
+def test_R7c_R38_NAO_dispara_se_pub_link_vazio() -> None:
+    pub = _pub(link="")
+    proc = _proc(link_externo="")
+    assert regra_38_capturar_link_externo(pub, proc) is None
+
+
+def test_R7c_R38_NAO_dispara_sem_processo_cadastrado() -> None:
+    pub = _pub(link="https://pje.trt10.jus.br/")
+    assert regra_38_capturar_link_externo(pub, None) is None
+
+
+# ===========================================================================
+# Composição Round 7c — Pauta em arquivado dispara R30 + R31 + camada base
+# ===========================================================================
+
+
+def test_R7c_composicao_pauta_arquivado_dispara_R30_R31_R41() -> None:
+    """Pauta de Julgamento em processo arquivado:
+    - Camada base (Regra 41) → Tarefa: Nada para fazer + Alerta: Incluir julgamento
+    - Regra 30 → Pauta em processo arquivado
+    - Regra 31 → Atividade em processo arquivado
+    """
+    pub = _pub(
+        tipoComunicacao="Edital",
+        tipoDocumento="Pauta de Julgamento",
+    )
+    proc = _proc(instancia=INSTANCIA_SEGUNDO_GRAU, status="Arquivado")
+    tarefas, alertas = aplicar_todas_regras(pub, proc)
+    assert tarefas == ["Nada para fazer"]
+    assert "Incluir julgamento no controle" in alertas  # camada base R41
+    assert ALERTA_PAUTA_EM_PROCESSO_ARQUIVADO in alertas
+    assert ALERTA_ATIVIDADE_EM_PROCESSO_ARQUIVADO in alertas
