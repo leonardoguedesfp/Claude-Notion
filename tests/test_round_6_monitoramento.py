@@ -16,6 +16,9 @@ from __future__ import annotations
 
 from notion_rpadv.services.dje_regras_v8 import (
     ALERTA_ACORDAO_EM_1GRAU,
+    ALERTA_CAPTURAR_NUMERACAO_STF,
+    ALERTA_CAPTURAR_NUMERACAO_STJ_TST,
+    ALERTA_CONFERIR_TRIBUNAL_ORIGEM,
     ALERTA_FASE_DESATUALIZADA_COGNITIVA,
     ALERTA_FASE_DESATUALIZADA_EXECUTIVA,
     ALERTA_FASE_DESATUALIZADA_LIQUIDACAO,
@@ -31,6 +34,7 @@ from notion_rpadv.services.dje_regras_v8 import (
     ALERTA_SENTENCA_EM_COLEGIADO,
     ALERTA_TEXTO_IMPRESTAVEL,
     ALERTA_TRANSITO_PENDENTE,
+    ALERTA_TRIBUNAL_FORA_VOCABULARIO,
     FASE_COGNITIVA,
     FASE_EXECUTIVA,
     FASE_LIQUIDACAO,
@@ -42,7 +46,11 @@ from notion_rpadv.services.dje_regras_v8 import (
     aplicar_todas_regras,
     fase_implicada,
     instancia_implicada,
+    regra_2_capturar_numeracao_stj_tst,
+    regra_3_capturar_numeracao_stf,
     regra_11_partes_adversas_ausentes,
+    regra_12_tribunal_fora_vocabulario,
+    regra_13_conferir_tribunal_origem,
     regra_14_subida_nao_detectada,
     regra_15_descida_nao_detectada,
     regra_16_acordao_em_1grau,
@@ -804,3 +812,165 @@ def test_R6_processo_nao_cadastrado_NAO_dispara_em_intimacao_distribuicao() -> N
 def test_R6_processo_nao_cadastrado_NAO_dispara_se_processo_cadastrado() -> None:
     pub = _pub(tipoComunicacao="Intimação", tipoDocumento="Decisão")
     assert regra_processo_nao_cadastrado(pub, _proc()) is None
+
+
+# ===========================================================================
+# Round 7a — Regra 2: Capturar numeração STJ/TST
+# ===========================================================================
+
+
+def test_R7a_R2_dispara_pub_stj_proc_sem_numero() -> None:
+    pub = _pub(siglaTribunal="STJ")
+    proc = _proc(instancia=INSTANCIA_STJ, numero_stj_tst="")
+    assert regra_2_capturar_numeracao_stj_tst(pub, proc) == ALERTA_CAPTURAR_NUMERACAO_STJ_TST
+
+
+def test_R7a_R2_dispara_pub_tst_proc_sem_numero() -> None:
+    pub = _pub(siglaTribunal="TST")
+    proc = _proc(instancia=INSTANCIA_TST, numero_stj_tst="")
+    assert regra_2_capturar_numeracao_stj_tst(pub, proc) == ALERTA_CAPTURAR_NUMERACAO_STJ_TST
+
+
+def test_R7a_R2_NAO_dispara_se_numero_existe() -> None:
+    pub = _pub(siglaTribunal="STJ")
+    proc = _proc(instancia=INSTANCIA_STJ, numero_stj_tst="REsp 123456/DF")
+    assert regra_2_capturar_numeracao_stj_tst(pub, proc) is None
+
+
+def test_R7a_R2_NAO_dispara_para_tribunal_local() -> None:
+    pub = _pub(siglaTribunal="TJDFT")
+    proc = _proc(instancia=INSTANCIA_PRIMEIRO_GRAU, numero_stj_tst="")
+    assert regra_2_capturar_numeracao_stj_tst(pub, proc) is None
+
+
+def test_R7a_R2_NAO_dispara_sem_processo_cadastrado() -> None:
+    pub = _pub(siglaTribunal="STJ")
+    assert regra_2_capturar_numeracao_stj_tst(pub, None) is None
+
+
+# ===========================================================================
+# Round 7a — Regra 3: Capturar numeração STF
+# ===========================================================================
+
+
+def test_R7a_R3_dispara_pub_stf_proc_sem_numero() -> None:
+    pub = _pub(siglaTribunal="STF")
+    proc = _proc(instancia="STF", numero_stf="")
+    assert regra_3_capturar_numeracao_stf(pub, proc) == ALERTA_CAPTURAR_NUMERACAO_STF
+
+
+def test_R7a_R3_NAO_dispara_se_numero_existe() -> None:
+    pub = _pub(siglaTribunal="STF")
+    proc = _proc(instancia="STF", numero_stf="RE 1234567")
+    assert regra_3_capturar_numeracao_stf(pub, proc) is None
+
+
+def test_R7a_R3_NAO_dispara_para_outros_tribunais() -> None:
+    """STJ não dispara Regra 3 (essa é só STF)."""
+    pub = _pub(siglaTribunal="STJ")
+    proc = _proc(instancia=INSTANCIA_STJ, numero_stf="")
+    assert regra_3_capturar_numeracao_stf(pub, proc) is None
+
+
+def test_R7a_R3_NAO_dispara_sem_processo_cadastrado() -> None:
+    pub = _pub(siglaTribunal="STF")
+    assert regra_3_capturar_numeracao_stf(pub, None) is None
+
+
+# ===========================================================================
+# Round 7a — Regra 12: Tribunal fora do vocabulário
+# ===========================================================================
+
+
+def test_R7a_R12_dispara_TRT18() -> None:
+    """TRT18 não está no select de Proc.tribunal canônico."""
+    pub = _pub(siglaTribunal="TRT18")
+    assert regra_12_tribunal_fora_vocabulario(pub, _proc()) == ALERTA_TRIBUNAL_FORA_VOCABULARIO
+
+
+def test_R7a_R12_dispara_TRF1() -> None:
+    pub = _pub(siglaTribunal="TRF1")
+    assert regra_12_tribunal_fora_vocabulario(pub, _proc()) == ALERTA_TRIBUNAL_FORA_VOCABULARIO
+
+
+def test_R7a_R12_NAO_dispara_para_tribunais_canonicos() -> None:
+    for trib in ("TRT10", "TJDFT", "STJ", "TST", "STF", "TJSP", "TJRJ"):
+        pub = _pub(siglaTribunal=trib)
+        assert regra_12_tribunal_fora_vocabulario(pub, _proc()) is None, trib
+
+
+def test_R7a_R12_dispara_independente_de_processo_cadastrado() -> None:
+    """Regra 12 sinaliza vocabulário, dispara mesmo sem cadastro."""
+    pub = _pub(siglaTribunal="TRT18")
+    assert regra_12_tribunal_fora_vocabulario(pub, None) == ALERTA_TRIBUNAL_FORA_VOCABULARIO
+
+
+# ===========================================================================
+# Round 7a — Regra 13: Verificação de origem em 1ª instância
+# ===========================================================================
+
+
+def test_R7a_R13_dispara_pub_trt10_proc_tjdft() -> None:
+    """Pub vem do TRT10 mas Proc cadastrado como TJDFT em 1º grau —
+    indica vinculação errada."""
+    pub = _pub(siglaTribunal="TRT10")
+    proc = _proc(instancia=INSTANCIA_PRIMEIRO_GRAU, tribunal="TJDFT")
+    assert regra_13_conferir_tribunal_origem(pub, proc) == ALERTA_CONFERIR_TRIBUNAL_ORIGEM
+
+
+def test_R7a_R13_NAO_dispara_se_tribunais_coincidem_via_normalizacao() -> None:
+    """Pub.siglaTribunal=TRT10 e Proc.tribunal=TRT/10 são equivalentes."""
+    pub = _pub(siglaTribunal="TRT10")
+    proc = _proc(instancia=INSTANCIA_PRIMEIRO_GRAU, tribunal="TRT/10")
+    assert regra_13_conferir_tribunal_origem(pub, proc) is None
+
+
+def test_R7a_R13_NAO_dispara_em_2grau_ou_superior() -> None:
+    """Em 2º grau/superior, tribunal pode divergir do de origem (recurso)."""
+    pub = _pub(siglaTribunal="STJ")
+    proc = _proc(instancia=INSTANCIA_SEGUNDO_GRAU, tribunal="TJDFT")
+    assert regra_13_conferir_tribunal_origem(pub, proc) is None
+
+
+def test_R7a_R13_NAO_dispara_se_proc_tribunal_vazio() -> None:
+    """Cadastro sem tribunal → não dispara (sem base de comparação)."""
+    pub = _pub(siglaTribunal="TJDFT")
+    proc = _proc(instancia=INSTANCIA_PRIMEIRO_GRAU, tribunal="")
+    assert regra_13_conferir_tribunal_origem(pub, proc) is None
+
+
+def test_R7a_R13_NAO_dispara_sem_processo_cadastrado() -> None:
+    pub = _pub(siglaTribunal="TRT10")
+    assert regra_13_conferir_tribunal_origem(pub, None) is None
+
+
+# ===========================================================================
+# Composição Round 7a — múltiplas regras simultâneas
+# ===========================================================================
+
+
+def test_R7a_composicao_pub_stj_proc_2grau_dispara_2_alertas() -> None:
+    """Pub STJ + processo em 2º grau (TJDFT) sem numero_stj_tst:
+    - Regra 2 (Capturar numeração STJ/TST)
+    - Regra 14 (Subida não detectada — 2º grau → STJ)
+    """
+    pub = _pub(siglaTribunal="STJ", tipoDocumento="Decisão")
+    proc = _proc(
+        instancia=INSTANCIA_SEGUNDO_GRAU,
+        tribunal="TJDFT",
+        numero_stj_tst="",
+    )
+    alertas = aplicar_regras_monitoramento(pub, proc)
+    assert ALERTA_CAPTURAR_NUMERACAO_STJ_TST in alertas
+    assert ALERTA_INSTANCIA_DESATUALIZADA_SUBIDA in alertas
+
+
+def test_R7a_composicao_pub_trt18_dispara_so_tribunal_fora_vocab() -> None:
+    """Pub TRT18 sem cadastro:
+    - Regra 12 (Tribunal fora do vocabulário) — dispara mesmo sem cadastro
+    - Processo não cadastrado — dispara (Intimação Notificação não é distribuição)
+    """
+    pub = _pub(siglaTribunal="TRT18", tipoComunicacao="Intimação", tipoDocumento="Notificação")
+    alertas = aplicar_regras_monitoramento(pub, None)
+    assert ALERTA_TRIBUNAL_FORA_VOCABULARIO in alertas
+    assert ALERTA_PROCESSO_NAO_CADASTRADO in alertas

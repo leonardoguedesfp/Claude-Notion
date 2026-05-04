@@ -80,12 +80,20 @@ ALERTA_PARTE_ADVERSA_CASSI: str = "CASSI ausente em partes adversas"
 ALERTA_PARTE_ADVERSA_BRADESCO_SAUDE: str = "Bradesco Saúde ausente em partes adversas"
 ALERTA_PARTE_ADVERSA_BB_CONSORCIOS: str = "BB Adm. Consórcios ausente em partes adversas"
 
+# Regras 2-3 — capturar numerações de tribunais superiores
+ALERTA_CAPTURAR_NUMERACAO_STJ_TST: str = "Capturar numeração STJ/TST"
+ALERTA_CAPTURAR_NUMERACAO_STF: str = "Capturar numeração STF"
+
+# Regras 12-13 — Tribunal de origem
+ALERTA_TRIBUNAL_FORA_VOCABULARIO: str = "Tribunal fora do vocabulário"
+ALERTA_CONFERIR_TRIBUNAL_ORIGEM: str = "Conferir tribunal de origem"
+
 # Alertas mantidos do Round 4 (técnicos/operacionais — sem número no doc v8)
 ALERTA_PROCESSO_NAO_CADASTRADO: str = "Processo não cadastrado"
 ALERTA_TEXTO_IMPRESTAVEL: str = "Texto imprestável"
 
-# Os demais 24 alertas (Regras 1-10, 12-13, 19-25, 29-34, 36-39) serão
-# re-introduzidos em commits subsequentes deste Round 6.
+# Os demais 20 alertas (Regras 1, 4-10, 19-25, 29-34, 36-39) serão
+# re-introduzidos em commits subsequentes deste Round 7.
 
 # ---------------------------------------------------------------------------
 # Vocabulário canônico de Proc.Instância (para regras de cruzamento)
@@ -245,6 +253,42 @@ def fase_implicada(publicacao: dict[str, Any]) -> str | None:
 
 
 # ---------------------------------------------------------------------------
+# Tabela auxiliar — normalização de Tribunal entre Pub e Proc
+# ---------------------------------------------------------------------------
+
+#: ``Pub.Tribunal`` usa formato sem separador (``TRT10``, ``TRF1``).
+#: ``Proc.tribunal`` usa formato com barra (``TRT/10``, ``TRF/1``).
+#: Esta tabela converte Pub → Proc para comparação canônica.
+#: Tribunais não mapeados aqui (TRT18, TRF1 quando ainda não estão no
+#: select de Proc.tribunal) são tratados pela Regra 12.
+_PUB_TRIB_PARA_PROC: dict[str, str] = {
+    "TRT10": "TRT/10",
+    "TRT18": "TRT/18",
+    "TRF1": "TRF/1",
+    # Demais tribunais usam formato idêntico em Pub e Proc
+    # (TJDFT, TJSP, TJMG, TJPR, TJRJ, TJRS, TJSC, TJBA, TJMS, TJGO, STJ, TST, STF).
+}
+
+#: Tribunais que ``Pub.Tribunal`` aceita mas ``Proc.tribunal``
+#: ainda **não** tem no vocabulário canônico — disparam Regra 12.
+TRIBUNAIS_FORA_VOCABULARIO_PROC: frozenset[str] = frozenset({
+    "TRT18",
+    "TRF1",
+})
+
+
+def _pub_trib_normalizado_para_proc(pub_tribunal: str | None) -> str | None:
+    """Mapeia ``Pub.Tribunal`` (formato sem barra) para o formato canônico
+    de ``Proc.tribunal`` (com barra em TRT/N e TRF/N). Devolve ``None``
+    se a entrada for vazia.
+    """
+    if not pub_tribunal:
+        return None
+    s = str(pub_tribunal).strip().upper()
+    return _PUB_TRIB_PARA_PROC.get(s, s)
+
+
+# ---------------------------------------------------------------------------
 # Camada base (Regras 40-43)
 # ---------------------------------------------------------------------------
 
@@ -319,6 +363,104 @@ def aplicar_camada_base(
 # ---------------------------------------------------------------------------
 # Regras de monitoramento (1-39) — placeholder
 # ---------------------------------------------------------------------------
+
+
+def regra_2_capturar_numeracao_stj_tst(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+) -> str | None:
+    """Regra 2 — Numeração STJ/TST ausente.
+
+    - Condições: ``Pub.Tribunal IN (STJ, TST)`` e ``Proc.numero_stj_tst``
+      está vazio.
+    - Alerta: ``Capturar numeração STJ/TST``.
+    - Explicação: numeração autônoma do tribunal superior precisa ser
+      capturada do ``Pub.Identificação``. Pré-aprovação operacional —
+      não verifica TODAS as pubs do processo (faz match na Pub atual,
+      que dispara o alerta de qualquer pub STJ/TST nova).
+    """
+    if processo_record is None:
+        return None
+    sigla = (publicacao.get("siglaTribunal") or "").strip().upper()
+    if sigla not in {"STJ", "TST"}:
+        return None
+    numero = (processo_record.get("numero_stj_tst") or "").strip()
+    if not numero:
+        return ALERTA_CAPTURAR_NUMERACAO_STJ_TST
+    return None
+
+
+def regra_3_capturar_numeracao_stf(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+) -> str | None:
+    """Regra 3 — Numeração STF ausente.
+
+    - Condições: ``Pub.Tribunal=STF`` e ``Proc.numero_stf`` está vazio.
+    - Alerta: ``Capturar numeração STF``.
+    - Explicação: análoga à Regra 2.
+    """
+    if processo_record is None:
+        return None
+    sigla = (publicacao.get("siglaTribunal") or "").strip().upper()
+    if sigla != "STF":
+        return None
+    numero = (processo_record.get("numero_stf") or "").strip()
+    if not numero:
+        return ALERTA_CAPTURAR_NUMERACAO_STF
+    return None
+
+
+def regra_12_tribunal_fora_vocabulario(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+) -> str | None:
+    """Regra 12 — Tribunal de origem fora do vocabulário canônico.
+
+    - Condições: ``Pub.Tribunal`` está em ``TRIBUNAIS_FORA_VOCABULARIO_PROC``
+      (TRT18, TRF1 — ausentes do select de ``Proc.tribunal``).
+    - Alerta: ``Tribunal fora do vocabulário``.
+    - Explicação: vocabulário de ``Proc.tribunal`` precisa ser ampliado
+      ou usar ``Outro``. Independe de processo cadastrado — sinaliza
+      atenção mesmo em pubs sem cadastro.
+    """
+    sigla = (publicacao.get("siglaTribunal") or "").strip().upper()
+    if sigla in TRIBUNAIS_FORA_VOCABULARIO_PROC:
+        return ALERTA_TRIBUNAL_FORA_VOCABULARIO
+    return None
+
+
+def regra_13_conferir_tribunal_origem(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+) -> str | None:
+    """Regra 13 — Verificação de origem em 1ª instância.
+
+    - Condições: ``Proc.instancia=1º grau`` e ``Pub.Tribunal`` (após
+      normalização) ≠ ``Proc.tribunal``.
+    - Alerta: ``Conferir tribunal de origem``.
+    - Explicação: em 1º grau, tribunal atual = tribunal de origem;
+      têm que coincidir. Divergência indica vinculação errada de
+      Pub.Processo ou cadastro de origem errado.
+
+      Não dispara nas instâncias superiores (recurso pode tramitar em
+      tribunal diferente do de origem por design — STJ recebe RESP de
+      qualquer TJ).
+    """
+    if processo_record is None:
+        return None
+    instancia = (processo_record.get("instancia") or "").strip()
+    if instancia != INSTANCIA_PRIMEIRO_GRAU:
+        return None
+    pub_trib_norm = _pub_trib_normalizado_para_proc(
+        publicacao.get("siglaTribunal"),
+    )
+    proc_trib = (processo_record.get("tribunal") or "").strip()
+    if not pub_trib_norm or not proc_trib:
+        return None
+    if pub_trib_norm != proc_trib:
+        return ALERTA_CONFERIR_TRIBUNAL_ORIGEM
+    return None
 
 
 def regra_14_subida_nao_detectada(
@@ -756,7 +898,7 @@ def aplicar_regras_monitoramento(
     As regras de monitoramento ADICIONAM alertas ao conjunto produzido
     pela camada base — não substituem.
 
-    Round 6 — implementadas até o momento:
+    Round 6 — implementadas no PR #20:
 
     - Regras 14, 15 (subida e descida de instância).
     - Regras 16, 17, 18 (impossibilidades categóricas).
@@ -767,17 +909,27 @@ def aplicar_regras_monitoramento(
     - Alerta operacional Processo não cadastrado (refinado: não
       dispara em distribuições, que já têm Camada base).
 
+    Round 7a — implementadas neste commit:
+
+    - Regra 2 (Capturar numeração STJ/TST).
+    - Regra 3 (Capturar numeração STF).
+    - Regra 12 (Tribunal de origem fora do vocabulário).
+    - Regra 13 (Verificação de origem em 1ª instância).
+
     Pendentes (a serem acrescentadas em commits subsequentes):
 
-    - Regras 1-3 (Identificação e numeração).
+    - Regra 1 (Conferir número CNJ do processo).
     - Regras 4-6 (Classificação processual).
     - Regras 7-9 (Cliente do escritório).
-    - Regras 10 (Posição do cliente).
-    - Regras 12-13 (Tribunal).
+    - Regra 10 (Posição do cliente).
     - Regras 19-25 (Cidade, Vara, Turma, Relator).
     - Regras 29-34, 36-39 (demais de Estado processual + outros).
     """
     candidatos: list[str | None] = [
+        regra_2_capturar_numeracao_stj_tst(publicacao, processo_record),
+        regra_3_capturar_numeracao_stf(publicacao, processo_record),
+        regra_12_tribunal_fora_vocabulario(publicacao, processo_record),
+        regra_13_conferir_tribunal_origem(publicacao, processo_record),
         regra_14_subida_nao_detectada(publicacao, processo_record),
         regra_15_descida_nao_detectada(publicacao, processo_record),
         regra_16_acordao_em_1grau(publicacao, processo_record),
