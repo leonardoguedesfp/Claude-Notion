@@ -821,3 +821,363 @@ label em vez de "Polo Ativo/Polo Passivo".
 | (3.1) | **Partes JSON cru** | 🔴 **Crítica** | **530 (33%)** | **P0 — investigar pipeline de envio** |
 
 ---
+
+## 5. Anatomia atualizada por cruzamento
+
+Reproduzo aqui os 19 cruzamentos de volume ≥10 do baseline e 1
+cruzamento novo (`STJ | Intimação | Despacho` saiu do consolidado
+`DESPACHO/DECISÃO`). Para cada um, o estado pós-Round-4: anatomia
+mantida ✓, anomalia nova ⚠, regressão visível ❌.
+
+### 5.1 TRT10 | Intimação | Notificação — 723 ✓
+
+Mesma anatomia do baseline. **Sample djen=494748109**: cabeçalho
+PODER JUDICIÁRIO + classe ATOrd abreviada + RECLAMANTE/RECLAMADO +
+INTIMAÇÃO + corpo do despacho + trailer "Intimado(s) / Citado(s)".
+
+Estado pós-Round-4:
+- ❌ **Partes em JSON cru** em 408/723 (56%) — Frente 4.1 incompleta
+- ❌ **`<br>` residual** no trailer entregue ao Notion
+- ✓ Classe normalizada: `AÇÃO TRABALHISTA - RITO ORDINÁRIO` (ex-`AçãO...`)
+- ✓ Tarefa: `D.01 Análise de publicação`
+- ✓ Alerta: vazio se cadastrado, `Processo não cadastrado` se não
+
+Maior cluster do acervo (45%); o impacto da regressão Partes é
+desproporcional aqui.
+
+### 5.2 TRT10 | Lista de Distribuição | Distribuição — 201 ✓
+
+Mesma anatomia. **Sample djen=496542520**: texto curto (~360 chars),
+formato `Processo {CNJ} distribuído para {Vara} na data {DD/MM/AAAA}
+<br> Para maiores informações...`.
+
+Estado pós-Round-4:
+- ✓ **Partes legível** em 197/201 (98%); 4 ainda em JSON cru
+- ❌ `<br>` literal no Texto inline (legítimo do payload TRT10, mas
+  visível como markup)
+- ✓ Tarefa: `D.01 + E.01` (sem cadastro) ou `D.01` (com cadastro)
+- ✓ Alerta: `Processo não cadastrado` em 148/201 (74% das Listas)
+- ✓ **Auto-Status** `Nada para fazer` em 61/201 (30%, todas as TRT10
+  Listas com `Processo` cadastrado)
+
+Frente 4.5a entrega valor visível: 30% dessas pubs saem da fila
+ativa.
+
+### 5.3 TRT10 | Intimação | Acórdão — 94 ✓
+
+Mesma anatomia. **Sample djen=573369859**: Acórdão 2ª TURMA
+(AGRAVO DE PETIÇÃO), Relatora ELKE DORIS JUST, com EMENTA + RELATÓRIO
++ VOTO + CONCLUSÃO + ACÓRDÃO.
+
+Estado pós-Round-4:
+- ❌ **Partes em JSON cru** em 94/94 (100%) — pior cluster afetado
+  pela regressão Frente 4.1
+- ❌ `<br>` residual no trailer
+- ✓ Classe normalizada: `AGRAVO DE PETIÇÃO`
+- ✓ Tarefa: `D.03 Análise de acórdão`
+
+Esse cluster é o mais impactado pela regressão Partes — todas as
+pubs de Acórdão TRT10 chegam com JSON cru.
+
+### 5.4 TJDFT | Intimação | Decisão — 81 ✓
+
+Mesma anatomia. **Sample djen=496898418**: Vara cível, classe
+LIQUIDAÇÃO DE SENTENÇA PELO PROCEDIMENTO COMUM, AUTOR/REU,
+DECISÃO INTERLOCUTÓRIA.
+
+Estado pós-Round-4:
+- ✓ **Partes legível**: `Polo Ativo: JORGE HOMERO DA CUNHA`
+- ✓ Texto LIMPO sem `<br>` residual visível
+- ✓ Classe em CAPS uniforme
+- ✓ Tarefa: `D.01`
+- ✓ Anomalias mínimas (10-11 chars `Intime-se`) ainda presentes (2/81 = 2,5%)
+
+Cluster com **melhor execução do Round 4** entre os ≥10. Apenas 1/81
+em JSON cru.
+
+### 5.5 TJDFT | Intimação | Certidão — 49 ✓
+
+Mesma anatomia. Texto curto (~650 chars), CERTIDÃO + intimação
+secretarial pra manifestação.
+
+Estado pós-Round-4:
+- ✓ Partes legível em 48/49 (98%)
+- ✓ Tarefa: `D.01`
+
+Sem novidade. Cluster bem comportado.
+
+### 5.6 STJ | Intimação | Pauta de Julgamento — 41 ✓
+
+Mesma anatomia (canonização do tipo bruto `PAUTA DE JULGAMENTOS` →
+`Pauta de Julgamento`). **Sample djen=530258606**: REsp 1878824/DF,
+RELATOR + RECORRENTES (3) + RECORRIDOS (3), sufixo "Processo
+incluído na Pauta de Julgamentos da TERCEIRA TURMA, Sessão Virtual...".
+
+Estado pós-Round-4:
+- 🟡 **Partes mistura formato genérico com papel real**: `Polo Ativo: 1. KEILA... (RECORRENTE), 2. CAIXA... (RECORRENTE)<br>Polo Passivo: 4. KEILA... (RECORRIDO)...` — vide regressão 4.8
+- ⚠ **Texto sem espaços**: `RECORRENTE:KEILA CRISTINEGUIMARAESBERNARDESADVOGADOS:RICARDO LUIZ RODRIGUES DA FONSECA PASSOS - DF015523LEONARDO GUEDES DA FONSECA PASSOS - DF036129RECORRENTE:CAIXA...` — pré-processador colou tokens. Anomalia menor de UX.
+- ✓ Tarefa: `E.04 Inscrição para sustentação oral`
+- ✓ Tipo de doc canonizado para `Pauta de Julgamento`
+
+### 5.7 TJDFT | Edital | Pauta de Julgamento — 40 ✓
+
+Mesma anatomia. Pauta integral filtrada pelo caso A do Round 1
+(filtro 1.5 — só blocos com OAB do escritório).
+
+Estado pós-Round-4:
+- ✓ Texto filtrado mantido (tamanho ~2KB do original ~700KB-1.2MB)
+- ✓ Partes legível
+- ✓ Tarefa: `E.04` (Pauta)
+- ⚠ Volume cresceu para 28 com `Alerta = Pauta presencial sem inscrição` (vs estimado ~13). Detector mais agressivo.
+
+### 5.8 STJ | Intimação | Acórdão — 39 ✓
+
+Mesma anatomia (canonização do bruto `EMENTA / ACORDÃO` →
+`Acórdão`). EDcl no AgInt nos REsp + EMBARGANTE/EMBARGADO + ementa.
+
+Estado pós-Round-4:
+- ✓ Partes legível (mesma observação STJ que 5.6)
+- ✓ Tarefa: `D.03 Análise de acórdão`
+- ✓ Classe normalizada: `RECURSO ESPECIAL`
+
+### 5.9 TJDFT | Intimação | Ementa — 34 ✓
+
+Mesma anatomia. Texto começa com "Ementa: Direito previdenciário...";
+estrutura I-IV CNJ.
+
+Estado pós-Round-4:
+- ✓ Partes legível
+- ✓ Tarefa: `D.03 Análise de acórdão`
+
+### 5.10 STJ | Intimação | Decisão — 32 ✓
+
+Mesma anatomia (canonização do bruto `DESPACHO / DECISÃO` →
+`Decisão`). Decisões monocráticas STJ.
+
+Estado pós-Round-4:
+- 🟡 5/32 com Partes em JSON cru (16%)
+- ✓ Tarefa: `D.01`
+
+### 5.11 TJDFT | Intimação | Despacho — 31 ✓
+
+Despachos ordinatórios do TJDFT (algumas pubs Presidência do
+Tribunal remetendo ao STJ).
+
+Estado pós-Round-4:
+- ✓ Partes legível
+- ✓ Tarefa: `D.01`
+- Volume cresceu de 29 (baseline) para 31 — captura 2 pubs adicionais
+
+### 5.12 STJ | Intimação | Despacho — 30 🆕
+
+Cluster que estava consolidado em `DESPACHO / DECISÃO` no baseline.
+Pós-canonização do Round 1 fix 1.1, separou em `Despacho` (30) +
+`Decisão` (32). Mesma anatomia que STJ DESPACHO/DECISÃO do baseline.
+
+Estado pós-Round-4:
+- ✓ Partes legível
+- ✓ Tarefa: `D.01`
+
+### 5.13 TJDFT | Edital | Outros (tipo "57" Atas) — 26 ✓
+
+Mesma anatomia. **Sample djen=524038068**: Ata 1ª TCV, 278 processos
+no original. Pós-Round-4.5b: lista filtrada para apenas o CNJ do
+escritório + callout.
+
+Estado pós-Round-4:
+- ✓ **Filtro 4.5b operando**: callout presente em 26/26 das amostras
+  espreitadas
+- ⚠ `<br>` literal aparente nos separadores das listas (esperado da
+  estrutura crua das atas)
+- ✓ Partes legível
+- ✓ Tarefa: `D.01`
+
+**Frente 4.5b** transformou esse cluster — antes era risco P1 (perda
+de CNJ por truncamento), agora é OK.
+
+### 5.14 TST | Intimação | Despacho — 17 ✓
+
+Mesma anatomia. Despachos da Vice-Presidência sobre admissibilidade
+de recursos.
+
+Estado pós-Round-4:
+- ✓ Partes legível em 15/17 (2 com JSON cru)
+- ✓ Tarefa: `D.01`
+
+### 5.15 TST | Lista de Distribuição | Distribuição — 16 ✓
+
+Mesma anatomia. Listas TST análogas a TRT10.
+
+Estado pós-Round-4:
+- ✓ Partes legível
+- ✓ **Auto-Status** `Nada para fazer` em 8/16 (50% — Listas TST
+  cadastradas)
+- ✓ Tarefa: `D.01 + E.01` (sem cadastro) ou `D.01` (com cadastro)
+
+### 5.16 STJ | Intimação | Distribuição — 15 ✓
+
+Mesma anatomia (canonização do bruto `ATA DE DISTRIBUIÇÃO` →
+`Distribuição`). Distribuição inicial de processo no STJ.
+
+Estado pós-Round-4:
+- ✓ Partes legível
+- ✓ Tarefa: `E.02 Atualizar dados no sistema`
+- ⚠ **7/15 com `Alerta = Instância desatualizada`** — pubs STJ para
+  processos cadastrados em 2º grau (correto: o processo subiu para
+  STJ, instância no cadastro precisa ser atualizada). Frente 4.4
+  acertando inconsistência real.
+
+### 5.17 TJDFT | Intimação | Pauta de Julgamento — 14 ✓
+
+Cluster antes chamado `Intimação de pauta` (baseline 13). Mesma
+anatomia: certidão de inclusão em pauta presencial individual.
+
+Estado pós-Round-4:
+- ✓ Partes legível
+- ✓ Tarefa: `E.04`
+
+### 5.18 TJDFT | Intimação | Sentença — 13 ✓
+
+Mesma anatomia. Sentenças de 1º grau TJDFT, alguns casos com partes
+em iniciais (segredo de justiça).
+
+Estado pós-Round-4:
+- ✓ Partes legível (com nomes em iniciais quando aplicável)
+- ✓ Tarefa: `D.02 Análise de sentença`
+
+### 5.19 TST | Intimação | Pauta de Julgamento — 12 ✓
+
+Cluster que cresceu (baseline 9 em volume 3-9 → 12 ≥10). Mesma
+anatomia (Pauta TST análoga a STJ).
+
+Estado pós-Round-4:
+- ✓ Partes legível
+- ✓ Tarefa: `E.04`
+- ⚠ 12 pubs com `Alerta = Pauta presencial sem inscrição` (todas)
+
+### 5.20 TST | Intimação | Acórdão — 10 ✓
+
+Cluster que consolidou (baseline tinha 7 `ACORDAO` em CAPS bruto + 3
+`Acórdão` canônico). Pós-Round 1 1.1 + Round 4.2: 10 todos
+canonizados como `Acórdão`.
+
+Estado pós-Round-4:
+- 🟡 3/10 com Partes em JSON cru (30%)
+- ✓ Tarefa: `D.03`
+
+### 5.21 Cruzamentos 3-9 e 1-2 — sumário
+
+Os 14 cruzamentos de 3-9 (TJMG Outros 9, TJRS Decisão 8, TST Decisão
+8, TJPR Despacho 7, etc) e os 18 cruzamentos de 1-2 (TRT18, TJBA,
+TJGO etc) seguem comportamento compatível com o tribunal/tipo. Sem
+regressão específica detectada (sample reduzido nesses volumes).
+
+`TJGO Outros` (2 pubs) continua sendo o caso patológico
+`ARQUIVOS DIGITAIS INDISPONÍVEIS` — recebe `Alerta = Texto imprestável`
+agora.
+
+`TJPR Intimação Despacho` (7 pubs) continua sendo "ato no sistema de
+origem" (texto pointer Projudi). Não recebe `Alerta = Texto
+imprestável` por enquanto (texto de 157 chars está acima do limiar de
+200 chars do detector — pode ser refinado).
+
+---
+
+## 6. Qualidade das propriedades — revisão
+
+Reproduzo a tabela 6.1 do baseline com o estado pós-Round-4. Cores:
+🟢 OK; 🟡 atenção; 🔴 problema sério.
+
+### 6.1 Resumo (atualizado)
+
+| # | Propriedade | Tipo | Baseline | Pós-Round-4 | Δ |
+|---:|---|---|---|---|---|
+| 1 | `Identificação` | Title | 🟢 | 🟢 | sem mudança |
+| 2 | `Advogados intimados` | Multi-select | 🟢 | 🟢 | sem mudança |
+| 3 | `Advogados não cadastrados` | Checkbox | 🟢 | 🟢 | sem mudança |
+| 4 | `Certidão` | Formula | 🟢 | 🟢 | sem mudança |
+| 5 | `Classe` | Rich text | 🔴 | 🟢 | **ENTREGUE** (Frente 4.2) |
+| 6 | `Cliente` | Rollup | 🟢 | 🟢 | sem mudança |
+| 7 | `Data de disponibilização` | Date | 🟢 | 🟢 | sem mudança |
+| 8 | `Duplicatas suprimidas` | Rich text | 🟢 | 🟡 | 1 pub pendente flush (djen=564026686) |
+| 9 | `Hash` | Rich text | 🟢 | 🟢 | sem mudança |
+| 10 | `ID DJEN` | Number | 🟢 | 🟢 | sem mudança |
+| 11 | `Link` | URL | 🟡 | 🟡 | sem mudança (cosmético) |
+| 12 | `Observações` | Rich text | 🟡 | 🟡 | sem mudança (subutilizado) |
+| 13 | `Partes` | Rich text | 🔴 | 🔴 | **REGRESSÃO PARCIAL** (Frente 4.1: 67% OK, 33% JSON cru) |
+| 14 | `Processo` | Relation | 🟢 | 🟢 | sem mudança |
+| ~~15~~ | ~~`Processo não cadastrado`~~ | ~~Checkbox~~ | ~~🟢~~ | **REMOVIDO** | Frente 4.6 — info migrou para Alerta |
+| 16 | `Status` | Select | 🟡 | 🟢 | **MELHOROU** (Frente 4.5a — 4,3% Status auto, sem falso positivo) |
+| 17 | `Texto` | Rich text | 🟡 | 🟡 | regressão `<br>` ainda presente (Round 4.5 não resolveu) |
+| 18 | `Tipo de comunicação` | Select | 🟢 | 🟢 | sem mudança |
+| 19 | `Tipo de documento` | Select | 🟢 | 🟢 | sem mudança |
+| 20 | `Tribunal` | Select | 🟢 | 🟢 | sem mudança |
+| 21 | `Órgão` | Rich text | 🟡 | 🟡 | sem mudança |
+| 22 | `Tarefa sugerida` | Multi-select | 🔴 | 🟢 | **ENTREGUE** (Frente 4.3 — 100% cobertura) |
+| 23 | `Alerta contadoria` | Multi-select | 🔴 | 🟢 | **ENTREGUE** (Frente 4.4 — 38% cobertura) |
+
+### 6.2 Sumário de mudanças
+
+**4 propriedades passaram de 🔴 para 🟢** (Classe, Tarefa sugerida,
+Alerta contadoria, Status melhorou de 🟡 para 🟢).
+
+**1 propriedade DROPADA** (Processo não cadastrado — checkbox →
+Alerta).
+
+**1 propriedade permanece 🔴** (Partes — regressão parcial nova).
+
+**1 propriedade caiu de 🟢 para 🟡** (Duplicatas suprimidas — 1 pub
+pendente de flush por falha 502 transient, não-bloqueante).
+
+**3 propriedades 🟡 mantidas sem mudança**: Link (semântica
+inconsistente entre tribunais), Observações (subutilizado), Órgão
+(casing variável).
+
+**Texto** permanece 🟡 — regressão `<br>` esperava-se resolvida pelo
+Round 4.5, mas inspeção MCP confirma que ainda persiste.
+
+### 6.3 Análise por propriedade — destaques
+
+#### 6.3.1 `Partes` — antes 🔴 ainda 🔴 (Frente 4.1 incompleta)
+
+**Estado atual misto**:
+
+- Para 1.078 pubs (67%): formato `Polo Ativo: ... / Polo Passivo: ...`
+  per `formatar_partes` do Round 4.1.
+- Para 530 pubs (33%): JSON cru `[{"comunicacao_id": ..., "nome":
+  "...", "polo": "..."}]` — formato pré-Round-4.
+
+A função produz output correto. O fato de TRT10 Acórdão estar 100%
+em JSON cru sugere bypass específico do cluster. **P0 de
+investigação**.
+
+#### 6.3.2 `Classe` — antes 🔴 agora 🟢 (Frente 4.2 ✅)
+
+695 pubs antes em `AçãO TRABALHISTA - RITO ORDINáRIO` viraram
+`AÇÃO TRABALHISTA - RITO ORDINÁRIO`. 30 valores distintos no acervo,
+todos consistentes. `MAPA_NOMECLASSE` cobre.
+
+#### 6.3.3 `Tarefa sugerida` — antes 🔴 (vazio) agora 🟢 (100%)
+
+6 opções coloridas, 100% das pubs com pelo menos 1 tarefa. Multi-
+select com até 3 tarefas (1 pub no acervo). Cobertura > 98%
+estimado.
+
+#### 6.3.4 `Alerta contadoria` — antes 🔴 (vazio) agora 🟢 (38%)
+
+5 alertas coloridos, 38% das pubs com pelo menos 1. Coexistência
+maior 2 alertas. Cobertura ligeiramente acima do 36% estimado.
+
+#### 6.3.5 `Status` — antes 🟡 agora 🟢 (Frente 4.5a ✅)
+
+69 pubs (4,3%) recebem `"Nada para fazer"` automaticamente —
+exatamente o cluster Listas TRT10/TST cadastradas. Zero falso
+positivo. Reduz a "muralha de Novas" do baseline.
+
+#### 6.3.6 `Texto` — permanece 🟡 (regressão `<br>` não resolvida)
+
+Inspeção MCP confirma `<br>` literal em pubs reais (TRT10 Notif,
+Acórdão, Lista; TJDFT Atas). Round 4.5 commit `afddba4` declara
+pipeline OK, mas estado real diverge.
+
+---
