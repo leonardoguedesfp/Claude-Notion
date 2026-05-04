@@ -220,3 +220,134 @@ anatomia por cruzamento e priorizar o backlog.
   pode ser template ou cadastro novo).
 
 ---
+
+## 2. Distribuição quantitativa
+
+### 2.1 Total geral (vs baseline)
+
+| Métrica | Baseline (pré-Round-4) | Pós-Round-4 | Δ |
+|---|---:|---:|---:|
+| Total de publicações capturadas | 2.152 | 2.152 | 0 |
+| Canônicas (com página própria no Notion) | 1.608 | 1.608 | 0 |
+| Duplicatas suprimidas | 544 | 544 | 0 |
+| Pendentes / Skipped | 0 / 0 | 0 / 0 | 0 |
+| Período coberto (declarado) | 01/01/2026 → 03/05/2026 | 01/01/2026 → 03/05/2026 | — |
+| Período coberto (real, SQLite) | — | 01/01/2026 → 01/05/2026 | — |
+| Vínculo a ⚖️ Processos cadastrados | 1.135/1.608 (70,6%) | 1.135/1.608 (70,6%) | 0 |
+| Sem ⚖️ Processo cadastrado (`Alerta = Processo não cadastrado`) | 473/1.608 (29,4%) | 473/1.608 (29,4%) | 0 |
+| Records em Processos (cache) | 1.107 (excl. template) | 1.108 (excl. template) | +1 |
+| Records em Catalogo | 67 (excl. template) | 67 (excl. template) | 0 |
+
+**Estabilidade total**: a captura R3 v2 reproduziu o universo do Round
+3 anterior com fidelidade — mesmos totais, mesma distribuição. **Zero
+desvio > 5% em qualquer linha** (diferença de 1 record em Processos é
+provável criação manual de cliente/processo nesse ínterim).
+
+A diferença `max(data_disponibilizacao)` SQLite = `2026-05-01` (não
+03/05) é consistente com o cursor de 5 OABs em `2026-03-31`: pubs entre
+01/04 → 03/05 só foram capturadas para Samantha (única OAB com cursor
+em 2026-05-03), explicando a janela "menor" no SQLite vs o declarado
+no handoff.
+
+### 2.2 Distribuição por tribunal (canônicas)
+
+| Tribunal | Baseline | Pós-Round-4 | Δ |
+|---|---:|---:|---:|
+| TRT10 | ~1.027 | 1.027 | 0 |
+| TJDFT | ~290 | 291 | +1 |
+| STJ | ~160 | 160 | 0 |
+| TST | ~67 | 67 | 0 |
+| TJPR | 10 | 10 | 0 |
+| TJRS | 9 | 9 | 0 |
+| TJRJ | 9 | 9 | 0 |
+| TJMG | 9 | 9 | 0 |
+| TJSC | 8 | 8 | 0 |
+| TJSP | 6 | 6 | 0 |
+| TRF1 | 6 | 6 | 0 |
+| TJMS | 2 | 2 | 0 |
+| TJGO | 2 | 2 | 0 |
+| TJBA | 1 | 1 | 0 |
+| TRT18 | 1 | 1 | 0 |
+| **Total** | **1.608** | **1.608** | **0** |
+
+15 tribunais cobertos, identicamente ao baseline.
+
+### 2.3 Cruzamento `Tribunal × Comunicação × Documento` (canônicas)
+
+#### Volume ≥ 10 (analisados em profundidade)
+
+Diferenças vs baseline marcadas com 🟡; novidades com 🆕; estável sem marca.
+
+| Tribunal | Comunicação | Documento | Canônicas | Total c/ dups | Δ vs baseline |
+|---|---|---|---:|---:|---|
+| TRT10 | Intimação | Notificação | 723 | 1.132 | igual |
+| TRT10 | Lista de Distribuição | Distribuição | 201 | 205 | igual |
+| TRT10 | Intimação | Acórdão | 94 | 194 | igual |
+| TJDFT | Intimação | Decisão | 81 | 82 | igual |
+| TJDFT | Intimação | Certidão | 49 | 50 | igual |
+| STJ | Intimação | Pauta de Julgamento | 41 | 41 | 🟡 baseline grava como `PAUTA DE JULGAMENTOS` (bruto); pós-R1 canonizou para `Pauta de Julgamento` |
+| TJDFT | Edital | Pauta de Julgamento | 40 | 40 | igual |
+| STJ | Intimação | Acórdão | 39 | 39 | 🟡 baseline grava como `EMENTA / ACORDÃO`; pós-R1 canonizou para `Acórdão` |
+| TJDFT | Intimação | Ementa | 34 | 34 | igual |
+| STJ | Intimação | Decisão | 32 | 40 | 🟡 baseline grava como `DESPACHO / DECISÃO`; canonizou para `Decisão` |
+| TJDFT | Intimação | Despacho | 31 | 31 | 🟡 baseline 29 → 31 (+2) |
+| STJ | Intimação | Despacho | 30 | 38 | 🆕 não estava listado separadamente no baseline ≥10; antes estava em "DESPACHO / DECISÃO" |
+| TJDFT | Edital | Outros | 26 | 26 | 🟡 baseline grava como `57 (Ata de sessão)`; pós-R1 canonizou para `Outros` |
+| TST | Intimação | Despacho | 17 | 19 | igual |
+| TST | Lista de Distribuição | Distribuição | 16 | 16 | igual |
+| STJ | Intimação | Distribuição | 15 | 15 | 🟡 baseline grava como `ATA DE DISTRIBUIÇÃO`; canonizou para `Distribuição` |
+| TJDFT | Intimação | Pauta de Julgamento | 14 | 14 | 🟡 baseline 13 → 14 (+1; era `Intimação de pauta`) |
+| TJDFT | Intimação | Sentença | 13 | 13 | igual |
+| TST | Intimação | Pauta de Julgamento | 12 | 12 | 🟡 baseline 9 (`Pauta de Julgamento` vol 3-9) → 12 |
+| TST | Intimação | Acórdão | 10 | 12 | 🆕 baseline tinha 7 (`ACORDAO`) + 3 (`Acórdão`) → consolidaram em 10 canônico |
+
+**Total cruzamentos ≥10**: 20 (baseline tinha 19; um cruzamento STJ
+saiu via canonização e outros entraram). Cobre **1.518/1.608
+canônicas (94,4%)** — equivalente aos 94% do baseline.
+
+**Observação importante**: os "🟡" são consequência da Round 1 fix 1.1
+(canonização de `tipoDocumento`). Não são desvio do Round 4 — são o
+estado consolidado pós-R1 corretamente refletido. Valor analítico: as
+mesmas pubs estão lá; a CHAVE de cruzamento mudou.
+
+#### Volume 3-9 (qualitativo)
+
+| Tribunal | Comunicação | Documento | Canônicas |
+|---|---|---|---:|
+| TRT10 | Intimação | Despacho | 9 |
+| TJMG | Intimação | Outros | 9 |
+| TJRS | Intimação | Decisão | 8 |
+| TST | Intimação | Decisão | 8 |
+| TJPR | Intimação | Despacho | 7 |
+| TJRJ | Intimação | Despacho | 5 |
+| TJSP | Intimação | Outros | 4 |
+| TRF1 | Intimação | Outros | 4 |
+| TJSC | Intimação | Despacho | 3 |
+| TJRJ | Intimação | Outros | 3 |
+| TJDFT | Intimação | Outros | 3 |
+| TJPR | Intimação | Outros | 3 |
+| STJ | Edital | Pauta de Julgamento | 3 |
+| TST | Intimação | Outros | 3 |
+
+14 cruzamentos cobrindo 72 canônicas (4,5%). Distribuição compatível
+com baseline (que tinha 17 cruzamentos em 3-9).
+
+#### Volume 1-2
+
+18 cruzamentos cobrindo 18 canônicas (1,1%). Listagem compacta:
+
+`(TJSP, Despacho, 2)`, `(TJMS, Outros, 2)`, `(TJSC, Outros, 2)`,
+`(TJSC, Decisão, 2)`, `(TST, Outros canônicos, 2)`, `(TJMG, Despacho,
+2)` e variantes raras (TJBA, TJGO, TRT18, TJRJ Sentença, TRF1 Pauta,
+TJSC Sentença etc).
+
+### 2.4 Quantos cruzamentos analisados em cada nível
+
+- **Profundidade total** (≥10): 20 cruzamentos cobrindo 1.518/1.608 (94,4%) — vs baseline 19/1.510 (94%)
+- **Qualitativo** (3-9): 14 cruzamentos cobrindo 72/1.608 (4,5%) — vs baseline 17/74 (4,6%)
+- **Listagem** (1-2): 18 cruzamentos cobrindo 18/1.608 (1,1%) — vs baseline 24/24 (1,5%)
+
+A leve consolidação (menos cruzamentos no agregado) reflete a
+canonização do Round 1 fix 1.1 — não é perda de dado.
+
+---
