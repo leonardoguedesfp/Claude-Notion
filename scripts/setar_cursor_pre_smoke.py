@@ -185,7 +185,7 @@ def main() -> int:
         )
         print("  4. Aguardar sync com Notion completar.")
         print(
-            "  5. Rodar: .venv\\Scripts\\python.exe scripts/inspecionar_smoke_round_6.py --verbose"
+            "  5. Rodar: .venv\\Scripts\\python.exe scripts/inspecionar_smoke_v8.py --verbose"
         )
 
     return 0
