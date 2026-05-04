@@ -43,6 +43,7 @@ from notion_bulk_edit.notion_api import (
 from notion_rpadv.services import dje_db
 from notion_rpadv.services.dje_notion_mappings import (
     formatar_advogados_intimados,
+    formatar_partes,
     mapear_tipo_documento,
 )
 from notion_rpadv.services.dje_text_pipeline import preprocessar_texto_djen
@@ -284,10 +285,17 @@ def _merge_partes(
     partes_canonica_json: str | None,
     partes_duplicatas_json: list[str],
 ) -> str:
-    """União de listas de destinatários (canônica + duplicatas).
+    """União de destinatários (canônica + duplicatas), dedup por nome
+    case-insensitive. Output é a string formatada pelo
+    ``formatar_partes`` (Round 4.1 — "Polo Ativo: ... / Polo Passivo:
+    ..."), pronta pra ir direto na property "Partes".
 
-    Dedup por nome (case-insensitive). Output é JSON string compatível
-    com a property "Partes" da database (rich_text serializado)."""
+    Round 5a (2026-05-04): antes este merge devolvia ``json.dumps(out)``
+    (JSON cru), o que sobrescrevia o output do ``formatar_partes`` no
+    PATCH do flush das duplicatas — gerando 530 pubs canônicas com
+    Partes em formato pré-Round-4. Agora roteia pelo mesmo formatter
+    do mapper original.
+    """
     out: list[Any] = []
     seen_nomes: set[str] = set()
 
@@ -312,7 +320,7 @@ def _merge_partes(
     _ingest(partes_canonica_json)
     for j in partes_duplicatas_json:
         _ingest(j)
-    return json.dumps(out, ensure_ascii=False)
+    return formatar_partes(out)
 
 
 def _merge_advogados(

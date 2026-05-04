@@ -1023,14 +1023,20 @@ def test_R1_6_par_real_trt10_detectado(dedup_dje_conn) -> None:
 
 
 def test_R1_6_merge_partes_dedup_por_nome() -> None:
+    """Round 5a (2026-05-04): _merge_partes agora devolve string formatada
+    pelo formatar_partes (Round 4.1), não JSON cru. Dedup por nome
+    case-insensitive permanece intacto. ACME aparece 1x; OUTRO entra.
+    """
     j1 = json.dumps([{"nome": "ACME", "polo": "ATIVO"}])
     j2 = json.dumps([{"nome": "acme", "polo": "ATIVO"}, {"nome": "OUTRO"}])
-    out = json.loads(_merge_partes(j1, [j2]))
-    nomes = [p["nome"] for p in out]
-    # Dedup case-insensitive: ACME aparece 1x; OUTRO entra
-    assert len(nomes) == 2
-    assert "ACME" in nomes
-    assert "OUTRO" in nomes
+    out = _merge_partes(j1, [j2])
+    # Não pode ser JSON cru (regressão Round 4.1).
+    assert not out.startswith("[")
+    assert "comunicacao_id" not in out
+    # ACME aparece 1x; OUTRO entra (dedup case-insensitive).
+    assert out.count("ACME") == 1
+    assert "OUTRO" in out
+    assert "acme" not in out  # versão lowercase deduplicada
 
 
 def test_R1_6_merge_advogados_uniao_ordenada() -> None:
