@@ -319,6 +319,57 @@ _tem_advogados_no_payload = tinha_destinatarios_advogados
 
 
 # ---------------------------------------------------------------------------
+# Round 4.5 frente 1 — Auto-Status na criação da página
+# ---------------------------------------------------------------------------
+
+#: Status default na criação. Round 1 sempre gravou "Nova"; Round 4.5
+#: introduz exceções específicas (vide ``_calcular_status_inicial``).
+STATUS_DEFAULT_CRIACAO: str = "Nova"
+
+#: Status auto pra publicações que não exigem ação (Listas de
+#: Distribuição em tribunais trabalhistas com Processo cadastrado).
+#: Opção EXISTENTE no select do Notion — não criar nova.
+STATUS_NADA_PARA_FAZER: str = "Nada para fazer"
+
+#: Tribunais que recebem auto-Status "Nada para fazer" para Listas de
+#: Distribuição com Processo cadastrado. Trabalhistas (TRT10, TST)
+#: porque a Lista é só comunicação burocrática de distribuição —
+#: a ação substantiva virá em pubs subsequentes (Despacho, Acórdão).
+_TRIBUNAIS_LISTA_AUTO_TRIADA: frozenset[str] = frozenset({"TRT10", "TST"})
+
+
+def _calcular_status_inicial(
+    *,
+    tipo_comunicacao_canonico: str,
+    sigla_tribunal: str,
+    processo_record: dict[str, Any] | None,
+) -> str:
+    """Decide o Status inicial da página recém-criada.
+
+    Round 4.5 frente 1 (P1-1 da auditoria):
+    Auto-``Nada para fazer`` quando todas as condições batem:
+    - tipo de comunicação canônico = ``Lista de Distribuição``
+    - tribunal IN (TRT10, TST) — trabalhistas
+    - processo cadastrado em ⚖️ Processos
+
+    Caso contrário: ``Nova`` (default) — operador trata manualmente.
+
+    Esta função roda APENAS na criação da página (nunca em update),
+    portanto não há risco de sobrescrever Status já modificado pelo
+    operador. Defesa em profundidade: caller só chama daqui no
+    ``montar_payload_publicacao`` (criação), nunca em fluxos de update.
+    """
+    sigla = (sigla_tribunal or "").strip().upper()
+    if (
+        tipo_comunicacao_canonico == "Lista de Distribuição"
+        and sigla in _TRIBUNAIS_LISTA_AUTO_TRIADA
+        and processo_record is not None
+    ):
+        return STATUS_NADA_PARA_FAZER
+    return STATUS_DEFAULT_CRIACAO
+
+
+# ---------------------------------------------------------------------------
 # Round 4.4 — Auto-Alerta contadoria (5 regras multi-select)
 # ---------------------------------------------------------------------------
 
@@ -579,6 +630,13 @@ def montar_payload_publicacao(
         processo_record=processo_record,
         alertas_disparados=alertas_contadoria,
     )
+    # Round 4.5 frente 1: Status inicial pode virar "Nada para fazer"
+    # em casos óbvios (Listas TRT10/TST com Processo cadastrado).
+    status_inicial = _calcular_status_inicial(
+        tipo_comunicacao_canonico=tipo_comunicacao_canonico,
+        sigla_tribunal=sigla,
+        processo_record=processo_record,
+    )
 
     properties: dict[str, Any] = {
         "Identificação": _title_prop(titulo),
@@ -595,7 +653,7 @@ def montar_payload_publicacao(
         ),
         "Texto": _texto_inline_prop(texto_pre),
         "Link": _url_prop(publicacao.get("link")),
-        "Status": _select_prop("Nova"),
+        "Status": _select_prop(status_inicial),
         "Advogados intimados": _multi_select_prop(advogados_tags),
         "Observações": _rich_text_prop(publicacao.get("observacoes")),
         "Partes": _rich_text_prop(partes_str),
