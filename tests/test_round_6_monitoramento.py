@@ -14,6 +14,8 @@ implementadas. Este arquivo cresce incrementalmente.
 """
 from __future__ import annotations
 
+import json
+
 from notion_rpadv.services.dje_regras_v8 import (
     ALERTA_ACORDAO_EM_1GRAU,
     ALERTA_ATIVIDADE_EM_PROCESSO_ARQUIVADO,
@@ -21,9 +23,11 @@ from notion_rpadv.services.dje_regras_v8 import (
     ALERTA_CAPTURAR_NUMERACAO_STF,
     ALERTA_CAPTURAR_NUMERACAO_STJ_TST,
     ALERTA_CONFERIR_NATUREZA_PROCESSO,
+    ALERTA_CONFERIR_POSICAO_DO_CLIENTE,
     ALERTA_CONFERIR_SENTENCA_FASE_POS_COGNITIVA,
     ALERTA_CONFERIR_TIPO_PROCESSO,
     ALERTA_CONFERIR_TRIBUNAL_ORIGEM,
+    ALERTA_CONFERIR_VINCULACAO_CLIENTE_PROCESSO,
     ALERTA_FASE_DESATUALIZADA_COGNITIVA,
     ALERTA_FASE_DESATUALIZADA_EXECUTIVA,
     ALERTA_FASE_DESATUALIZADA_LIQUIDACAO,
@@ -42,6 +46,7 @@ from notion_rpadv.services.dje_regras_v8 import (
     ALERTA_TEXTO_IMPRESTAVEL,
     ALERTA_TRANSITO_PENDENTE,
     ALERTA_TRIBUNAL_FORA_VOCABULARIO,
+    ALERTA_VINCULAR_CLIENTE_AO_PROCESSO,
     FASE_COGNITIVA,
     FASE_EXECUTIVA,
     FASE_LIQUIDACAO,
@@ -51,6 +56,7 @@ from notion_rpadv.services.dje_regras_v8 import (
     INSTANCIA_TST,
     aplicar_regras_monitoramento,
     aplicar_todas_regras,
+    carregar_indice_clientes,
     fase_implicada,
     instancia_implicada,
     regra_2_capturar_numeracao_stj_tst,
@@ -58,6 +64,10 @@ from notion_rpadv.services.dje_regras_v8 import (
     regra_4_natureza_inconsistente_com_tribunal,
     regra_5_natureza_inconsistente_com_classe,
     regra_6_recurso_autonomo_cadastrado_como_principal,
+    regra_7_cliente_fora_relation,
+    regra_8_litisconsorcio_nao_refletido,
+    regra_9_cliente_cadastrado_nao_aparece,
+    regra_10_polo_inconsistente,
     regra_11_partes_adversas_ausentes,
     regra_12_tribunal_fora_vocabulario,
     regra_13_conferir_tribunal_origem,
@@ -1303,3 +1313,304 @@ def test_R7c_composicao_pauta_arquivado_dispara_R30_R31_R41() -> None:
     assert "Incluir julgamento no controle" in alertas  # camada base R41
     assert ALERTA_PAUTA_EM_PROCESSO_ARQUIVADO in alertas
     assert ALERTA_ATIVIDADE_EM_PROCESSO_ARQUIVADO in alertas
+
+
+# ===========================================================================
+# Round 7d — Regras 7-10: Cliente e posição
+# ===========================================================================
+
+# Indice de clientes mockado pra testes (page_id → nome uppercase)
+_INDICE_CLIENTES_MOCK: dict[str, str] = {
+    "page-1": "JOSÉ DA SILVA SAUTNER",
+    "page-2": "MARIA APARECIDA TAUCCI",
+    "page-3": "PAULO CESAR OCCASO",
+}
+
+
+def _pub_destinatarios(*destinatarios: tuple[str, str]) -> dict:
+    """Helper: retorna pub com destinatarios estruturados."""
+    return _pub(destinatarios=[
+        {"nome": nome, "polo": polo} for nome, polo in destinatarios
+    ])
+
+
+# ---------------------------------------------------------------------------
+# Regra 7 — Cliente do escritório fora da relation
+# ---------------------------------------------------------------------------
+
+
+def test_R7d_R7_dispara_cliente_em_pub_fora_proc() -> None:
+    pub = _pub_destinatarios(
+        ("JOSÉ DA SILVA SAUTNER", "A"),
+        ("BANCO DO BRASIL SA", "P"),
+    )
+    proc = _proc(tipo_de_processo="Principal", clientes=[])
+    assert regra_7_cliente_fora_relation(
+        pub, proc, indice_clientes=_INDICE_CLIENTES_MOCK,
+    ) == ALERTA_VINCULAR_CLIENTE_AO_PROCESSO
+
+
+def test_R7d_R7_NAO_dispara_se_cliente_ja_em_proc_clientes() -> None:
+    pub = _pub_destinatarios(
+        ("JOSÉ DA SILVA SAUTNER", "A"),
+        ("BANCO DO BRASIL SA", "P"),
+    )
+    proc = _proc(tipo_de_processo="Principal", clientes=["page-1"])
+    assert regra_7_cliente_fora_relation(
+        pub, proc, indice_clientes=_INDICE_CLIENTES_MOCK,
+    ) is None
+
+
+def test_R7d_R7_NAO_dispara_para_recurso_autonomo() -> None:
+    """Recursos têm Clientes vazio por design — filtro evita falso positivo."""
+    pub = _pub_destinatarios(("JOSÉ DA SILVA SAUTNER", "A"))
+    proc = _proc(tipo_de_processo="Recurso autônomo", clientes=[])
+    assert regra_7_cliente_fora_relation(
+        pub, proc, indice_clientes=_INDICE_CLIENTES_MOCK,
+    ) is None
+
+
+def test_R7d_R7_NAO_dispara_se_nenhum_cliente_em_pub() -> None:
+    pub = _pub_destinatarios(
+        ("OUTRA PESSOA NÃO CADASTRADA", "A"),
+        ("BANCO DO BRASIL SA", "P"),
+    )
+    proc = _proc(tipo_de_processo="Principal", clientes=[])
+    assert regra_7_cliente_fora_relation(
+        pub, proc, indice_clientes=_INDICE_CLIENTES_MOCK,
+    ) is None
+
+
+def test_R7d_R7_NAO_dispara_sem_indice_clientes() -> None:
+    """Sem indice_clientes (cache_conn None) → silenciosamente pula."""
+    pub = _pub_destinatarios(("JOSÉ DA SILVA SAUTNER", "A"))
+    proc = _proc(tipo_de_processo="Principal", clientes=[])
+    assert regra_7_cliente_fora_relation(pub, proc) is None
+    assert regra_7_cliente_fora_relation(pub, proc, indice_clientes={}) is None
+
+
+# ---------------------------------------------------------------------------
+# Regra 8 — Litisconsórcio não refletido
+# ---------------------------------------------------------------------------
+
+
+def test_R7d_R8_dispara_2_clientes_mesmo_polo_proc_so_1() -> None:
+    pub = _pub_destinatarios(
+        ("JOSÉ DA SILVA SAUTNER", "A"),
+        ("MARIA APARECIDA TAUCCI", "A"),
+        ("BANCO DO BRASIL SA", "P"),
+    )
+    proc = _proc(tipo_de_processo="Principal", clientes=["page-1"])
+    assert regra_8_litisconsorcio_nao_refletido(
+        pub, proc, indice_clientes=_INDICE_CLIENTES_MOCK,
+    ) == ALERTA_VINCULAR_CLIENTE_AO_PROCESSO
+
+
+def test_R7d_R8_NAO_dispara_se_proc_ja_tem_2_clientes() -> None:
+    pub = _pub_destinatarios(
+        ("JOSÉ DA SILVA SAUTNER", "A"),
+        ("MARIA APARECIDA TAUCCI", "A"),
+    )
+    proc = _proc(tipo_de_processo="Principal", clientes=["page-1", "page-2"])
+    assert regra_8_litisconsorcio_nao_refletido(
+        pub, proc, indice_clientes=_INDICE_CLIENTES_MOCK,
+    ) is None
+
+
+def test_R7d_R8_NAO_dispara_se_so_1_cliente_pub() -> None:
+    pub = _pub_destinatarios(("JOSÉ DA SILVA SAUTNER", "A"))
+    proc = _proc(tipo_de_processo="Principal", clientes=[])
+    assert regra_8_litisconsorcio_nao_refletido(
+        pub, proc, indice_clientes=_INDICE_CLIENTES_MOCK,
+    ) is None
+
+
+def test_R7d_R8_NAO_dispara_para_recurso() -> None:
+    pub = _pub_destinatarios(
+        ("JOSÉ DA SILVA SAUTNER", "A"),
+        ("MARIA APARECIDA TAUCCI", "A"),
+    )
+    proc = _proc(tipo_de_processo="Recurso autônomo", clientes=[])
+    assert regra_8_litisconsorcio_nao_refletido(
+        pub, proc, indice_clientes=_INDICE_CLIENTES_MOCK,
+    ) is None
+
+
+# ---------------------------------------------------------------------------
+# Regra 9 — Cliente cadastrado não aparece nas partes
+# ---------------------------------------------------------------------------
+
+
+def test_R7d_R9_dispara_proc_clientes_sem_match_pub() -> None:
+    pub = _pub_destinatarios(
+        ("OUTRO NOME", "A"),
+        ("BANCO DO BRASIL SA", "P"),
+    )
+    proc = _proc(tipo_de_processo="Principal", clientes=["page-1"])
+    assert regra_9_cliente_cadastrado_nao_aparece(
+        pub, proc, indice_clientes=_INDICE_CLIENTES_MOCK,
+    ) == ALERTA_CONFERIR_VINCULACAO_CLIENTE_PROCESSO
+
+
+def test_R7d_R9_NAO_dispara_se_cliente_aparece_nas_partes() -> None:
+    pub = _pub_destinatarios(
+        ("JOSÉ DA SILVA SAUTNER", "A"),
+        ("BANCO DO BRASIL SA", "P"),
+    )
+    proc = _proc(tipo_de_processo="Principal", clientes=["page-1"])
+    assert regra_9_cliente_cadastrado_nao_aparece(
+        pub, proc, indice_clientes=_INDICE_CLIENTES_MOCK,
+    ) is None
+
+
+def test_R7d_R9_NAO_dispara_se_proc_clientes_vazio() -> None:
+    pub = _pub_destinatarios(("ALGUEM", "A"))
+    proc = _proc(tipo_de_processo="Principal", clientes=[])
+    assert regra_9_cliente_cadastrado_nao_aparece(
+        pub, proc, indice_clientes=_INDICE_CLIENTES_MOCK,
+    ) is None
+
+
+def test_R7d_R9_NAO_dispara_para_recurso() -> None:
+    pub = _pub_destinatarios(("OUTRO", "A"))
+    proc = _proc(tipo_de_processo="Recurso autônomo", clientes=["page-1"])
+    assert regra_9_cliente_cadastrado_nao_aparece(
+        pub, proc, indice_clientes=_INDICE_CLIENTES_MOCK,
+    ) is None
+
+
+# ---------------------------------------------------------------------------
+# Regra 10 — Polo inconsistente em 1ª instância
+# ---------------------------------------------------------------------------
+
+
+def test_R7d_R10_dispara_cliente_polo_ativo_proc_reu() -> None:
+    pub = _pub_destinatarios(
+        ("JOSÉ DA SILVA SAUTNER", "A"),  # cliente em Polo Ativo
+        ("BANCO DO BRASIL SA", "P"),
+    )
+    proc = _proc(
+        tipo_de_processo="Principal",
+        instancia=INSTANCIA_PRIMEIRO_GRAU,
+        posicao_do_cliente="Réu",  # mas cadastrado como Réu
+    )
+    assert regra_10_polo_inconsistente(
+        pub, proc, indice_clientes=_INDICE_CLIENTES_MOCK,
+    ) == ALERTA_CONFERIR_POSICAO_DO_CLIENTE
+
+
+def test_R7d_R10_dispara_cliente_polo_passivo_proc_autor() -> None:
+    pub = _pub_destinatarios(
+        ("AUTOR ADVERSÁRIO", "A"),
+        ("JOSÉ DA SILVA SAUTNER", "P"),  # cliente em Polo Passivo
+    )
+    proc = _proc(
+        tipo_de_processo="Principal",
+        instancia=INSTANCIA_PRIMEIRO_GRAU,
+        posicao_do_cliente="Autor",  # mas cadastrado como Autor
+    )
+    assert regra_10_polo_inconsistente(
+        pub, proc, indice_clientes=_INDICE_CLIENTES_MOCK,
+    ) == ALERTA_CONFERIR_POSICAO_DO_CLIENTE
+
+
+def test_R7d_R10_NAO_dispara_se_polo_consistente() -> None:
+    pub = _pub_destinatarios(
+        ("JOSÉ DA SILVA SAUTNER", "A"),  # cliente em Polo Ativo
+        ("BANCO DO BRASIL SA", "P"),
+    )
+    proc = _proc(
+        tipo_de_processo="Principal",
+        instancia=INSTANCIA_PRIMEIRO_GRAU,
+        posicao_do_cliente="Autor",
+    )
+    assert regra_10_polo_inconsistente(
+        pub, proc, indice_clientes=_INDICE_CLIENTES_MOCK,
+    ) is None
+
+
+def test_R7d_R10_NAO_dispara_em_2grau() -> None:
+    """Em 2º grau, posição depende de quem recorreu — não dispara."""
+    pub = _pub_destinatarios(("JOSÉ DA SILVA SAUTNER", "A"))
+    proc = _proc(
+        tipo_de_processo="Principal",
+        instancia=INSTANCIA_SEGUNDO_GRAU,
+        posicao_do_cliente="Réu",
+    )
+    assert regra_10_polo_inconsistente(
+        pub, proc, indice_clientes=_INDICE_CLIENTES_MOCK,
+    ) is None
+
+
+def test_R7d_R10_NAO_dispara_se_posicao_recorrente_recorrido() -> None:
+    """Recorrente/Recorrido não disparam (ambíguos)."""
+    pub = _pub_destinatarios(("JOSÉ DA SILVA SAUTNER", "A"))
+    proc = _proc(
+        tipo_de_processo="Principal",
+        instancia=INSTANCIA_PRIMEIRO_GRAU,
+        posicao_do_cliente="Recorrente",
+    )
+    assert regra_10_polo_inconsistente(
+        pub, proc, indice_clientes=_INDICE_CLIENTES_MOCK,
+    ) is None
+
+
+# ---------------------------------------------------------------------------
+# Composição Round 7d — Regras 7 e 9 mutuamente exclusivas (mais ou menos)
+# ---------------------------------------------------------------------------
+
+
+def test_R7d_composicao_R9_dispara_quando_clientes_proc_invalidos() -> None:
+    """Proc.clientes=[page-1] (José) + Pub não menciona José + cliente
+    do escritório aparece (Maria) → R9 dispara (José sumiu) E R7
+    dispara (Maria não está em Proc.clientes).
+
+    Sem cache_conn em aplicar_regras_monitoramento, R7-9 são puladas
+    silenciosamente. Aqui testamos as regras diretamente com
+    indice_clientes mockado.
+    """
+    pub = _pub_destinatarios(
+        ("MARIA APARECIDA TAUCCI", "A"),
+        ("BANCO DO BRASIL SA", "P"),
+    )
+    proc = _proc(tipo_de_processo="Principal", clientes=["page-1"])
+    assert regra_9_cliente_cadastrado_nao_aparece(
+        pub, proc, indice_clientes=_INDICE_CLIENTES_MOCK,
+    ) == ALERTA_CONFERIR_VINCULACAO_CLIENTE_PROCESSO
+    assert regra_7_cliente_fora_relation(
+        pub, proc, indice_clientes=_INDICE_CLIENTES_MOCK,
+    ) == ALERTA_VINCULAR_CLIENTE_AO_PROCESSO
+
+
+# ---------------------------------------------------------------------------
+# carregar_indice_clientes — sanity test
+# ---------------------------------------------------------------------------
+
+
+def test_R7d_carregar_indice_pula_template_modelo() -> None:
+    """O template '🧱 Modelo — usar como template' não deve entrar
+    no índice (poluiria matching)."""
+    import sqlite3
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        "CREATE TABLE records (base TEXT, page_id TEXT, data_json TEXT,"
+        " updated_at REAL, PRIMARY KEY (base, page_id))"
+    )
+    conn.execute(
+        "INSERT INTO records VALUES (?, ?, ?, ?)",
+        ("Clientes", "page-tpl", json.dumps({"nome": "🧱 Modelo — usar como template"}), 0.0),
+    )
+    conn.execute(
+        "INSERT INTO records VALUES (?, ?, ?, ?)",
+        ("Clientes", "page-real", json.dumps({"nome": "JOSÉ DA SILVA SAUTNER"}), 0.0),
+    )
+    indice = carregar_indice_clientes(conn)
+    assert "page-tpl" not in indice
+    assert "page-real" in indice
+    assert indice["page-real"] == "JOSÉ DA SILVA SAUTNER"
+    conn.close()
+
+
+def test_R7d_carregar_indice_devolve_vazio_se_cache_none() -> None:
+    assert carregar_indice_clientes(None) == {}

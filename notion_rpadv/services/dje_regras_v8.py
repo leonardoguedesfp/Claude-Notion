@@ -24,6 +24,7 @@ no Notion.
 """
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
@@ -102,6 +103,11 @@ ALERTA_ATIVIDADE_EM_PROCESSO_ARQUIVADO: str = "Atividade em processo arquivado"
 
 # Regra 38 — Link externo
 ALERTA_CAPTURAR_LINK_EXTERNO: str = "Capturar link externo"
+
+# Regras 7-10 — Cliente e posição
+ALERTA_VINCULAR_CLIENTE_AO_PROCESSO: str = "Vincular cliente ao processo"
+ALERTA_CONFERIR_VINCULACAO_CLIENTE_PROCESSO: str = "Conferir vinculação cliente-processo"
+ALERTA_CONFERIR_POSICAO_DO_CLIENTE: str = "Conferir posição do cliente"
 
 # Alertas mantidos do Round 4 (técnicos/operacionais — sem número no doc v8)
 ALERTA_PROCESSO_NAO_CADASTRADO: str = "Processo não cadastrado"
@@ -227,6 +233,23 @@ FASE_EXECUTIVA: str = "Executiva"
 STATUS_ATIVO: str = "Ativo"
 STATUS_ARQUIVADO: str = "Arquivado"
 STATUS_ARQUIVADO_TEMA_955: str = "Arquivado provisoriamente (tema 955)"
+
+# ---------------------------------------------------------------------------
+# Posição do cliente (Proc.posicao_do_cliente)
+# ---------------------------------------------------------------------------
+
+POSICAO_CLIENTE_AUTOR: str = "Autor"
+POSICAO_CLIENTE_REU: str = "Réu"
+POSICAO_CLIENTE_RECORRENTE: str = "Recorrente"
+POSICAO_CLIENTE_RECORRIDO: str = "Recorrido"
+
+#: Mapeamento Proc.posicao_do_cliente → polo Pub esperado em 1ª instância
+#: (Recorrente/Recorrido só fazem sentido em 2º grau ou superior;
+#: Regra 10 só dispara em 1º grau).
+_POSICAO_PARA_POLO_ESPERADO: dict[str, str] = {
+    POSICAO_CLIENTE_AUTOR: "A",
+    POSICAO_CLIENTE_REU: "P",
+}
 
 #: Classes que indicam fase cognitiva (peças iniciais do processo).
 _CLASSES_COGNITIVAS: frozenset[str] = frozenset({
@@ -565,6 +588,222 @@ def regra_39_recurso_autonomo_sem_processo_pai(
     elif pai:
         return None
     return ALERTA_RECURSO_AUTONOMO_SEM_PROCESSO_PAI
+
+
+# ---------------------------------------------------------------------------
+# Regras 7-10 — Cliente e posição
+# ---------------------------------------------------------------------------
+
+#: Sentinela em ``Cliente.nome`` que NÃO deve participar do matching.
+_CLIENTE_TEMPLATE_MARKER: str = "🧱 MODELO"
+
+
+def carregar_indice_clientes(cache_conn: Any) -> dict[str, str]:
+    """Lê base ``Clientes`` do cache.db e devolve dict
+    ``{page_id: nome_uppercase}`` para matching nas regras 7-10.
+
+    Pula o template ``"🧱 Modelo — usar como template"``.
+    """
+    if cache_conn is None:
+        return {}
+    indice: dict[str, str] = {}
+    cur = cache_conn.execute(
+        "SELECT page_id, data_json FROM records WHERE base = ?",
+        ("Clientes",),
+    )
+    for row in cur:
+        try:
+            data = json.loads(row["data_json"])
+        except (json.JSONDecodeError, TypeError):
+            continue
+        nome = (data.get("nome") or "").strip()
+        if not nome:
+            continue
+        nome_up = nome.upper()
+        if _CLIENTE_TEMPLATE_MARKER in nome_up:
+            continue
+        indice[str(row["page_id"])] = nome_up
+    return indice
+
+
+def _destinatarios_por_polo(
+    publicacao: dict[str, Any],
+) -> dict[str, list[str]]:
+    """Agrupa ``publicacao["destinatarios"]`` por polo, devolvendo
+    ``{polo: [nome_uppercase, ...]}``. Polos canônicos: ``A``, ``P``,
+    ``T``."""
+    out: dict[str, list[str]] = {}
+    destinatarios = publicacao.get("destinatarios") or []
+    for d in destinatarios:
+        if not isinstance(d, dict):
+            continue
+        nome = str(d.get("nome") or "").strip().upper()
+        if not nome:
+            continue
+        polo = str(d.get("polo") or "").strip().upper() or "?"
+        out.setdefault(polo, []).append(nome)
+    return out
+
+
+def _matching_clientes_em_pub(
+    publicacao: dict[str, Any],
+    indice_clientes: dict[str, str],
+) -> dict[str, set[str]]:
+    """Para cada polo da Pub, identifica quais clientes cadastrados
+    aparecem (matching por substring uppercase). Devolve
+    ``{polo: {page_id_cliente, ...}}``.
+    """
+    if not indice_clientes:
+        return {}
+    polos = _destinatarios_por_polo(publicacao)
+    out: dict[str, set[str]] = {}
+    for polo, nomes_pub in polos.items():
+        # Concatena todos os nomes do polo em uma string só pra busca
+        texto_polo = " | ".join(nomes_pub)
+        if not texto_polo:
+            continue
+        encontrados: set[str] = set()
+        for page_id, nome_cliente in indice_clientes.items():
+            if not nome_cliente or len(nome_cliente) < 8:
+                # Nomes muito curtos podem dar match falso — pula
+                continue
+            if nome_cliente in texto_polo:
+                encontrados.add(page_id)
+        if encontrados:
+            out[polo] = encontrados
+    return out
+
+
+def regra_7_cliente_fora_relation(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+    *,
+    indice_clientes: dict[str, str] | None = None,
+) -> str | None:
+    """Regra 7 — Cliente do escritório fora da relation.
+
+    - Condições: ``Pub.Partes`` contém nome de cliente cadastrado em
+      👥 Clientes que não está em ``Proc.clientes``. Filtro
+      ``Proc.tipo_de_processo=Principal`` para evitar 113 falsos
+      positivos dos recursos (que têm Clientes vazio por design).
+    - Alerta: ``Vincular cliente ao processo``.
+    """
+    if processo_record is None or not indice_clientes:
+        return None
+    if (processo_record.get("tipo_de_processo") or "") != TIPO_PROCESSO_PRINCIPAL:
+        return None
+    matchings = _matching_clientes_em_pub(publicacao, indice_clientes)
+    if not matchings:
+        return None
+    encontrados_pub: set[str] = set()
+    for clientes_polo in matchings.values():
+        encontrados_pub.update(clientes_polo)
+    proc_clientes = set(str(c) for c in (processo_record.get("clientes") or []))
+    if not encontrados_pub.issubset(proc_clientes):
+        return ALERTA_VINCULAR_CLIENTE_AO_PROCESSO
+    return None
+
+
+def regra_8_litisconsorcio_nao_refletido(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+    *,
+    indice_clientes: dict[str, str] | None = None,
+) -> str | None:
+    """Regra 8 — Litisconsórcio ativo não refletido.
+
+    - Condições: ``Pub.Partes`` lista 2+ clientes do escritório no
+      mesmo polo **e** ``Proc.clientes`` tem apenas 1. Filtro
+      ``tipo_de_processo=Principal``.
+    - Alerta: ``Vincular cliente ao processo`` (mesmo da Regra 7).
+    """
+    if processo_record is None or not indice_clientes:
+        return None
+    if (processo_record.get("tipo_de_processo") or "") != TIPO_PROCESSO_PRINCIPAL:
+        return None
+    matchings = _matching_clientes_em_pub(publicacao, indice_clientes)
+    if not matchings:
+        return None
+    # Verifica se há polo com 2+ clientes
+    tem_litisconsorcio = any(len(clientes) >= 2 for clientes in matchings.values())
+    if not tem_litisconsorcio:
+        return None
+    proc_clientes = set(str(c) for c in (processo_record.get("clientes") or []))
+    if len(proc_clientes) < 2:
+        return ALERTA_VINCULAR_CLIENTE_AO_PROCESSO
+    return None
+
+
+def regra_9_cliente_cadastrado_nao_aparece(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+    *,
+    indice_clientes: dict[str, str] | None = None,
+) -> str | None:
+    """Regra 9 — Cliente cadastrado não aparece nas partes.
+
+    - Condições: ``Proc.clientes`` populado com cliente A **e**
+      ``Pub.Partes`` não menciona A em nenhuma posição. Filtro
+      ``tipo_de_processo=Principal``.
+    - Alerta: ``Conferir vinculação cliente-processo``.
+    - Explicação: possível vinculação errada de Pub.Processo ou
+      homonímia. Investigação manual.
+    """
+    if processo_record is None or not indice_clientes:
+        return None
+    if (processo_record.get("tipo_de_processo") or "") != TIPO_PROCESSO_PRINCIPAL:
+        return None
+    proc_clientes = [str(c) for c in (processo_record.get("clientes") or [])]
+    if not proc_clientes:
+        return None
+    matchings = _matching_clientes_em_pub(publicacao, indice_clientes)
+    encontrados_pub: set[str] = set()
+    for clientes_polo in matchings.values():
+        encontrados_pub.update(clientes_polo)
+    # Se nenhum dos clientes cadastrados aparece nas partes da pub,
+    # dispara alerta
+    for cliente_id in proc_clientes:
+        if cliente_id in encontrados_pub:
+            return None
+    return ALERTA_CONFERIR_VINCULACAO_CLIENTE_PROCESSO
+
+
+def regra_10_polo_inconsistente(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+    *,
+    indice_clientes: dict[str, str] | None = None,
+) -> str | None:
+    """Regra 10 — Polo inconsistente em 1ª instância.
+
+    - Condições: ``Proc.instancia=1º grau`` **e** algum cliente do
+      escritório aparece em ``Pub.Partes`` no polo oposto ao
+      ``Proc.posicao_do_cliente``:
+      - Cliente em Polo Ativo + Posição=Réu → dispara
+      - Cliente em Polo Passivo + Posição=Autor → dispara
+    - Alerta: ``Conferir posição do cliente``.
+    - Explicação: Em 2º grau ou superior, posição depende de quem
+      recorreu — não disparar alerta automático ali (Recorrente/
+      Recorrido).
+    """
+    if processo_record is None or not indice_clientes:
+        return None
+    instancia = (processo_record.get("instancia") or "").strip()
+    if instancia != INSTANCIA_PRIMEIRO_GRAU:
+        return None
+    posicao = (processo_record.get("posicao_do_cliente") or "").strip()
+    polo_esperado = _POSICAO_PARA_POLO_ESPERADO.get(posicao)
+    if polo_esperado is None:
+        return None  # Recorrente/Recorrido/vazio — não dispara
+    matchings = _matching_clientes_em_pub(publicacao, indice_clientes)
+    if not matchings:
+        return None
+    # Cliente do escritório aparece em algum polo da Pub. Verifica se
+    # algum desses clientes está no polo OPOSTO ao esperado.
+    polo_oposto = "P" if polo_esperado == "A" else "A"
+    if polo_oposto in matchings and matchings[polo_oposto]:
+        return ALERTA_CONFERIR_POSICAO_DO_CLIENTE
+    return None
 
 
 def regra_29_sentenca_em_fase_pos_cognitiva(
@@ -1212,27 +1451,49 @@ def aplicar_regras_monitoramento(
 
     Round 7b — Regras 4, 5, 6, 39 (Classificação processual + processo pai).
 
-    Round 7c — implementadas neste commit:
+    Round 7c — Regras 29, 30, 31, 38 (Estado processual + link).
 
-    - Regra 29 (Sentença em fase pós-cognitiva).
-    - Regra 30 (Pauta em processo arquivado).
-    - Regra 31 (Atividade em processo arquivado).
-    - Regra 38 (Capturar link externo).
+    Round 7d — implementadas neste commit:
+
+    - Regra 7 (Cliente do escritório fora da relation).
+    - Regra 8 (Litisconsórcio não refletido).
+    - Regra 9 (Cliente cadastrado não aparece nas partes).
+    - Regra 10 (Polo inconsistente em 1ª instância).
+
+    Regras 7-10 carregam índice de Clientes do cache.db (somente se
+    ``cache_conn`` foi passado). Sem ``cache_conn``, essas regras são
+    silenciosamente puladas — útil em testes unitários e em cenários
+    legados sem cache.
 
     Pendentes (a serem acrescentadas em commits subsequentes):
 
     - Regra 1 (Conferir número CNJ do processo).
-    - Regras 7-9 (Cliente do escritório).
-    - Regra 10 (Posição do cliente).
     - Regras 19-25 (Cidade, Vara, Turma, Relator).
     - Regras 32-34, 36, 37 (datas, sobrestamento, encerramento executivo).
     """
+    # Lazy-load do índice de clientes (apenas para Regras 7-10)
+    indice_clientes = (
+        carregar_indice_clientes(cache_conn) if cache_conn is not None else {}
+    )
+
     candidatos: list[str | None] = [
         regra_2_capturar_numeracao_stj_tst(publicacao, processo_record),
         regra_3_capturar_numeracao_stf(publicacao, processo_record),
         regra_4_natureza_inconsistente_com_tribunal(publicacao, processo_record),
         regra_5_natureza_inconsistente_com_classe(publicacao, processo_record),
         regra_6_recurso_autonomo_cadastrado_como_principal(publicacao, processo_record),
+        regra_7_cliente_fora_relation(
+            publicacao, processo_record, indice_clientes=indice_clientes,
+        ),
+        regra_8_litisconsorcio_nao_refletido(
+            publicacao, processo_record, indice_clientes=indice_clientes,
+        ),
+        regra_9_cliente_cadastrado_nao_aparece(
+            publicacao, processo_record, indice_clientes=indice_clientes,
+        ),
+        regra_10_polo_inconsistente(
+            publicacao, processo_record, indice_clientes=indice_clientes,
+        ),
         regra_12_tribunal_fora_vocabulario(publicacao, processo_record),
         regra_13_conferir_tribunal_origem(publicacao, processo_record),
         regra_14_subida_nao_detectada(publicacao, processo_record),
