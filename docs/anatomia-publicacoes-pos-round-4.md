@@ -351,3 +351,281 @@ A leve consolidação (menos cruzamentos no agregado) reflete a
 canonização do Round 1 fix 1.1 — não é perda de dado.
 
 ---
+
+## 3. Validação das frentes do Round 4 / 4.5 / 4.6
+
+### 3.1 Frente 4.1 — Partes legível 🔴 **REGRESSÃO PARCIAL**
+
+**Estado**: 1.078 pubs (67%) com formato `Polo Ativo: ... / Polo
+Passivo: ...` correto; **530 pubs (33%) ainda com Partes em JSON cru
+`[{"comunicacao_id": ..., "nome": "...", "polo": "..."}]`**.
+
+**Distribuição do JSON cru por cluster** (530 pubs):
+
+| Tribunal | Comunicação | Documento | Pubs com JSON cru | % do cluster |
+|---|---|---|---:|---:|
+| TRT10 | Intimação | Notificação | 408 | 56% (de 723) |
+| TRT10 | Intimação | Acórdão | 94 | **100%** (de 94) |
+| TST | Intimação | Decisão | 8 | 100% (de 8) |
+| STJ | Intimação | Decisão | 5 | 16% (de 32) |
+| TRT10 | Lista de Distribuição | Distribuição | 4 | 2% (de 201) |
+| TST | Intimação | Acórdão | 3 | 30% (de 10) |
+| TST | Intimação | Despacho | 2 | 12% (de 17) |
+| TJBA | Intimação | Despacho | 1 | 100% (de 1) |
+| TRT18 | Intimação | Notificação | 1 | 100% (de 1) |
+| TRF1 | Intimação | Pauta de Julgamento | 1 | n/d |
+| TJDFT | Intimação | Decisão | 1 | 1% (de 81) |
+| TRT10 | Intimação | Despacho | 1 | 11% (de 9) |
+| TJDFT | Intimação | Certidão | 1 | 2% (de 49) |
+
+**Diagnóstico**:
+
+1. O `formatar_partes(destinatarios)` em
+   `notion_rpadv/services/dje_notion_mappings.py:342` produz output
+   correto quando rodado isoladamente sobre o `payload.destinatarios`
+   das pubs afetadas. Validado para djen=494748109, 495174885,
+   573369859 — todos retornam strings tipo `"Polo Ativo: DENITA GOMES
+   GUIMARAES\nPolo Passivo: BANCO DO BRASIL SA"`.
+2. O mapper (`montar_payload_publicacao` em `dje_notion_mapper.py:620`)
+   chama `formatar_partes(publicacao.get("destinatarios"))` e gera
+   `properties["Partes"] = _rich_text_prop(partes_str)`.
+3. Inspeção MCP confirma: a página real djen=494748109 (page
+   `35630d90-c916-8155-ac1a-fdb2f0e90fa8`) tem
+   `"Partes":"\\[\\{\\"comunicacao_id\\": 494748109, ..."` — JSON cru.
+4. Inspeção MCP confirma também: TJDFT Decisão djen=496898418 (page
+   `35630d90-c916-8116-8d99-c6e788e83e2b`) tem
+   `"Partes":"Polo Ativo: JORGE HOMERO DA CUNHA"` — formato Round 4.1
+   correto.
+5. `captured_at` é o mesmo (2026-05-04T01:45) para todas as amostras —
+   sync foi rodado na mesma janela. `captured_in_mode = padrao` para
+   todas. `notion_attempts = 0` para todas (envio em primeira
+   tentativa, sem retry).
+
+**Hipóteses (não diagnosticadas nesta análise)**:
+
+- a. O sync chamou `montar_payload_publicacao` mas alguma camada
+  intermediária (transformer, validator, retry-store) descartou o
+  campo `Partes` formatado e usou um fallback antigo.
+- b. As páginas afetadas foram criadas em sync ANTERIOR ao Round 4
+  (pré-PR #19), e o R3 v2 não recriou (apenas reusou via algum
+  mecanismo de chave/hash) → mas isso conflita com R4.6 = reset do
+  SQLite, que zera `notion_page_id`.
+- c. Pode haver dois caminhos de envio (criação vs atualização)
+  e um deles ignora a Frente 4.1.
+
+A determinação da causa é trabalho do próximo round.
+
+**Sample IDs DJEN**:
+- Falha: 494748109 (TRT10 Notif), 495174885 (TRT10 Notif), 573369859
+  (TRT10 Acórdão)
+- Sucesso: 494870682 (TRT10 Notif legível, seq id `___3` mesmo dia),
+  496898418 (TJDFT Decisão), 530258606 (STJ Pauta), 524038068 (TJDFT
+  Ata), 496542520 (TRT10 Lista), 498387389 (TRT10 Lista cadastrada
+  com Status auto)
+
+**Cobertura final da Frente 4.1**: 67%, não 100%. **Fica em P0**
+para próximo round.
+
+### 3.2 Frente 4.2 — Classe normalizada 🟢 **OK**
+
+**Estado**: 1.608/1.608 pubs (100%) com `Classe` em CAPS uniforme.
+
+**Comparação com baseline**:
+
+| Classe (top 5 pós-Round-4) | Pós-R4 | Forma no baseline |
+|---|---:|---|
+| AÇÃO TRABALHISTA - RITO ORDINÁRIO | 695 | `AçãO TRABALHISTA - RITO ORDINáRIO` (695×) |
+| RECURSO ESPECIAL | 133 | `RECURSO ESPECIAL` (133×) |
+| RECURSO ORDINÁRIO TRABALHISTA | 132 | `RECURSO ORDINáRIO TRABALHISTA` (132×) |
+| CUMPRIMENTO DE SENTENÇA | 100 | `CUMPRIMENTO DE SENTENçA` (100×) |
+| AGRAVO DE PETIÇÃO | 90 | `AGRAVO DE PETIçãO` (90×) |
+
+Todas as 30 classes distintas vistas no acervo seguem CAPS uniforme
+correta. O `MAPA_NOMECLASSE` (mapper Round 4.2, 23 entradas) cobriu
+exatamente as classes vistas + fallback de `_normaliza_classe` para
+casos não mapeados.
+
+**Validação MCP** (4 amostras):
+- djen=494748109: `Classe: AÇÃO TRABALHISTA - RITO ORDINÁRIO` ✓
+- djen=573369859: `Classe: AGRAVO DE PETIÇÃO` ✓
+- djen=496898418: `Classe: LIQUIDAÇÃO DE SENTENÇA PELO PROCEDIMENTO COMUM` ✓
+- djen=530258606: `Classe: RECURSO ESPECIAL` ✓
+
+**Cobertura**: 100%. Frente 4.2 tinha sido marcada 🔴 no baseline
+(seção 6.1, ~2.000 pubs com casing torto); agora 🟢 100%.
+
+### 3.3 Frente 4.3 — Tarefa sugerida 🟢 **OK**
+
+**Estado**: 1.608/1.608 pubs (100%) recebem ao menos 1 tarefa.
+Distribuição:
+
+| Tarefa | Pós-R4 | Estimado baseline | Δ |
+|---|---:|---:|---:|
+| `D.01 Análise de publicação` | 1.305 | ~1.250 | +4% |
+| `D.03 Análise de acórdão` | 177 | 177 | 0 |
+| `D.02 Análise de sentença` | 15 | 15 | 0 |
+| `E.01 Cadastro de cliente/processo` | 473 | 473 | 0 |
+| `E.04 Inscrição para sustentação oral` | 111 | 112 | -1 |
+| `E.02 Atualizar dados no sistema` | 33 | 15+ | +120% |
+
+**Coexistência (multi-select)**:
+
+| # de tarefas por pub | Pubs | % |
+|---:|---:|---:|
+| 1 | 1.103 | 68,6% |
+| 2 | 504 | 31,3% |
+| 3 | 1 | 0,1% |
+
+Maior coexistência: D.01 + E.01 (publicação básica + processo a
+cadastrar) = 473 pubs (29% do acervo).
+
+**Análise dos desvios**:
+
+- **D.01 1.305 vs estimado 1.250 (+4%)**: dentro do limite de
+  tolerância (+20% no critério). Provavelmente o detector default
+  cobre alguns casos extras que o baseline classificou como cluster
+  específico.
+- **E.02 33 vs estimado 15 (+120%)**: regra dispara também quando
+  `Alerta = Instância desatualizada` (que veio em 25 pubs). Soma:
+  ~33 pubs com E.02. Coerente — Round 4.3 D2 foi implementado sem
+  precedência (handoff seção D2 ✅).
+- **D.03 = exato 177**: as 177 = 94 TRT10 Acórdão + 39 STJ Acórdão +
+  34 TJDFT Ementa + 7 TST Acórdão + 3 TST Acórdão. Confere com a
+  soma do baseline.
+- **D.02 = exato 15**: as 15 = 13 TJDFT Sentença + 1 TJSC Sentença +
+  1 TJRJ Sentença. Bate.
+- **E.01 = exato 473**: pubs sem `Processo` cadastrado.
+
+**Validação MCP** (5 amostras):
+- djen=494748109 (TRT10 Notif): `Tarefa = D.01` ✓
+- djen=573369859 (TRT10 Acórdão): `Tarefa = D.03` ✓
+- djen=530258606 (STJ Pauta): `Tarefa = E.04` ✓
+- djen=496542520 (TRT10 Lista sem cadastro): `Tarefa = D.01, E.01` ✓
+- djen=496898418 (TJDFT Decisão cadastrada): `Tarefa = D.01` ✓
+
+**Cobertura**: 100% — superior ao 98% estimado pelo baseline.
+
+### 3.4 Frente 4.4 — Alerta contadoria 🟢 **OK**
+
+**Estado**: 611/1.608 pubs (38%) recebem ao menos 1 alerta. Coerente
+com a estimativa de 36% do baseline. Distribuição:
+
+| Alerta | Pós-R4 | Estimado baseline | Δ | Análise |
+|---|---:|---:|---:|---|
+| `Processo não cadastrado` | 473 | 473 | 0 | Igual ao baseline (pubs sem `Processo` cadastrado) |
+| `Trânsito em julgado pendente` | 71 | 111 | -36% | **Esperado**: D3 do Round 4 EXCLUIU CUMPRIMENTO PROVISÓRIO. Baseline incluía; pós-R4 corretamente exclui ~40 pubs com `nomeClasse contains "PROVISÓRIO"`. Validado. |
+| `Pauta presencial sem inscrição` | 41 | ~13 | +215% | Detector pega TJDFT Pauta + TST Pauta + TRF1 Pauta (TJDFT 28, TST 12, TRF1 1). Baseline só estimou TJDFT. **Sem falso positivo** — pubs reais de pauta presencial. |
+| `Instância desatualizada` | 25 | 2 | +1.150% | Detector acerta cenários que baseline subestimou: STJ Distribuição → processo cadastrado em 2º grau (7 pubs); TST Lista → processo cadastrado em 1º grau (6); STJ Decisão/Acórdão/Pauta → processo em outras instâncias (~12). **Sem falso positivo**. |
+| `Texto imprestável` | 5 | 15 | -67% | Detector ficou conservador (esperado pelo handoff: "detector de texto imprestável conservador"). Pubs detectadas: TJGO `ARQUIVOS DIGITAIS INDISPONÍVEIS` (2), `Intime-se.` curto (1), TJPR pointer-only (2). Outras "imprestáveis" do baseline ficaram fora. |
+
+**Coexistência (multi-select)**:
+
+| # de alertas por pub | Pubs | % |
+|---:|---:|---:|
+| 0 | 997 | 62,0% |
+| 1 | 607 | 37,8% |
+| 2 | 4 | 0,2% |
+
+Coexistências mais comuns: `Trânsito em julgado pendente + Processo
+não cadastrado` (raras, ~3-4 pubs) e `Instância desatualizada` por
+si só.
+
+**Validação MCP** (3 amostras):
+- djen=496542520 (TRT10 Lista sem cadastro): `Alerta = Processo não cadastrado` ✓
+- djen=494748109 (TRT10 Notif processo cadastrado): `Alerta` vazio ✓
+- djen=496898418 (TJDFT Decisão cadastrada): `Alerta` vazio ✓
+
+**Cobertura**: 38% (vs estimado 36%). Frente 4.4 tinha sido marcada
+🔴 no baseline (vazio); agora 🟢 com 5 alertas operando corretamente.
+
+### 3.5 Frente 4.5a — Auto-Status Listas TRT10/TST 🟢 **OK**
+
+**Estado**: 217 Listas TRT10/TST no acervo (201 TRT10 + 16 TST).
+Distribuição de Status:
+
+| Subgrupo | Pubs | Status atribuído |
+|---|---:|---|
+| Lista TRT10/TST com `Processo` cadastrado | 69 | "Nada para fazer" ✓ |
+| Lista TRT10/TST SEM `Processo` cadastrado | 148 | "Nova" ✓ |
+
+**Zero falso positivo**: nenhuma pub fora desse cluster recebe
+`"Nada para fazer"`. Verificado:
+
+```
+Status=Nada para fazer (69 pubs):
+  100% são TRT10/TST + Lista de Distribuição + processo cadastrado
+```
+
+Distribuição entre tribunais (das 69 com Status auto):
+- TRT10 Lista de Distribuição cadastradas: 61 pubs
+- TST Lista de Distribuição cadastradas: 8 pubs
+
+**Validação MCP** (4 amostras):
+- djen=498387389 (TRT10 Lista cadastrada): `Status = "Nada para fazer"` ✓
+- djen=505334614 (TST Lista cadastrada): `Status = "Nada para fazer"` ✓
+- djen=496542520 (TRT10 Lista SEM cadastro): `Status = "Nova"` ✓
+- djen=494748109 (TRT10 Notificação cadastrada): `Status = "Nova"` ✓ (não-Lista, regra não dispara)
+
+**Sample IDs**:
+- Status auto: TRT10___2026-01-09___1 (djen=498387389),
+  TST___2026-01-19___1 (505334614), TST___2026-04-08___3 a ___7
+  (579065945-579418384) — confirma que regra opera em capturas
+  recentes, não só em datas antigas.
+
+**Cobertura**: 4,3% das pubs do acervo total (69/1.608) — exatamente
+no patamar estimado pelo prompt do baseline (~150-200/mês com R3
+contínuo, equivalente a ~70 no acervo de ~123 dias).
+
+### 3.6 Frente 4.5b — Filtro Atas TJDFT tipo "57" 🟢 **OK**
+
+**Estado**: 26 Atas no acervo (cluster `TJDFT | Edital | Outros`,
+tipo bruto "57" do payload), todas com filtro aplicado.
+
+**Validação MCP** (1 amostra detalhada):
+
+- djen=524038068 (page `35630d90-c916-8112-932d-e31dab953bac`),
+  identificação `TJDFT___2026-02-06___1`, classe `EMBARGOS DE
+  DECLARAÇÃO CÍVEL`, órgão `1ª Turma Cível`. Texto inline contém:
+
+  ```
+  ...JULGADOS<br>
+  0724974-20.2025.8.07.0000<br>
+  [Ata filtrada automaticamente: 1 de 278 processos pertence ao
+   escritório. Os demais CNJs foram omitidos. Texto integral
+   disponível pela Certidão.]
+  ```
+
+  Confirma filtro: lista original tinha 278 CNJs, ficou apenas o do
+  escritório (0724974-20...) + callout. Texto cabe em <2.000 chars.
+
+**Sample IDs adicionais**: djen=524038068 (1ª TCV, 278 procs no
+total), djen=525274051 (5ª TCV, 335 procs no baseline), djen=542171781
+(5ª TCV PRESENCIAL, 42 procs).
+
+**Cobertura**: 100% das 26 Atas filtradas. Frente 4.5b entregue
+perfeitamente.
+
+### 3.7 Frente 4.6 — Sem checkbox `Processo não cadastrado` 🟢 **OK**
+
+**Estado confirmado em 3 lugares**:
+
+1. CSV exportado tem 22 colunas, sem `Processo não cadastrado`. Header
+   válido confirmado: `Identificação, Advogados intimados, Advogados
+   não cadastrados, Alerta contadoria, Certidão, Classe, Cliente,
+   Data de disponibilização, Duplicatas suprimidas, Hash, ID DJEN,
+   Link, Observações, Partes, Processo, Status, Tarefa sugerida,
+   Texto, Tipo de comunicação, Tipo de documento, Tribunal, Órgão`.
+2. Inspeção MCP de 8 pubs amostrais — nenhuma tem propriedade
+   `Processo não cadastrado` no schema retornado.
+3. A info migrou corretamente para `Alerta contadoria → Processo não
+   cadastrado` em 473 pubs (igual ao count de pubs sem `Processo`
+   cadastrado).
+
+`Advogados não cadastrados` (checkbox distinto, não removido)
+permanece no schema — confirmado em todas as amostras MCP, valor
+booleano (`__NO__` na maioria).
+
+**Cobertura**: 100% — schema sem o checkbox histórico, info
+preservada via Alerta. Frente 4.6 entregue.
+
+---
