@@ -245,3 +245,116 @@ def tinha_destinatarios_advogados(destinatarioadvogados: Any) -> bool:
         isinstance(destinatarioadvogados, list)
         and any(isinstance(e, dict) for e in destinatarioadvogados)
     )
+
+
+# ---------------------------------------------------------------------------
+# Round 4 — Formatação de Partes (Polo Ativo / Passivo / Terceiro)
+# ---------------------------------------------------------------------------
+
+#: Mapeamento canônico de polos do DJEN → label legível para a propriedade
+#: ``Partes`` da database 📬 Publicações. Polos não listados caem no
+#: fallback ``Polo {valor}`` (defesa contra casos desconhecidos).
+POLO_LABEL: dict[str, str] = {
+    "A": "Polo Ativo",
+    "P": "Polo Passivo",
+    "T": "Terceiro Interessado",
+}
+
+#: Ordem de exibição fixa: Ativo → Passivo → Terceiro. Polos fora dessa
+#: ordem aparecem depois, na ordem de primeira aparição no payload.
+POLO_ORDEM_CANONICA: tuple[str, ...] = ("A", "P", "T")
+
+#: Limite Notion para rich_text inline em uma propriedade.
+PARTES_INLINE_LIMIT: int = 2000
+PARTES_TRUNCAMENTO_MARCADOR: str = "…"
+
+
+def formatar_partes(destinatarios: Any) -> str:
+    """Recebe ``destinatarios`` (lista de dicts do DJEN com ``nome`` e
+    ``polo``) e devolve string formatada legível para a propriedade
+    ``Partes`` no Notion.
+
+    Formato:
+
+    ::
+
+        Polo Ativo: NOME 1, NOME 2
+        Polo Passivo: NOME 3
+        Terceiro Interessado: NOME 4
+
+    Regras:
+
+    - Mapeamento ``A`` → ``Polo Ativo``, ``P`` → ``Polo Passivo``,
+      ``T`` → ``Terceiro Interessado``. Polos desconhecidos:
+      ``Polo {valor}`` como fallback defensivo.
+    - Múltiplos nomes no mesmo polo: separados por vírgula, ordem de
+      aparição preservada, dedup por nome (case-sensitive).
+    - Ordem entre polos: Ativo, Passivo, Terceiro Interessado. Polos
+      não-canônicos vêm depois na ordem de primeira aparição.
+    - Cada polo em uma linha, separador ``\\n`` entre linhas.
+    - Truncamento defensivo: se o output total exceder
+      ``PARTES_INLINE_LIMIT`` (2000), corta nome a nome no último
+      polo até caber e anexa ``…`` como marcador.
+    - Lista vazia, ``None``, ou destinatários sem ``nome`` → string
+      vazia (não JSON, não ``"null"``).
+    """
+    if not isinstance(destinatarios, list) or not destinatarios:
+        return ""
+
+    by_polo: dict[str, list[str]] = {}
+    polos_ordem_aparicao: list[str] = []
+    for entry in destinatarios:
+        if not isinstance(entry, dict):
+            continue
+        nome = str(entry.get("nome") or "").strip()
+        if not nome:
+            continue
+        polo = str(entry.get("polo") or "").strip().upper() or "?"
+        if polo not in by_polo:
+            by_polo[polo] = []
+            polos_ordem_aparicao.append(polo)
+        if nome not in by_polo[polo]:
+            by_polo[polo].append(nome)
+
+    if not by_polo:
+        return ""
+
+    canonicos_presentes = [p for p in POLO_ORDEM_CANONICA if p in by_polo]
+    nao_canonicos = [
+        p for p in polos_ordem_aparicao if p not in POLO_ORDEM_CANONICA
+    ]
+    polos_ordenados = canonicos_presentes + nao_canonicos
+
+    linhas: list[str] = []
+    truncado = False
+
+    for polo in polos_ordenados:
+        if truncado:
+            break
+        label = POLO_LABEL.get(polo, f"Polo {polo}")
+        nomes_acumulados: list[str] = []
+        for nome in by_polo[polo]:
+            tentativa = nomes_acumulados + [nome]
+            linha_tentativa = f"{label}: {', '.join(tentativa)}"
+            outras = "\n".join(linhas)
+            sep = "\n" if linhas else ""
+            tamanho_total = (
+                len(outras) + len(sep) + len(linha_tentativa)
+                + len(PARTES_TRUNCAMENTO_MARCADOR)
+            )
+            if tamanho_total > PARTES_INLINE_LIMIT:
+                truncado = True
+                break
+            nomes_acumulados.append(nome)
+        if nomes_acumulados:
+            linhas.append(f"{label}: {', '.join(nomes_acumulados)}")
+            if len(nomes_acumulados) < len(by_polo[polo]):
+                truncado = True
+        elif truncado:
+            # Não coube nem o primeiro nome deste polo
+            pass
+
+    out = "\n".join(linhas)
+    if truncado:
+        out = out + PARTES_TRUNCAMENTO_MARCADOR
+    return out[:PARTES_INLINE_LIMIT]

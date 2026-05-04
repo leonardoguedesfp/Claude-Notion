@@ -22,6 +22,7 @@ from notion_rpadv.services.dje_notion_constants import (
 )
 from notion_rpadv.services.dje_notion_mappings import (
     formatar_advogados_intimados,
+    formatar_partes,
     mapear_tipo_comunicacao,
     mapear_tipo_documento,
     tinha_destinatarios_advogados,
@@ -348,15 +349,9 @@ def montar_payload_publicacao(
         tinha_destinatarios and len(advogados_tags) == 0
     )
 
-    # Partes (destinatarios é lista de dicts no DJEN). Serializa JSON
-    # truncado pra caber em rich_text inline.
-    destinatarios_raw = publicacao.get("destinatarios")
-    if isinstance(destinatarios_raw, (list, dict)):
-        destinatarios_str = json.dumps(
-            destinatarios_raw, ensure_ascii=False,
-        )
-    else:
-        destinatarios_str = str(destinatarios_raw or "")
+    # Round 4 (4.1): Partes formatado como "Polo Ativo: X / Polo Passivo: Y"
+    # — substitui o JSON cru ilegível da Fase 5/Round 1.
+    partes_str = formatar_partes(publicacao.get("destinatarios"))
 
     tipo_documento_canonico = mapear_tipo_documento(
         publicacao.get("tipoDocumento"),
@@ -385,7 +380,7 @@ def montar_payload_publicacao(
         "Status": _select_prop("Nova"),
         "Advogados intimados": _multi_select_prop(advogados_tags),
         "Observações": _rich_text_prop(publicacao.get("observacoes")),
-        "Partes": _rich_text_prop(destinatarios_str),
+        "Partes": _rich_text_prop(partes_str),
         "Hash": _rich_text_prop(publicacao.get("hash")),
         "ID DJEN": _number_prop(publicacao.get("id")),
         "Processo não cadastrado": _checkbox_prop(processo_nao_cadastrado),
