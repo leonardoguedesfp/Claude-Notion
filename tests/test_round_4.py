@@ -614,3 +614,59 @@ def test_R4_3_pub_sem_categoria_definida_nao_dispara_d01() -> None:
     assert TAREFA_D01_ANALISE_PUBLICACAO not in tarefas
     # E.04 dispara
     assert TAREFA_E04_INSCRICAO_SUSTENTACAO in tarefas
+
+
+# ===========================================================================
+# 4.5 — Teste de regressão: <br> literal residual no Texto inline
+# ===========================================================================
+
+
+def test_R4_5_preprocessador_limpa_br_no_trailer_djen_494748109() -> None:
+    """Caso djen=494748109 do acervo Round 3 (TRT10 Notificação): texto
+    bruto tem 4 ``<br>`` no trailer ``...Juiz do Trabalho Titular<br><br>
+    Intimado(s) / Citado(s)<br> - {nome}<br>``. O pré-processador 1.7
+    do Round 1 deve remover TODOS — nenhum ``<br>`` literal pode chegar
+    ao texto inline entregue ao Notion.
+
+    Diagnóstico Round 4: o pipeline atual (Round 1 + Round 2) trata o
+    caso corretamente. O ``<br>`` residual observado no Notion vem de
+    pubs criadas com versão antiga do pipeline (pré-Round-1) — não há
+    bug no código atual. Este teste é regressão pra garantir que o
+    fix permaneça."""
+    from notion_rpadv.services.dje_text_pipeline import (
+        preprocessar_texto_djen,
+        truncar_texto_inline,
+    )
+
+    # Reproduz o trailer exato visto em produção em djen=494748109.
+    texto_bruto = (
+        "PODER JUDICIÁRIO JUSTIÇA DO TRABALHO TRT10 18ª Vara… "
+        "Decisão conferida pela Diretora Ana Carolina Macena Barros. "
+        "BRASILIA/DF, 19 de dezembro de 2025. JONATHAN QUINTAO JACOB "
+        "Juiz do Trabalho Titular<br><br>Intimado(s) / Citado(s)<br>"
+        " - BANCO DO BRASIL SA<br>"
+    )
+    assert texto_bruto.count("<br>") == 4
+
+    texto_pre = preprocessar_texto_djen(texto_bruto)
+    assert "<br>" not in texto_pre
+    assert "<br" not in texto_pre.lower()  # sanity total
+
+    # Truncamento inline também não introduz <br>.
+    inline = truncar_texto_inline(texto_pre, limite=2000)
+    assert "<br>" not in inline
+    # Trailer continua presente, só com \n em vez de <br>.
+    assert "Intimado(s) / Citado(s)" in inline
+    assert "BANCO DO BRASIL SA" in inline
+
+
+def test_R4_5_preprocessador_limpa_br_variantes_xhtml() -> None:
+    """Variantes <br/>, <br />, <BR>, <Br /> também são removidas."""
+    from notion_rpadv.services.dje_text_pipeline import preprocessar_texto_djen
+
+    texto = "linha1<br>linha2<br/>linha3<br />linha4<BR>linha5<Br />linha6"
+    out = preprocessar_texto_djen(texto)
+    assert "<br" not in out.lower()
+    # Cada <br> virou \n; ENV: o normalizador colapsa 3+ \n em 2, mas
+    # 6 linhas separadas por 5 \n permanecem como 5 \n.
+    assert out.count("\n") >= 4
