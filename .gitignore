@@ -14,3 +14,9 @@ build/
 
 # Claude Code CLI cache
 .claude/
+
+# Saídas pessoais do script de auditoria Kurier
+Auditoria_Kurier_*.xlsx
+
+# Round 6 — relatórios de smoke gerados por scripts/inspecionar_smoke_round_6.py
+logs/

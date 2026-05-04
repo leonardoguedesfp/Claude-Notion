@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 import sqlite3
 from typing import Any
 
@@ -381,183 +380,26 @@ def _calcular_status_inicial(
 
 
 # ---------------------------------------------------------------------------
-# Round 4.4 — Auto-Alerta contadoria (5 regras multi-select)
+# Round 6 (2026-05-04) — Camada base + Regras de monitoramento (v8)
 # ---------------------------------------------------------------------------
-
-#: Alertas canônicos do Round 4.4. Strings exatas que vão pro multi-select
-#: ``Alerta contadoria`` no Notion. Bumpe se renomear opções no Notion.
-ALERTA_PROCESSO_NAO_CADASTRADO: str = "Processo não cadastrado"
-ALERTA_INSTANCIA_DESATUALIZADA: str = "Instância desatualizada"
-ALERTA_TRANSITO_PENDENTE: str = "Trânsito em julgado pendente"
-ALERTA_TEXTO_IMPRESTAVEL: str = "Texto imprestável"
-ALERTA_PAUTA_PRESENCIAL_SEM_INSCRICAO: str = "Pauta presencial sem inscrição"
-
-
-def _texto_e_imprestavel(texto: str) -> bool:
-    """Detecção conservadora de texto imprestável — apenas as classes
-    conhecidas vistas em produção. NÃO dispara em despachos breves
-    legítimos.
-
-    Classes detectadas:
-    - TJGO: ``"ARQUIVOS DIGITAIS INDISPONÍVEIS (NÃO SÃO DO TIPO PÚBLICO)"``.
-    - Despachos minimalistas: ``"Intime-se."``, ``"Intimem-se."``.
-    - TRT10 só com referência a ID: ``"Tomar ciência do(a) Intimação de ID..."`` SEM CNJ no texto.
-    """
-    if not texto:
-        return False
-    t = texto.strip()
-    if "ARQUIVOS DIGITAIS INDISPONÍVEIS" in t:
-        return True
-    if t in ("Intime-se.", "Intimem-se."):
-        return True
-    if "Tomar ciência" in t and "Intimação de ID" in t:
-        # Verifica se há CNJ no texto (formato 0000000-00.0000)
-        if not re.search(r"\d{7}-\d{2}", t):
-            return True
-    return False
-
-
-def _aplicar_regras_alerta_contadoria(
-    publicacao: dict[str, Any],
-    processo_record: dict[str, Any] | None,
-) -> list[str]:
-    """Aplica as 5 regras do Round 4.4 e retorna lista de alertas que
-    dispararam (multi-select aceita múltiplos).
-
-    Regras:
-
-    1. ``Processo não cadastrado``: ``processo_record is None``.
-    2. ``Instância desatualizada``: tribunal da pub IN (TST, STJ, STF) E
-       processo cadastrado E ``instancia`` IN ("1º grau", "2º grau").
-    3. ``Trânsito em julgado pendente``: ``nomeClasse`` contém
-       "CUMPRIMENTO" (sem "PROVISÓRIO" — D3) E processo cadastrado E
-       ambos ``data_do_transito_em_julgado_cognitiva`` e
-       ``data_do_transito_em_julgado_executiva`` vazios.
-    4. ``Texto imprestável``: texto < 200 chars E é uma classe conhecida
-       de imprestabilidade (vide ``_texto_e_imprestavel``).
-    5. ``Pauta presencial sem inscrição``: tipo canônico Pauta de
-       Julgamento E texto contém "PRESENCIAL" ou "Sala de Sessão".
-    """
-    alertas: list[str] = []
-
-    # 1. Processo não cadastrado
-    if processo_record is None:
-        alertas.append(ALERTA_PROCESSO_NAO_CADASTRADO)
-
-    # 2. Instância desatualizada
-    if processo_record is not None:
-        sigla = (publicacao.get("siglaTribunal") or "").strip().upper()
-        instancia = (processo_record.get("instancia") or "").strip()
-        if sigla in {"TST", "STJ", "STF"} and instancia in {"1º grau", "2º grau"}:
-            alertas.append(ALERTA_INSTANCIA_DESATUALIZADA)
-
-    # 3. Trânsito em julgado pendente
-    nome_classe = (publicacao.get("nomeClasse") or "").upper()
-    if (
-        "CUMPRIMENTO" in nome_classe
-        and "PROVISÓRIO" not in nome_classe  # D3: exclui provisório
-        and processo_record is not None
-    ):
-        t_cog = processo_record.get("data_do_transito_em_julgado_cognitiva")
-        t_exec = processo_record.get("data_do_transito_em_julgado_executiva")
-        if not t_cog and not t_exec:
-            alertas.append(ALERTA_TRANSITO_PENDENTE)
-
-    # 4. Texto imprestável
-    texto = publicacao.get("texto") or ""
-    if len(texto) < 200 and _texto_e_imprestavel(texto):
-        alertas.append(ALERTA_TEXTO_IMPRESTAVEL)
-
-    # 5. Pauta presencial sem inscrição
-    tipo_canon = mapear_tipo_documento(publicacao.get("tipoDocumento"))
-    if tipo_canon == "Pauta de Julgamento":
-        texto_upper = texto.upper()
-        if "PRESENCIAL" in texto_upper or "SALA DE SESSÃO" in texto_upper:
-            alertas.append(ALERTA_PAUTA_PRESENCIAL_SEM_INSCRICAO)
-
-    return alertas
-
-
-# ---------------------------------------------------------------------------
-# Round 4.3 — Auto-Tarefa sugerida (6 regras multi-select)
-# ---------------------------------------------------------------------------
-
-#: Nomes EXATOS das tarefas no 📚 Catálogo de Tarefas. Bumpe se renomear.
-TAREFA_D03_ANALISE_ACORDAO: str = "D.03 Análise de acórdão"
-TAREFA_D02_ANALISE_SENTENCA: str = "D.02 Análise de sentença"
-TAREFA_D01_ANALISE_PUBLICACAO: str = "D.01 Análise de publicação"
-TAREFA_E01_CADASTRO: str = "E.01 Cadastro de cliente/processo"
-TAREFA_E02_ATUALIZAR_DADOS: str = "E.02 Atualizar dados no sistema"
-TAREFA_E04_INSCRICAO_SUSTENTACAO: str = "E.04 Inscrição para sustentação oral"
-
-
-def _aplicar_regras_tarefa_sugerida(
-    publicacao: dict[str, Any],
-    *,
-    processo_record: dict[str, Any] | None,
-    alertas_disparados: list[str],
-) -> list[str]:
-    """Aplica as 6 regras do Round 4.3 e retorna lista (deduped) de
-    tarefas sugeridas. Multi-select aceita múltiplas (D2: sem
-    precedência — pub Acórdão + Pauta soma D.03 + E.04).
-
-    Regras:
-
-    1. ``D.03 Análise de acórdão``: tipoDocumento canônico IN (Acórdão, Ementa).
-    2. ``D.02 Análise de sentença``: tipoDocumento canônico = Sentença.
-    3. ``D.01 Análise de publicação``: tipoDocumento canônico IN
-       (Notificação, Decisão, Despacho, Certidão, Outros, Distribuição)
-       E NÃO disparou D.02 nem D.03 (default genérico).
-    4. ``E.01 Cadastro de cliente/processo``: ``processo_record is None``.
-    5. ``E.02 Atualizar dados no sistema``: tipoDocumento bruto =
-       "ATA DE DISTRIBUIÇÃO" OU disparou alerta "Instância desatualizada".
-    6. ``E.04 Inscrição para sustentação oral``: tipoDocumento canônico
-       = Pauta de Julgamento.
-
-    Ordem de saída segue a numeração das tarefas (D.01 < D.02 < D.03 <
-    E.01 < E.02 < E.04) — facilita teste e leitura no Notion.
-    """
-    tarefas: set[str] = set()
-    tipo_canon = mapear_tipo_documento(publicacao.get("tipoDocumento"))
-    tipo_bruto = (publicacao.get("tipoDocumento") or "").strip()
-
-    # 1. D.03
-    if tipo_canon in {"Acórdão", "Ementa"}:
-        tarefas.add(TAREFA_D03_ANALISE_ACORDAO)
-
-    # 2. D.02
-    if tipo_canon == "Sentença":
-        tarefas.add(TAREFA_D02_ANALISE_SENTENCA)
-
-    # 3. D.01 — só se nem D.02 nem D.03 dispararam
-    has_d02_d03 = (
-        TAREFA_D02_ANALISE_SENTENCA in tarefas
-        or TAREFA_D03_ANALISE_ACORDAO in tarefas
-    )
-    if not has_d02_d03 and tipo_canon in {
-        "Notificação", "Decisão", "Despacho",
-        "Certidão", "Outros", "Distribuição",
-    }:
-        tarefas.add(TAREFA_D01_ANALISE_PUBLICACAO)
-
-    # 4. E.01
-    if processo_record is None:
-        tarefas.add(TAREFA_E01_CADASTRO)
-
-    # 5. E.02
-    if (
-        tipo_bruto == "ATA DE DISTRIBUIÇÃO"
-        or ALERTA_INSTANCIA_DESATUALIZADA in alertas_disparados
-    ):
-        tarefas.add(TAREFA_E02_ATUALIZAR_DADOS)
-
-    # 6. E.04
-    if tipo_canon == "Pauta de Julgamento":
-        tarefas.add(TAREFA_E04_INSCRICAO_SUSTENTACAO)
-
-    # Ordem estável: ordena por código (D.01 < D.02 < D.03 < E.01 < E.02 < E.04)
-    return sorted(tarefas)
-
+#
+# As 5 regras de Alerta contadoria e 6 regras de Tarefa sugerida do Round 4
+# foram REMOVIDAS por completo. A v8 do `anatomia-processos-vs-publicacoes-v8.md`
+# substitui o modelo:
+#
+# - ``Tarefa sugerida (app)`` agora é multi-select com 3 valores:
+#   "Analisar acórdão", "Analisar sentença", "Nada para fazer".
+# - ``Alerta contadoria (app)`` é multi-select com 41 valores cobrindo
+#   identificação, classificação, partes, localização, estado processual.
+# - 4 regras de Camada base (Regras 40-43) atribuem o par (tarefa, alerta)
+#   default conforme a matriz Tipo de comunicação × Tipo de documento.
+# - 39 regras de monitoramento (Regras 1-39) ADICIONAM alertas quando
+#   cruzam Pub × Proc e detectam divergência.
+#
+# Nesta etapa intermediária o mapper devolve listas vazias para Tarefa
+# sugerida (app) e Alerta contadoria (app) — a Camada base e as regras
+# de monitoramento serão re-introduzidas em commits subsequentes do
+# Round 6.
 
 # ---------------------------------------------------------------------------
 # Orquestrador público
@@ -630,16 +472,13 @@ def montar_payload_publicacao(
         publicacao, tipo_documento_canonico=tipo_documento_canonico,
     )
 
-    # Round 4.4: aplica regras de Alerta contadoria.
-    alertas_contadoria = _aplicar_regras_alerta_contadoria(
-        publicacao, processo_record,
-    )
-    # Round 4.3: aplica regras de Tarefa sugerida (depende dos alertas
-    # disparados — E.02 dispara em "Instância desatualizada").
-    tarefas_sugeridas = _aplicar_regras_tarefa_sugerida(
-        publicacao,
-        processo_record=processo_record,
-        alertas_disparados=alertas_contadoria,
+    # Round 6 (2026-05-04): aplica Regras v8 (Camada base 40-43 +
+    # monitoramento 1-39). As regras de monitoramento são preenchidas
+    # incrementalmente por seção; a Camada base já está completa.
+    from notion_rpadv.services.dje_regras_v8 import aplicar_todas_regras
+
+    tarefas_sugeridas, alertas_contadoria = aplicar_todas_regras(
+        publicacao, processo_record, cache_conn=cache_conn,
     )
     # Round 4.5 frente 1: Status inicial pode virar "Nada para fazer"
     # em casos óbvios (Listas TRT10/TST com Processo cadastrado).
@@ -671,12 +510,14 @@ def montar_payload_publicacao(
         "Hash": _rich_text_prop(publicacao.get("hash")),
         "ID DJEN": _number_prop(publicacao.get("id")),
         # Round 4.6: checkbox "Processo não cadastrado" SAIU. A info passa
-        # a viver em "Alerta contadoria" — quando o usuário dropar a
-        # coluna do Notion, payloads futuros ainda funcionam.
+        # a viver em "Alerta contadoria (app)" — quando o usuário dropar
+        # a coluna do Notion, payloads futuros ainda funcionam.
         "Advogados não cadastrados": _checkbox_prop(advogados_nao_cadastrados),
-        # Round 4.3 + 4.4 — multi-selects
-        "Tarefa sugerida": _multi_select_prop(tarefas_sugeridas),
-        "Alerta contadoria": _multi_select_prop(alertas_contadoria),
+        # Round 4.3 + 4.4 — multi-selects. Pós Round 6 (2026-05-04) os
+        # nomes ganharam sufixo "(app)" no Notion para distinguir
+        # propriedades populadas automaticamente das editadas à mão.
+        "Tarefa sugerida (app)": _multi_select_prop(tarefas_sugeridas),
+        "Alerta contadoria (app)": _multi_select_prop(alertas_contadoria),
     }
 
     return {

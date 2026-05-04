@@ -125,10 +125,14 @@ TIPOS_COMUNICACAO_CANONICOS: frozenset[str] = frozenset({
 
 
 #: Mapeamento DJEN→Notion. Apenas correção de casing na "Lista de
-#: distribuição" (DJEN escreve com 'd' minúsculo; Notion canônico é "D" maiúsculo).
+#: distribuição" (DJEN escreve com 'd' minúsculo; Notion canônico é
+#: "D" maiúsculo). Round 6 (2026-05-04): mapa também aceita o canônico
+#: como entrada (idempotência) — necessário porque algumas regras já
+#: rodam após o mapeamento e podem re-passar o valor canônico.
 MAPA_TIPO_COMUNICACAO: dict[str, str] = {
     "Intimação": "Intimação",
     "Lista de distribuição": "Lista de Distribuição",
+    "Lista de Distribuição": "Lista de Distribuição",
     "Edital": "Edital",
 }
 
