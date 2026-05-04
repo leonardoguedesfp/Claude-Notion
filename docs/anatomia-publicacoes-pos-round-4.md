@@ -629,3 +629,195 @@ booleano (`__NO__` na maioria).
 preservada via Alerta. Frente 4.6 entregue.
 
 ---
+
+## 4. Regressões
+
+Categorias de risco listadas na ordem do prompt original. Marcadas
+🔴 (regressão real), 🟡 (atenção), 🟢 (sem regressão).
+
+### 4.1 `<br>` literal residual no Texto inline 🔴
+
+**Achado**: o commit `afddba4` ("Round 4.5 — teste de regressão para
+<br> residual no Texto") adicionou testes que validam o pipeline
+contra texto bruto e passam (handoff confirmou: "pipeline atual
+processa corretamente"). Mas a inspeção MCP de 5 pubs reais mostra
+**`<br>` literal presente no Texto entregue ao Notion**:
+
+| djen | Tribunal | Tipo doc | Trecho com `<br>` |
+|---|---|---|---|
+| 494748109 | TRT10 | Notificação | `...Juiz do Trabalho Titular<br><br>Intimado(s) / Citado(s)<br> - BANCO DO BRASIL SA` |
+| 573369859 | TRT10 | Acórdão | `...Servidor de Secretaria<br><br>Intimado(s) / Citado(s)<br> - ZULEIDE...` |
+| 496542520 | TRT10 | Distribuição | `Processo 0001969-51.2025.5.10.0008 distribuído... 26/12/2025 <br> Para maiores informações...` |
+| 524038068 | TJDFT | Outros (Ata 57) | `Poder Judiciário da União<br><br>1ª Turma Cível<br>1ª Sessão...` |
+| 530258606 | STJ | Pauta de Julgamento | (não tem `<br>` no texto, mas tem advogados rodando junto sem espaços — outra anomalia, vide 4.5) |
+
+**Quantificação**:
+- SQLite raw (texto antes do pipeline): 1.138/1.608 canônicas (71%)
+  têm `<br` no texto bruto.
+- CSV exportado: 0 ocorrências de `<br>` detectadas (mas é
+  artefato — o CSV pode estar normalizando entidades; via MCP, o
+  caractere literal aparece nas pubs).
+- Pubs com trailer `Intimado(s) / Citado(s)` no texto entregue: 517
+  (32% do acervo). Trailer historicamente é onde o `<br>` aparece.
+
+**Hipótese (não verificado)**: o trailer `Intimado(s) / Citado(s)<br>`
+é inserido pelo DJEN na resposta da API APÓS o conteúdo principal, e
+o pipeline de pré-processamento `_BR_RE` em `dje_text_pipeline.py`
+roda APENAS no conteúdo principal, deixando o trailer cru. O teste do
+Round 4.5 testou contra um payload bruto que inclui o trailer e passa
+porque o regex pega o `<br>`. Mas em produção, talvez o trailer chegue
+em fluxo diferente.
+
+**Impacto**: cosmético no Texto inline (texto fica com markup
+visível), e funcional no body content (mesmo `<br>` no body também).
+
+**Recomendação**: P0 — investigar o ponto exato de entrada do trailer
+no pipeline.
+
+### 4.2 Cabeçalhos institucionais (`PODER JUDICIÁRIO ...`) preservados 🟢
+
+**Achado**: cabeçalhos institucionais por tribunal continuam
+presentes no Texto entregue. Confirmado nas 5 amostras MCP:
+
+- TRT10 Notif: `PODER JUDICIÁRIO JUSTIÇA DO TRABALHO TRIBUNAL REGIONAL DO TRABALHO DA 10ª REGIÃO 18ª Vara do Trabalho de Brasília - DF`
+- TRT10 Acórdão: `PODER JUDICIÁRIO JUSTIÇA DO TRABALHO TRIBUNAL REGIONAL DO TRABALHO DA 10ª REGIÃO 2ª TURMA`
+- TJDFT Decisão: `Poder Judiciário da União TRIBUNAL DE JUSTIÇA DO DISTRITO FEDERAL E DOS TERRITÓRIOS 9VARCIVBSB`
+- TJDFT Ata: `Poder Judiciário da UniãoTRIBUNAL DE JUSTIÇA DO DISTRITO FEDERAL E DOS TERRITÓRIOS` (sem espaço entre "União" e "TRIBUNAL" — anomalia menor de pré-processamento, mas presente)
+- STJ Pauta: começa direto com `REsp 1878824/DF (2020/0140213-1)` — STJ não tem cabeçalho institucional pré-fixo (esperado per baseline 5.1)
+
+Sem regressão.
+
+### 4.3 Marcadores estruturais (`ACÓRDÃO`, `EMENTA`, etc) 🟢
+
+**Achado**: marcadores estruturais são preservados no body content
+das pubs. Confirmado em djen=573369859 (TRT10 Acórdão) — o body do
+Notion tem `EMENTA`, `RELATÓRIO`, `VOTO`, `CONCLUSÃO`, `ACÓRDÃO`
+visíveis em sequência. Algoritmo 1.4 do Round 1
+(`quebrar_em_blocos`) continua operando.
+
+Atenção: na inspeção MCP do TRT10 Acórdão, o conteúdo do body parece
+estar em parágrafos contíguos sem `heading_3` explícito visível na
+representação enhanced-markdown — pode ser limitação da exibição via
+MCP, não regressão real. Não pude confirmar com Notion UI.
+
+Sem regressão definitiva.
+
+### 4.4 `Duplicatas suprimidas` populada 🟡
+
+**Achado**: 530 das 1.608 canônicas (33%) têm `Duplicatas suprimidas`
+populada no CSV. Total de duplicatas declaradas no handoff: 544 (em
+531 canônicas — diferença esperada porque algumas canônicas têm
+2-3 duplicatas).
+
+**Discrepância 530 vs 531**: handoff Round 4 declara "530 atualizadas
+com sucesso, 1 falhou: djen=564026686 — HTTP 502 Bad Gateway
+transient". A página canônica para djen=564026686 atualmente NÃO tem
+a duplicata na propriedade — pendência operacional declarada.
+
+**Validação MCP** (2 amostras):
+- djen=494748109 (TRT10 Notif): `Duplicatas suprimidas = djen=494748135 (Cecília (20120/DF), Leonardo (36129/DF), Ricardo (15523/DF), Samantha (38809/DF), Vitor (48468/DF) — BANCO DO BRASIL SA)` ✓
+- djen=573369859 (TRT10 Acórdão): `Duplicatas suprimidas = djen=573369915 (Cecília..., Leonardo..., Ricardo..., Samantha..., Vitor... — BANCO DO BRASIL SA)` ✓
+
+**Formato confirmado**: `djen={N} ({advogados — partes})` per Round
+1.6.
+
+Atenção: 1 pub pendente de flush (djen=564026686 — handoff). Não é
+regressão do Round 4, é falha transient não-resolvida.
+
+### 4.5 `Advogados intimados` formato canônico 🟢
+
+**Achado**: 7.418 entradas de Advogados intimados no CSV (somando
+todos os multi-selects das 1.608 pubs). **Todas no formato `Nome
+(OAB/UF)`** — zero invalid no parse contra regex
+`^[^()]+\([0-9]+/[A-Z]{2}\)$`.
+
+Validação MCP — 12 OABs canônicas presentes no acervo (6 ativas + 6
+desativadas):
+- Ativos: Cecília (20120/DF), Leonardo (36129/DF), Ricardo
+  (15523/DF), Samantha (38809/DF), Vitor (48468/DF), Deborah
+  (75799/DF)
+- Desativados (ainda aparecem em pubs antigas): Juliana Vieira
+  (65089/DF), Juliana Chiaratto (81225/DF), Erika (39857/DF),
+  Maria Isabel (84703/DF), Shirley (37654/DF), Cristiane (não vi nas
+  amostras inspecionadas — provável pub mais antiga)
+
+Sem regressão. **Anomalia menor mas notável**: STJ Pauta djen=530258606
+tem `Texto = REsp 1878824/DF (2020/0140213-1)RELATOR:MINISTRO ...
+RECORRENTE:KEILA...ADVOGADOS:RICARDO...DF015523LEONARDO...` — sem
+espaços entre tokens. Parece falha de pré-processamento STJ no Texto
+inline (não afeta `Advogados intimados` que é multi-select separado).
+
+### 4.6 `Hash` + `Certidão` populadas 🟢
+
+**Achado**: 1.608/1.608 (100%) das pubs têm `Hash` e `Certidão`
+preenchidos. Sem regressão.
+
+Sample: djen=494748109 → Hash=`KOdGxm7gZmxotOMc1T7mMgb6y5DBkl`,
+Certidão URL via `comunicaapi.pje.jus.br/.../certidao` (formula sobre
+Hash, automática).
+
+### 4.7 `Identificação` formato e sequencial 🟢
+
+**Achado**: 1.608/1.608 com formato `{Tribunal}___{YYYY-MM-DD}___{N}`
+válido. Zero invalid, zero duplicates de title.
+
+**Top 5 maiores N (sequencial mais alto por dia/tribunal)**:
+
+| Tribunal | Data | Max N |
+|---|---|---:|
+| TRT10 | 2026-03-26 | 138 |
+| TRT10 | 2026-03-27 | 71 |
+| TRT10 | 2026-04-20 | 48 |
+| TRT10 | 2026-04-22 | 46 |
+| TRT10 | 2026-04-16 | 44 |
+
+138 é alto, mas dentro do esperado (TRT10 dia útil pode ter
+~150-200 pubs concentradas). Risco de colisão paralela mencionado no
+baseline (seção 9.2) continua hipotético — não houve colisão real.
+
+Sem regressão.
+
+### 4.8 STJ — formato Partes com papel real 🟡
+
+**Achado**: pubs STJ têm Partes no formato `Polo Ativo: 1. NOME
+(PAPEL), 2. NOME (PAPEL)<br>Polo Passivo: 4. NOME (PAPEL)...`. O
+`formatar_partes` agrupou por polo A/P como esperado (Round 4.1 D1:
+formato genérico Polo Ativo/Polo Passivo, NÃO nomenclatura
+específica), mantendo o prefixo `N. NOME (PAPEL)` original do
+payload DJEN dentro da string.
+
+**Sample MCP**: djen=530258606 (STJ Pauta REsp):
+
+```
+Polo Ativo: 1. KEILA CRISTINE GUIMARAES BERNARDES (RECORRENTE),
+2. CAIXA DE PREVIDENCIA DOS FUNCS DO BANCO DO BRASIL (RECORRENTE),
+3. BANCO DO BRASIL SA (RECORRENTE)
+Polo Passivo: 4. KEILA CRISTINE GUIMARAES BERNARDES (RECORRIDO),
+5. CAIXA DE PREVIDENCIA DOS FUNCS DO BANCO DO BRASIL (RECORRIDO),
+6. BANCO DO BRASIL SA (RECORRIDO)
+```
+
+**Não é regressão**: D1 do Round 4 explicitamente decidiu por formato
+genérico. Mas é **menos legível** que a alternativa proposta na
+seção 6.2.1 do baseline (`AGRAVANTE: X / RECORRIDO: Y`), pois o STJ
+tem o papel real disponível e ele fica enterrado entre parênteses.
+
+**Recomendação**: P1 — refinar `formatar_partes` para STJ,
+extraindo o papel real do prefixo `N. NOME (PAPEL)` e usando como
+label em vez de "Polo Ativo/Polo Passivo".
+
+### 4.9 Resumo de regressões
+
+| # | Categoria | Severidade | Pubs afetadas | Próximo passo |
+|---|---|---|---:|---|
+| 4.1 | `<br>` literal no Texto | 🔴 Alta | ~517 (32%) | P0 — investigar trailer DJEN |
+| 4.2 | Cabeçalhos institucionais | 🟢 — | 0 | nenhum |
+| 4.3 | Marcadores estruturais | 🟢 — | 0 | nenhum |
+| 4.4 | Duplicatas suprimidas | 🟡 Baixa | 1 | manual ou próxima sync |
+| 4.5 | Advogados intimados | 🟢 — | 0 | nenhum |
+| 4.6 | Hash + Certidão | 🟢 — | 0 | nenhum |
+| 4.7 | Identificação | 🟢 — | 0 | nenhum |
+| 4.8 | STJ Partes papel real | 🟡 Cosmético | ~160 | P1 — refinar formatar_partes para STJ |
+| (3.1) | **Partes JSON cru** | 🔴 **Crítica** | **530 (33%)** | **P0 — investigar pipeline de envio** |
+
+---
