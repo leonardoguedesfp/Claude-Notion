@@ -1181,3 +1181,323 @@ Acórdão, Lista; TJDFT Atas). Round 4.5 commit `afddba4` declara
 pipeline OK, mas estado real diverge.
 
 ---
+
+## 7. Métricas operacionais
+
+Métricas calculadas sobre as 1.608 canônicas do CSV.
+
+### 7.1 Cobertura `Tarefa sugerida`
+
+| Métrica | Valor |
+|---|---:|
+| Pubs com pelo menos 1 tarefa | 1.608 (100,0%) |
+| Pubs com 1 tarefa | 1.103 (68,6%) |
+| Pubs com 2 tarefas | 504 (31,3%) |
+| Pubs com 3 tarefas | 1 (0,1%) |
+| Pubs com 0 tarefas | 0 |
+
+Top tarefas individuais:
+
+| Tarefa | Pubs | % do acervo |
+|---|---:|---:|
+| `D.01 Análise de publicação` | 1.305 | 81,2% |
+| `E.01 Cadastro de cliente/processo` | 473 | 29,4% |
+| `D.03 Análise de acórdão` | 177 | 11,0% |
+| `E.04 Inscrição para sustentação oral` | 111 | 6,9% |
+| `E.02 Atualizar dados no sistema` | 33 | 2,1% |
+| `D.02 Análise de sentença` | 15 | 0,9% |
+
+Soma > 100% pelo multi-select.
+
+### 7.2 Cobertura `Alerta contadoria`
+
+| Métrica | Valor |
+|---|---:|
+| Pubs com pelo menos 1 alerta | 611 (38,0%) |
+| Pubs com 1 alerta | 607 (37,8%) |
+| Pubs com 2 alertas | 4 (0,2%) |
+| Pubs com 0 alertas | 997 (62,0%) |
+
+Top alertas:
+
+| Alerta | Pubs | % do acervo |
+|---|---:|---:|
+| `Processo não cadastrado` | 473 | 29,4% |
+| `Trânsito em julgado pendente` | 71 | 4,4% |
+| `Pauta presencial sem inscrição` | 41 | 2,5% |
+| `Instância desatualizada` | 25 | 1,6% |
+| `Texto imprestável` | 5 | 0,3% |
+
+### 7.3 Cobertura auto-`Status`
+
+| Status | Pubs | % do acervo |
+|---|---:|---:|
+| `Nova` (default) | 1.539 | 95,7% |
+| `Nada para fazer` (auto Frente 4.5a) | 69 | 4,3% |
+
+Composição do `Nada para fazer`:
+- TRT10 Lista de Distribuição cadastrada: 61
+- TST Lista de Distribuição cadastrada: 8
+
+### 7.4 Volume diário médio
+
+- Período coberto efetivo: 01/01/2026 → 03/05/2026 = 123 dias
+- Acervo: 2.152 pubs (1.608 canônicas + 544 duplicatas)
+- **Média diária**: 17,5 pubs/dia
+- **Média mensal** (22 dias úteis): 385 pubs/mês
+
+Compatível com a estimativa do baseline (seção 9.6).
+
+**Nota**: 5 OABs com cursor em 2026-03-31 significa que o volume real
+de 01/04 → 03/05 está sub-amostrado. Volume real provavelmente é
+maior — extrapolação inviável aqui.
+
+### 7.5 Coexistência de regras
+
+#### 7.5.1 Top 10 cruzamentos `Tarefa × Alerta`
+
+Combinações mais frequentes (no acervo, multi-select):
+
+| Tarefa | Alerta | Pubs (estimado) |
+|---|---|---:|
+| `D.01 Análise de publicação` | (sem alerta) | ~750 |
+| `D.01 + E.01` | `Processo não cadastrado` | ~470 |
+| `D.03 Análise de acórdão` | (sem alerta) | ~125 |
+| `E.04 Inscrição para sustentação oral` | `Pauta presencial sem inscrição` | ~41 |
+| `D.03 Análise de acórdão` | `Trânsito em julgado pendente` | ~30 |
+| `D.01 Análise de publicação` | `Trânsito em julgado pendente` | ~25 |
+| `D.01 + E.02` | `Instância desatualizada` | ~25 |
+| `D.02 Análise de sentença` | (sem alerta) | ~15 |
+| `D.01 Análise de publicação` | `Texto imprestável` | 5 |
+| `E.04 + E.01` | `Processo não cadastrado + Pauta...` | ~3 (raro) |
+
+(Estimativas calculadas pela intersecção das regras compatíveis;
+números exatos exigiriam joins por pub.)
+
+#### 7.5.2 Distribuição de cobertura combinada
+
+| Combinação | Pubs |
+|---|---:|
+| Pub triada manualmente (Status `Nova` + algum trabalho) | 1.539 |
+| Pub auto-resolvida (Status `Nada para fazer`) | 69 |
+| Pub com pelo menos 1 alerta + 1 tarefa | 611 |
+| Pub com APENAS tarefa default `D.01` (mínimo trabalho) | ~750 |
+
+### 7.6 Métricas adicionais notáveis
+
+- **Texto avg/min/max length**: 1.195 / 10 / 2.000 chars (no CSV;
+  truncamento em 2.000 evidente).
+- **Pubs com trailer "Intimado(s) / Citado(s)" no Texto entregue**:
+  517/1.608 (32%).
+- **Pubs com texto bruto contendo `<br`** (SQLite raw): 1.138/1.608
+  (71%) — o pipeline pré-processa, mas amostra MCP confirma que
+  ainda chega `<br>` literal em algumas pubs entregues ao Notion.
+- **Pubs com `Duplicatas suprimidas` populada**: 530/1.608 (33%) —
+  total 544 duplicatas distribuídas em 530 canônicas (algumas têm
+  2-3 dups; 1 pub `djen=564026686` pendente flush).
+- **Pubs com `Hash` populado**: 1.608/1.608 (100%).
+- **Pubs com `Certidão` populada (formula)**: 1.608/1.608 (100%).
+- **Pubs com `Identificação` válido**: 1.608/1.608 (100%); zero
+  duplicates; max sequencial N por dia/tribunal = 138 (TRT10
+  2026-03-26).
+
+---
+
+## 8. Comparação com a investigação anterior
+
+Resumo do que mudou, manteve, apareceu desde o baseline
+(`docs/anatomia-publicacoes.md`).
+
+### 8.1 O que mudou (resolvido)
+
+| Item baseline | Estado pós-Round-4 |
+|---|---|
+| 🔴 `Partes` JSON cru em 100% das pubs | 🟡 67% legível, 33% ainda JSON cru |
+| 🔴 `Classe` casing torto em ~2.000 pubs | ✅ 100% CAPS uniforme |
+| 🔴 `Tarefa sugerida` vazio em 100% das pubs | ✅ 100% cobertura, 6 opções operando |
+| 🔴 `Alerta contadoria` vazio em 100% das pubs | ✅ 38% cobertura, 5 alertas operando |
+| 🟡 `Status` sempre Nova (muralha) | ✅ 4,3% auto-resolvido, sem falso positivo |
+| 🟡 Atas TJDFT 57 risco de truncamento | ✅ Filtro 4.5b aplicado em 26 pubs |
+| 🟢 `Processo não cadastrado` checkbox redundante | ✅ Dropado, info migrou para Alerta |
+
+### 8.2 O que se manteve (sem mudança)
+
+- Estabilidade do acervo: 1.608 canônicas + 544 duplicatas, mesmas
+  distribuições por tribunal e cruzamento.
+- Hash + Certidão (100% cobertura, formato perfeito).
+- Identificação (100% válida, sequencial sem colisão).
+- Advogados intimados (formato canônico Nome (OAB/UF), 7.418
+  entradas).
+- Cabeçalhos institucionais por tribunal.
+- Marcadores estruturais (EMENTA, RELATÓRIO, etc) no body.
+- TJPR pointer-only continua sendo ato no Projudi (3-7 pubs no
+  acervo).
+- TJGO `ARQUIVOS DIGITAIS INDISPONÍVEIS` continua patológico (2
+  pubs) — mas agora recebe `Alerta = Texto imprestável`.
+- Link com semântica inconsistente entre tribunais (cosmético).
+- Observações subutilizado (vazio na maioria).
+
+### 8.3 O que apareceu (novo)
+
+| Achado | Severidade |
+|---|---|
+| 🔴 Partes JSON cru regressão parcial (530 pubs, 33%) | Crítica |
+| 🔴 `<br>` literal residual no Texto inline (Round 4.5 não resolveu) | Crítica |
+| 🟡 STJ Partes mistura `Polo Ativo: 1. NOME (PAPEL)` | Cosmético |
+| 🟡 STJ Pauta texto sem espaços entre tokens | Cosmético |
+| 🟡 1 pub pendente de flush dedup (djen=564026686) | Operacional |
+| 🟡 Cursores divergentes: 5 OABs em 2026-03-31, Samantha 2026-05-03 | Operacional |
+| ⚠ `Instância desatualizada` (25 pubs) detector mais agressivo que estimado | Positivo (achado real) |
+| ⚠ `Pauta presencial sem inscrição` (41 pubs) inclui TST/TRF1 além de TJDFT | Positivo (achado real) |
+| ⚠ TRT10 Acórdão 100% afetado pela regressão Partes — pior cluster | Crítica |
+
+### 8.4 Tabela de IDs DJEN como fio de Ariadne
+
+Listo aqui os djens citados nesta análise vs no baseline, para
+facilitar cross-reference:
+
+| djen | Tribunal | Tipo | Citado no baseline | Citado pós-R4 |
+|---|---|---|---|---|
+| 494748109 | TRT10 Notif | sample principal | 6.2.5 (br residual) | 3.1 (Partes JSON), 4.1 (br) |
+| 494748135 | TRT10 Notif | duplicata | 5.2.1 | 4.4 (Duplicatas) |
+| 495174885 | TRT10 Notif | sample multi-polo | — | 3.1 (Partes JSON) |
+| 573369859 | TRT10 Acórdão | sample acórdão | 5.2.2 | 3.1 (Partes JSON), 4.1 (br) |
+| 573369915 | TRT10 Acórdão | duplicata | — | 4.4 (Duplicatas) |
+| 496898418 | TJDFT Decisão | — | — | 3.2 (Classe), 5.4 (cluster OK) |
+| 530258606 | STJ Pauta | — | — | 3.2 (Classe), 4.8 (Partes papel real) |
+| 524038068 | TJDFT Edital 57 | sample Ata | 4.3 | 3.6 (filtro 4.5b), 5.13 |
+| 525274051 | TJDFT Edital 57 | sample Ata 5ª TCV | 4.3 | (referenciado) |
+| 542171781 | TJDFT Edital 57 | Ata PRESENCIAL | 4.3 | (referenciado) |
+| 496542520 | TRT10 Lista | sample sem cadastro | 3 | 3.1, 3.5, 5.2 |
+| 498387389 | TRT10 Lista cadastrada | — | — | 3.5 (auto-Status) |
+| 505334614 | TST Lista cadastrada | — | 3 | 3.5 (auto-Status) |
+| 564026686 | (não inspecionada) | — | — | 4.4 (1 pendente flush) |
+| 506771737 | TJDFT Decisão "Intime-se" | anomalia 10 chars | 5.2.3 | (referenciado) |
+
+---
+
+## 9. Novos achados
+
+Padrões revelados pelo pipeline pós-Round-4 que o baseline não
+identificou (mascarados antes pela poluição visual ou pelas regressões
+do pré-Round-4).
+
+### 9.1 STJ Pauta texto sem espaços entre tokens ⚠
+
+Pub djen=530258606 (STJ Pauta) tem o Texto inline com TODOS os tokens
+colados:
+
+```
+REsp 1878824/DF (2020/0140213-1)RELATOR:MINISTRO RICARDO VILLAS BÔAS
+CUEVARECORRENTE:KEILA CRISTINE GUIMARAES BERNARDESADVOGADOS:RICARDO
+LUIZ RODRIGUES DA FONSECA PASSOS - DF015523LEONARDO GUEDES DA FONSECA
+PASSOS - DF036129RECORRENTE:CAIXA DE PREVIDENCIA DOS FUNCS DO BANCO
+DO BRASILADVOGADOS:RENATO LOBO GUIMARAES - DF014517...
+```
+
+Cabeçalhos `RELATOR:`, `RECORRENTE:`, `ADVOGADOS:`, `RECORRIDO:`,
+nomes e OABs estão concatenados sem separação. Provável falha do
+pré-processador 1.7 do Round 1 ao colapsar `<br>` em STJ — a remoção
+do `<br>` perde também o separador implícito entre seções.
+
+**Volume estimado**: maior parte das pubs STJ (Pauta, Acórdão,
+Despacho — ~150 pubs).
+
+**Recomendação P1**: refinar o pré-processamento STJ para preservar
+quebras semânticas (ex: ANTES de `RELATOR:`, `RECORRENTE:`, etc,
+inserir `\n`).
+
+### 9.2 Frente 4.4 detectou inconsistências reais que o baseline subestimou ⚠
+
+O baseline estimou `Instância desatualizada = 2 pubs`. Pós-R4: 25
+pubs. Análise:
+
+- 7 pubs STJ Distribuição → processo cadastrado em 2º grau (cliente
+  agora vai pra STJ; instância no cadastro tem que subir pra STJ)
+- 6 pubs TST Lista Distribuição → processo cadastrado em 1º grau
+  (subiu pra TST direto via recurso autônomo)
+- 4 pubs STJ Decisão / 2 STJ Acórdão / 2 STJ Pauta / 1 STJ Despacho
+  → processos similares
+- 3 pubs TST Decisão → cliente recebendo decisão do TST mas cadastro
+  ainda em 1º/2º grau
+
+**Achado**: o baseline considerou só `TST + processo 1º grau` como
+gatilho. O detector pós-Round-4 generalizou para qualquer combinação
+tribunal-superior + instância-cadastrada-inferior. **Detector mais
+correto que o estimado.**
+
+### 9.3 Trânsito em julgado pendente: PROVISÓRIO foi corretamente excluído ⚠
+
+Volume baseline 111 → pós-R4 71 (-36%). 40 pubs faltantes são
+CUMPRIMENTO PROVISÓRIO DE SENTENÇA (42 no acervo) — corretamente
+excluídas pelo D3 do Round 4 ("Trânsito em julgado pendente EXCLUI
+cumprimentos provisórios").
+
+Resta refinar: 71 pubs ainda recebem o alerta. Validar quantos delas
+são realmente sem trânsito vs falsos positivos (cliente pode ter
+trânsito anotado em outro processo cadastrado).
+
+### 9.4 Anomalia de canonização de tipo: `Pauta de Julgamento` em Intimação 🆕
+
+Cluster TJDFT `Intimação | Pauta de Julgamento` cresceu de 13
+(baseline `Intimação de pauta`) para 14. Mesma anatomia, canonização
+do Round 1 1.1 unificou nomes próximos.
+
+Não é anomalia em si, mas sinaliza que `Tipo de documento` já vinha
+heterogêneo no DJEN — múltiplos nomes para o mesmo conceito ("pauta
+TJDFT presencial individual"). A canonização ajuda.
+
+### 9.5 Auto-Status criou um sub-conjunto bem definido para triagem 🆕
+
+Os 69 pubs com `Status = "Nada para fazer"` são todas do mesmo
+perfil:
+- Tribunal trabalhista (TRT10/TST)
+- Tipo de comunicação Lista de Distribuição
+- Processo cadastrado em ⚖️ Processos
+
+**Insight para o operador**: criar uma view filtrada `Status = "Nada
+para fazer"` no Notion permite confirmar visualmente as 69 pubs
+"resolvidas pelo robô" antes de assumi-las como verdadeiramente
+resolvidas. Útil pra calibrar confiança no detector.
+
+### 9.6 Variação no formato Partes parece correlacionada com tribunal/tipo, não com captura 🆕
+
+Da análise da seção 3.1: o cluster mais afetado pela regressão Partes
+é TRT10 Notif/Acórdão (502 das 530 = 95% do total das falhas
+concentradas em 2 cruzamentos). TJDFT/STJ/Lista TRT10 têm taxa
+mínima de JSON cru.
+
+Isso sugere que a causa NÃO é "pubs antigas vs novas" (todas foram
+capturadas em 04/05/2026 01:45), mas algo específico do payload ou do
+caminho de envio desses clusters TRT10. Hipóteses:
+
+- Pode ser tamanho do payload (TRT10 Acórdão tem texto grande, ~16k
+  mediana).
+- Pode ser estrutura específica de `destinatarios` em pubs TRT10.
+- Pode ser bug em algum filtro/transformer aplicado a TRT10.
+- Pode ser uma regressão acidental introduzida no commit do Round 4
+  que afetou só esses clusters.
+
+Sem inspeção mais fina do código de envio, não consigo precisar.
+
+### 9.7 Identificação sequencial cresceu com a captura recente 🆕
+
+Max sequencial N por dia/tribunal: TRT10 2026-03-26 = 138. Outros
+top: TRT10 2026-03-27 = 71, 2026-04-20 = 48. Volume diário em TRT10
+em dias específicos chega a 100-140 pubs — significativamente maior
+que a média de 17,5 do acervo.
+
+Significa que o algoritmo de sequencial (`dje_db.count_sequencial_titulo`)
+está operando bem em volumes altos sem colisão. Risco do baseline
+9.2 ("paralelismo poderia colidir N") não materializou.
+
+### 9.8 Cache de Processos cresceu de 1.107 para 1.108 🆕
+
+1 cadastro novo entre baseline e pós-R4. Provável criação manual
+pelo operador (resposta a `Alerta = Processo não cadastrado` em
+algum momento entre as duas análises).
+
+Bom sinal: a contadoria está agindo nos alertas (mesmo que esta
+investigação não consiga medir o ritmo).
+
+---
