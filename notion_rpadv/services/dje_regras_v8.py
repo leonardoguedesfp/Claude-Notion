@@ -109,6 +109,12 @@ ALERTA_VINCULAR_CLIENTE_AO_PROCESSO: str = "Vincular cliente ao processo"
 ALERTA_CONFERIR_VINCULACAO_CLIENTE_PROCESSO: str = "Conferir vinculação cliente-processo"
 ALERTA_CONFERIR_POSICAO_DO_CLIENTE: str = "Conferir posição do cliente"
 
+# Regras 19-25 — Localização (Cidade, Vara, Turma, Relator)
+ALERTA_CIDADE_DESATUALIZADA: str = "Cidade desatualizada"
+ALERTA_VARA_DESATUALIZADA: str = "Vara desatualizada"
+ALERTA_TURMA_DESATUALIZADA: str = "Turma desatualizada"
+ALERTA_RELATOR_DESATUALIZADO: str = "Relator desatualizado"
+
 # Alertas mantidos do Round 4 (técnicos/operacionais — sem número no doc v8)
 ALERTA_PROCESSO_NAO_CADASTRADO: str = "Processo não cadastrado"
 ALERTA_TEXTO_IMPRESTAVEL: str = "Texto imprestável"
@@ -588,6 +594,241 @@ def regra_39_recurso_autonomo_sem_processo_pai(
     elif pai:
         return None
     return ALERTA_RECURSO_AUTONOMO_SEM_PROCESSO_PAI
+
+
+# ---------------------------------------------------------------------------
+# Regras 19-24 — Extração de Cidade, Vara, Turma, Relator do Pub.Órgão
+# ---------------------------------------------------------------------------
+
+#: Vara de 1º grau com cidade explícita: ``Nª Vara X de Cidade [- UF]``.
+#: Captura: (1) prefixo "Nª Vara X", (2) cidade.
+_RX_VARA_COM_CIDADE = re.compile(
+    r"^(\d+ª\s*Vara\s+(?:do Trabalho|Cível|da Fazenda(?:\s+Pública)?|"
+    r"de Família|Criminal|de Execuções|do Juizado|de Execução Fiscal))"
+    r"\s+de\s+([A-ZÀ-Ú][A-Za-zà-úÀ-Ú\s]+?)(?:\s*-\s*[A-Z]{2})?\s*$",
+    re.IGNORECASE,
+)
+
+#: Vara sem cidade (fallback) — só captura o "Nª Vara X" pra normalização.
+_RX_VARA_PREFIXO = re.compile(
+    r"^(\d+ª\s*Vara\s+(?:do Trabalho|Cível|da Fazenda(?:\s+Pública)?|"
+    r"de Família|Criminal|de Execuções|do Juizado|de Execução Fiscal))",
+    re.IGNORECASE,
+)
+
+#: Turma/Câmara de 2º grau ou superior.
+_RX_TURMA_CAMARA_NUMERADA = re.compile(
+    r"^(\d+ª\s*(?:Turma|Câmara)(?:\s*Cível)?(?:\s+(?:de|do)\s+\S+)*)\s*$",
+    re.IGNORECASE,
+)
+
+#: Relator no Pub.Órgão (Desembargador, Juiz Convocado, Ministro).
+_RX_RELATOR = re.compile(
+    r"^\s*(?:Gabinete\s+(?:do|da)\s+)?"
+    r"(Desembargador[a]?|Juiz[a]?\s+Convocad[oa]|Ministr[oa])"
+    r"\s+(.+?)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _extrair_cidade_do_orgao(orgao: str | None) -> str | None:
+    """Extrai cidade do nome do Órgão se for do padrão ``Nª Vara X de
+    Cidade [- UF]``. Devolve cidade em title-case ou ``None``.
+    """
+    if not orgao:
+        return None
+    m = _RX_VARA_COM_CIDADE.match(orgao.strip())
+    if m:
+        cidade = m.group(2).strip()
+        # Normaliza espaços múltiplos
+        cidade = re.sub(r"\s+", " ", cidade)
+        return cidade
+    return None
+
+
+def _normalizar_vara(orgao: str | None) -> str | None:
+    """Devolve só o prefixo ``Nª Vara X`` do nome do Órgão, em formato
+    canônico title-case com normalizações de espaço. Devolve ``None``
+    se não bater no padrão.
+    """
+    if not orgao:
+        return None
+    m = _RX_VARA_PREFIXO.match(orgao.strip())
+    if m:
+        prefix = m.group(1).strip()
+        prefix = re.sub(r"\s+", " ", prefix)
+        return prefix
+    return None
+
+
+def _extrair_turma_camara(orgao: str | None) -> str | None:
+    """Devolve string da Turma/Câmara (ex: ``"2ª Turma"``, ``"6ª Turma
+    Cível"``) ou ``None``.
+    """
+    if not orgao:
+        return None
+    m = _RX_TURMA_CAMARA_NUMERADA.match(orgao.strip())
+    if m:
+        return re.sub(r"\s+", " ", m.group(1).strip())
+    return None
+
+
+def _extrair_relator(orgao: str | None) -> str | None:
+    """Devolve o nome do relator do Pub.Órgão se for do padrão
+    ``Desembargador/Juiz Convocado/Ministro NOME``. Devolve ``None``
+    se não bater.
+    """
+    if not orgao:
+        return None
+    m = _RX_RELATOR.match(orgao.strip())
+    if m:
+        nome = m.group(2).strip()
+        nome = re.sub(r"\s+", " ", nome)
+        return nome
+    return None
+
+
+def _campo_turma_para_instancia(instancia: str) -> str | None:
+    """Mapeia Proc.instancia → nome do campo ``turma_no_*`` em Proc."""
+    return {
+        INSTANCIA_SEGUNDO_GRAU: "turma_no_2o_grau",
+        INSTANCIA_TST: "turma_no_stj_tst",
+        INSTANCIA_STJ: "turma_no_stj_tst",
+        INSTANCIA_STF: "turma_no_stf",
+    }.get(instancia)
+
+
+def _campo_relator_para_instancia(instancia: str) -> str | None:
+    """Mapeia Proc.instancia → nome do campo ``relator_no_*`` em Proc."""
+    return {
+        INSTANCIA_SEGUNDO_GRAU: "relator_no_2o_grau",
+        INSTANCIA_TST: "relator_no_stj_tst",
+        INSTANCIA_STJ: "relator_no_stj_tst",
+        INSTANCIA_STF: "relator_no_stf",
+    }.get(instancia)
+
+
+def regra_19_20_cidade_desatualizada(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+) -> str | None:
+    """Regras 19+20 — Cidade desatualizada (faltando OU divergente).
+
+    - Condições combinadas (mesmo alerta para os dois casos):
+      - 19: Pub.Órgão match `Vara X de Cidade` E Proc.cidade vazia.
+      - 20: Mesmo regex extrai cidade ≠ Proc.cidade.
+    - Alerta: ``Cidade desatualizada``.
+    - Explicação: órgão de 1º grau quase sempre nomeia a cidade —
+      basta extrair e popular. Divergência indica redistribuição entre
+      comarcas (raro) ou cadastro errado.
+    """
+    if processo_record is None:
+        return None
+    cidade_pub = _extrair_cidade_do_orgao(publicacao.get("nomeOrgao"))
+    if not cidade_pub:
+        return None
+    cidade_proc = (processo_record.get("cidade") or "").strip()
+    if not cidade_proc:
+        return ALERTA_CIDADE_DESATUALIZADA  # Regra 19
+    # Comparação case-insensitive
+    if cidade_pub.upper() != cidade_proc.upper():
+        return ALERTA_CIDADE_DESATUALIZADA  # Regra 20
+    return None
+
+
+def regra_21_22_vara_desatualizada(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+) -> str | None:
+    """Regras 21+22 — Vara desatualizada (faltando OU divergente).
+
+    - Condições combinadas:
+      - 21: instancia_implicada=1º grau E Pub.Órgão match `Nª Vara X`
+        E Proc.vara vazia E Proc.instancia=1º grau.
+      - 22: Mesma situação, mas Proc.vara populada e diferente do
+        normalizado.
+    - Alerta: ``Vara desatualizada``.
+    """
+    if processo_record is None:
+        return None
+    if (processo_record.get("instancia") or "") != INSTANCIA_PRIMEIRO_GRAU:
+        return None
+    if instancia_implicada(publicacao) != INSTANCIA_PRIMEIRO_GRAU:
+        return None
+    vara_pub = _normalizar_vara(publicacao.get("nomeOrgao"))
+    if not vara_pub:
+        return None
+    vara_proc = (processo_record.get("vara") or "").strip()
+    if not vara_proc:
+        return ALERTA_VARA_DESATUALIZADA
+    if vara_pub.upper() != vara_proc.upper():
+        return ALERTA_VARA_DESATUALIZADA
+    return None
+
+
+def regra_23_turma_desatualizada(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+) -> str | None:
+    """Regra 23 — Turma desatualizada (faltando ou divergente).
+
+    - Condições: instancia_implicada(Pub) ≥ 2º grau E Pub.Órgão match
+      ``\\d+ª (Turma|Câmara)( Cível)?$`` E o campo ``Proc.turma_no_*``
+      correspondente vazio ou diferente.
+    - Alerta: ``Turma desatualizada``.
+    - Explicação: quando Pub.Órgão é gabinete (não turma explícita),
+      a Tabela auxiliar Desembargador→Turma não é alimentada por esta
+      regra (X.9 do doc v8). Apenas turmas/câmaras explícitas disparam.
+    """
+    if processo_record is None:
+        return None
+    instancia_proc = (processo_record.get("instancia") or "").strip()
+    if instancia_proc not in INSTANCIAS_COLEGIADAS:
+        return None
+    turma_pub = _extrair_turma_camara(publicacao.get("nomeOrgao"))
+    if not turma_pub:
+        return None
+    campo = _campo_turma_para_instancia(instancia_proc)
+    if not campo:
+        return None
+    turma_proc = (processo_record.get(campo) or "").strip()
+    if not turma_proc:
+        return ALERTA_TURMA_DESATUALIZADA
+    if turma_pub.upper() != turma_proc.upper():
+        return ALERTA_TURMA_DESATUALIZADA
+    return None
+
+
+def regra_24_relator_faltando(
+    publicacao: dict[str, Any],
+    processo_record: dict[str, Any] | None,
+) -> str | None:
+    """Regra 24 — Relator faltando (e divergente — combinada com 25
+    parcial; troca completa de relator entre publicações sequenciais
+    fica fora deste round).
+
+    - Condições: Pub.Órgão match ``^(Desembargador[a]?|Juiz[a]?
+      Convocad[oa]|Ministr[oa]) (.+)`` E o campo ``Proc.relator_no_*``
+      correspondente está vazio OU diferente.
+    - Alerta: ``Relator desatualizado``.
+    """
+    if processo_record is None:
+        return None
+    instancia_proc = (processo_record.get("instancia") or "").strip()
+    if instancia_proc not in INSTANCIAS_COLEGIADAS:
+        return None
+    relator_pub = _extrair_relator(publicacao.get("nomeOrgao"))
+    if not relator_pub:
+        return None
+    campo = _campo_relator_para_instancia(instancia_proc)
+    if not campo:
+        return None
+    relator_proc = (processo_record.get(campo) or "").strip()
+    if not relator_proc:
+        return ALERTA_RELATOR_DESATUALIZADO
+    if relator_pub.upper() != relator_proc.upper():
+        return ALERTA_RELATOR_DESATUALIZADO
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -1453,22 +1694,22 @@ def aplicar_regras_monitoramento(
 
     Round 7c — Regras 29, 30, 31, 38 (Estado processual + link).
 
-    Round 7d — implementadas neste commit:
+    Round 7d — Regras 7, 8, 9, 10 (Cliente e posição).
 
-    - Regra 7 (Cliente do escritório fora da relation).
-    - Regra 8 (Litisconsórcio não refletido).
-    - Regra 9 (Cliente cadastrado não aparece nas partes).
-    - Regra 10 (Polo inconsistente em 1ª instância).
+    Round 7e — implementadas neste commit:
 
-    Regras 7-10 carregam índice de Clientes do cache.db (somente se
-    ``cache_conn`` foi passado). Sem ``cache_conn``, essas regras são
-    silenciosamente puladas — útil em testes unitários e em cenários
-    legados sem cache.
+    - Regras 19+20 (Cidade desatualizada — faltando ou divergente).
+    - Regras 21+22 (Vara desatualizada — idem).
+    - Regra 23 (Turma desatualizada).
+    - Regra 24 (Relator desatualizado/faltando).
+
+    Regra 25 (troca de relator detectada por sequência de publicações)
+    fica para round seguinte — exige histórico de pubs anteriores.
 
     Pendentes (a serem acrescentadas em commits subsequentes):
 
     - Regra 1 (Conferir número CNJ do processo).
-    - Regras 19-25 (Cidade, Vara, Turma, Relator).
+    - Regra 25 (troca de relator).
     - Regras 32-34, 36, 37 (datas, sobrestamento, encerramento executivo).
     """
     # Lazy-load do índice de clientes (apenas para Regras 7-10)
@@ -1497,6 +1738,10 @@ def aplicar_regras_monitoramento(
         regra_12_tribunal_fora_vocabulario(publicacao, processo_record),
         regra_13_conferir_tribunal_origem(publicacao, processo_record),
         regra_14_subida_nao_detectada(publicacao, processo_record),
+        regra_19_20_cidade_desatualizada(publicacao, processo_record),
+        regra_21_22_vara_desatualizada(publicacao, processo_record),
+        regra_23_turma_desatualizada(publicacao, processo_record),
+        regra_24_relator_faltando(publicacao, processo_record),
         regra_15_descida_nao_detectada(publicacao, processo_record),
         regra_16_acordao_em_1grau(publicacao, processo_record),
         regra_17_sentenca_em_colegiado(publicacao, processo_record),

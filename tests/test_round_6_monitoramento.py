@@ -22,12 +22,14 @@ from notion_rpadv.services.dje_regras_v8 import (
     ALERTA_CAPTURAR_LINK_EXTERNO,
     ALERTA_CAPTURAR_NUMERACAO_STF,
     ALERTA_CAPTURAR_NUMERACAO_STJ_TST,
+    ALERTA_CIDADE_DESATUALIZADA,
     ALERTA_CONFERIR_NATUREZA_PROCESSO,
     ALERTA_CONFERIR_POSICAO_DO_CLIENTE,
     ALERTA_CONFERIR_SENTENCA_FASE_POS_COGNITIVA,
     ALERTA_CONFERIR_TIPO_PROCESSO,
     ALERTA_CONFERIR_TRIBUNAL_ORIGEM,
     ALERTA_CONFERIR_VINCULACAO_CLIENTE_PROCESSO,
+    ALERTA_RELATOR_DESATUALIZADO,
     ALERTA_FASE_DESATUALIZADA_COGNITIVA,
     ALERTA_FASE_DESATUALIZADA_EXECUTIVA,
     ALERTA_FASE_DESATUALIZADA_LIQUIDACAO,
@@ -46,6 +48,8 @@ from notion_rpadv.services.dje_regras_v8 import (
     ALERTA_TEXTO_IMPRESTAVEL,
     ALERTA_TRANSITO_PENDENTE,
     ALERTA_TRIBUNAL_FORA_VOCABULARIO,
+    ALERTA_TURMA_DESATUALIZADA,
+    ALERTA_VARA_DESATUALIZADA,
     ALERTA_VINCULAR_CLIENTE_AO_PROCESSO,
     FASE_COGNITIVA,
     FASE_EXECUTIVA,
@@ -76,6 +80,10 @@ from notion_rpadv.services.dje_regras_v8 import (
     regra_16_acordao_em_1grau,
     regra_17_sentenca_em_colegiado,
     regra_18_pauta_em_1grau,
+    regra_19_20_cidade_desatualizada,
+    regra_21_22_vara_desatualizada,
+    regra_23_turma_desatualizada,
+    regra_24_relator_faltando,
     regra_26_fase_executiva_por_classe,
     regra_27_fase_liquidacao_por_classe,
     regra_28_fase_cognitiva_contradita_por_classe,
@@ -1614,3 +1622,205 @@ def test_R7d_carregar_indice_pula_template_modelo() -> None:
 
 def test_R7d_carregar_indice_devolve_vazio_se_cache_none() -> None:
     assert carregar_indice_clientes(None) == {}
+
+
+# ===========================================================================
+# Round 7e — Regras 19+20: Cidade desatualizada
+# ===========================================================================
+
+
+def test_R7e_R19_dispara_cidade_extraivel_proc_vazia() -> None:
+    """Pub Vara do Trabalho de Brasília + Proc.cidade vazia → Regra 19."""
+    pub = _pub(nomeOrgao="18ª Vara do Trabalho de Brasília - DF")
+    proc = _proc(cidade="")
+    assert regra_19_20_cidade_desatualizada(pub, proc) == ALERTA_CIDADE_DESATUALIZADA
+
+
+def test_R7e_R20_dispara_cidade_divergente() -> None:
+    """Pub extrai 'Brasília' mas Proc.cidade='São Paulo' → Regra 20."""
+    pub = _pub(nomeOrgao="18ª Vara do Trabalho de Brasília - DF")
+    proc = _proc(cidade="São Paulo")
+    assert regra_19_20_cidade_desatualizada(pub, proc) == ALERTA_CIDADE_DESATUALIZADA
+
+
+def test_R7e_R19_NAO_dispara_se_consistente() -> None:
+    pub = _pub(nomeOrgao="9ª Vara Cível de Brasília")
+    proc = _proc(cidade="Brasília")
+    assert regra_19_20_cidade_desatualizada(pub, proc) is None
+
+
+def test_R7e_R19_NAO_dispara_se_orgao_nao_extraivel() -> None:
+    """Órgão 'Presidência do Tribunal' não tem cidade extraível."""
+    pub = _pub(nomeOrgao="Presidência do Tribunal")
+    proc = _proc(cidade="")
+    assert regra_19_20_cidade_desatualizada(pub, proc) is None
+
+
+def test_R7e_R19_extracao_diferentes_varas() -> None:
+    """Vara Cível de Londrina, Vara da Fazenda Pública, etc."""
+    casos = [
+        ("9ª Vara Cível de Londrina", "Londrina"),
+        ("3ª Vara Cível de Belo Horizonte", "Belo Horizonte"),
+    ]
+    for orgao, cidade_esperada in casos:
+        pub = _pub(nomeOrgao=orgao)
+        proc_vazio = _proc(cidade="")
+        assert regra_19_20_cidade_desatualizada(pub, proc_vazio) == ALERTA_CIDADE_DESATUALIZADA, orgao
+        proc_consistente = _proc(cidade=cidade_esperada)
+        assert regra_19_20_cidade_desatualizada(pub, proc_consistente) is None, orgao
+
+
+# ===========================================================================
+# Round 7e — Regras 21+22: Vara desatualizada
+# ===========================================================================
+
+
+def test_R7e_R21_dispara_vara_proc_vazia() -> None:
+    pub = _pub(siglaTribunal="TRT10", nomeOrgao="18ª Vara do Trabalho de Brasília - DF")
+    proc = _proc(instancia=INSTANCIA_PRIMEIRO_GRAU, vara="")
+    assert regra_21_22_vara_desatualizada(pub, proc) == ALERTA_VARA_DESATUALIZADA
+
+
+def test_R7e_R22_dispara_vara_divergente() -> None:
+    pub = _pub(siglaTribunal="TRT10", nomeOrgao="18ª Vara do Trabalho de Brasília - DF")
+    proc = _proc(instancia=INSTANCIA_PRIMEIRO_GRAU, vara="3ª Vara Cível")
+    assert regra_21_22_vara_desatualizada(pub, proc) == ALERTA_VARA_DESATUALIZADA
+
+
+def test_R7e_R21_NAO_dispara_se_consistente() -> None:
+    pub = _pub(siglaTribunal="TRT10", nomeOrgao="18ª Vara do Trabalho de Brasília - DF")
+    proc = _proc(instancia=INSTANCIA_PRIMEIRO_GRAU, vara="18ª Vara do Trabalho")
+    assert regra_21_22_vara_desatualizada(pub, proc) is None
+
+
+def test_R7e_R21_NAO_dispara_em_2grau() -> None:
+    """Em 2º grau, vara não faz sentido — não dispara."""
+    pub = _pub(siglaTribunal="TJDFT", nomeOrgao="2ª Turma Cível", tipoDocumento="Acórdão")
+    proc = _proc(instancia=INSTANCIA_SEGUNDO_GRAU, vara="")
+    assert regra_21_22_vara_desatualizada(pub, proc) is None
+
+
+def test_R7e_R21_NAO_dispara_se_orgao_nao_eh_vara() -> None:
+    pub = _pub(siglaTribunal="TJDFT", nomeOrgao="Presidência do Tribunal")
+    proc = _proc(instancia=INSTANCIA_PRIMEIRO_GRAU, vara="")
+    assert regra_21_22_vara_desatualizada(pub, proc) is None
+
+
+# ===========================================================================
+# Round 7e — Regra 23: Turma desatualizada
+# ===========================================================================
+
+
+def test_R7e_R23_dispara_turma_proc_vazia_2grau() -> None:
+    pub = _pub(
+        siglaTribunal="TJDFT",
+        tipoDocumento="Acórdão",
+        nomeOrgao="2ª Turma Cível",
+    )
+    proc = _proc(instancia=INSTANCIA_SEGUNDO_GRAU, turma_no_2o_grau="")
+    assert regra_23_turma_desatualizada(pub, proc) == ALERTA_TURMA_DESATUALIZADA
+
+
+def test_R7e_R23_dispara_turma_divergente() -> None:
+    pub = _pub(siglaTribunal="TRT10", nomeOrgao="2ª Turma", tipoDocumento="Acórdão")
+    proc = _proc(instancia=INSTANCIA_SEGUNDO_GRAU, turma_no_2o_grau="1ª Turma")
+    assert regra_23_turma_desatualizada(pub, proc) == ALERTA_TURMA_DESATUALIZADA
+
+
+def test_R7e_R23_NAO_dispara_se_consistente() -> None:
+    pub = _pub(siglaTribunal="TRT10", nomeOrgao="2ª Turma", tipoDocumento="Acórdão")
+    proc = _proc(instancia=INSTANCIA_SEGUNDO_GRAU, turma_no_2o_grau="2ª Turma")
+    assert regra_23_turma_desatualizada(pub, proc) is None
+
+
+def test_R7e_R23_NAO_dispara_em_1grau() -> None:
+    pub = _pub(nomeOrgao="2ª Turma", tipoDocumento="Acórdão")
+    proc = _proc(instancia=INSTANCIA_PRIMEIRO_GRAU, turma_no_2o_grau="")
+    assert regra_23_turma_desatualizada(pub, proc) is None
+
+
+def test_R7e_R23_NAO_dispara_se_orgao_eh_gabinete_explicito() -> None:
+    """'Gabinete da Desembargadora X' não bate em regex de Turma — não dispara
+    Regra 23. Regra 24 (Relator) cobre esse caso."""
+    pub = _pub(
+        siglaTribunal="TJDFT",
+        tipoDocumento="Acórdão",
+        nomeOrgao="Gabinete da Desembargadora MARIA SILVA",
+    )
+    proc = _proc(instancia=INSTANCIA_SEGUNDO_GRAU, turma_no_2o_grau="")
+    assert regra_23_turma_desatualizada(pub, proc) is None
+
+
+# ===========================================================================
+# Round 7e — Regra 24: Relator desatualizado
+# ===========================================================================
+
+
+def test_R7e_R24_dispara_desembargador_proc_vazia() -> None:
+    pub = _pub(
+        siglaTribunal="TJDFT",
+        tipoDocumento="Acórdão",
+        nomeOrgao="Desembargadora ELKE DORIS JUST",
+    )
+    proc = _proc(instancia=INSTANCIA_SEGUNDO_GRAU, relator_no_2o_grau="")
+    assert regra_24_relator_faltando(pub, proc) == ALERTA_RELATOR_DESATUALIZADO
+
+
+def test_R7e_R24_dispara_ministro_proc_vazia() -> None:
+    pub = _pub(
+        siglaTribunal="STJ",
+        tipoDocumento="Decisão",
+        nomeOrgao="Ministro RICARDO VILLAS BÔAS CUEVA",
+    )
+    proc = _proc(instancia=INSTANCIA_STJ, relator_no_stj_tst="")
+    assert regra_24_relator_faltando(pub, proc) == ALERTA_RELATOR_DESATUALIZADO
+
+
+def test_R7e_R24_dispara_relator_divergente() -> None:
+    pub = _pub(
+        siglaTribunal="TJDFT",
+        tipoDocumento="Acórdão",
+        nomeOrgao="Desembargadora ELKE DORIS JUST",
+    )
+    proc = _proc(
+        instancia=INSTANCIA_SEGUNDO_GRAU,
+        relator_no_2o_grau="OUTRO RELATOR ANTIGO",
+    )
+    assert regra_24_relator_faltando(pub, proc) == ALERTA_RELATOR_DESATUALIZADO
+
+
+def test_R7e_R24_NAO_dispara_se_consistente() -> None:
+    pub = _pub(
+        siglaTribunal="TJDFT",
+        tipoDocumento="Acórdão",
+        nomeOrgao="Desembargadora ELKE DORIS JUST",
+    )
+    proc = _proc(
+        instancia=INSTANCIA_SEGUNDO_GRAU,
+        relator_no_2o_grau="ELKE DORIS JUST",
+    )
+    assert regra_24_relator_faltando(pub, proc) is None
+
+
+def test_R7e_R24_NAO_dispara_em_1grau() -> None:
+    pub = _pub(nomeOrgao="Desembargador X", tipoDocumento="Acórdão")
+    proc = _proc(instancia=INSTANCIA_PRIMEIRO_GRAU, relator_no_2o_grau="")
+    assert regra_24_relator_faltando(pub, proc) is None
+
+
+def test_R7e_R24_NAO_dispara_se_orgao_eh_turma() -> None:
+    """'2ª Turma' sem prefixo de Desembargador → não dispara Regra 24."""
+    pub = _pub(siglaTribunal="TRT10", nomeOrgao="2ª Turma", tipoDocumento="Acórdão")
+    proc = _proc(instancia=INSTANCIA_SEGUNDO_GRAU, relator_no_2o_grau="")
+    assert regra_24_relator_faltando(pub, proc) is None
+
+
+def test_R7e_R24_juiz_convocado_dispara() -> None:
+    """Juiz Convocado também é relator."""
+    pub = _pub(
+        siglaTribunal="TJDFT",
+        tipoDocumento="Acórdão",
+        nomeOrgao="Juiz Convocado JOÃO SILVA",
+    )
+    proc = _proc(instancia=INSTANCIA_SEGUNDO_GRAU, relator_no_2o_grau="")
+    assert regra_24_relator_faltando(pub, proc) == ALERTA_RELATOR_DESATUALIZADO
