@@ -1,0 +1,22 @@
+{
+  "_comment": "Fixture sentinela: Tema 955. Sobrestamento (12092) sem levantamento (11458) posterior → derivar_status deve retornar 'Arquivado provisoriamente (tema 955)' mesmo sem o checkbox 'Tema 955 — Sobrestado' no escopo da Fase 1.",
+  "tjdft": [
+    {
+      "numeroProcesso": "07099887720228070001",
+      "tribunal": "TJDFT",
+      "grau": "G1",
+      "classe": {"codigo": 7, "nome": "Procedimento Comum Cível"},
+      "orgaoJulgador": {
+        "codigoMunicipioIBGE": 5300108,
+        "codigo": 105,
+        "nome": "5ª Vara Cível de Brasília"
+      },
+      "dataAjuizamento": "20221001100000",
+      "movimentos": [
+        {"codigo": 26,    "nome": "Distribuição",         "dataHora": "2022-10-01T10:00:00.000Z"},
+        {"codigo": 51,    "nome": "Conclusão",            "dataHora": "2022-12-15T14:00:00.000Z"},
+        {"codigo": 12092, "nome": "Sobrestamento",        "dataHora": "2023-04-20T09:00:00.000Z"}
+      ]
+    }
+  ]
+}

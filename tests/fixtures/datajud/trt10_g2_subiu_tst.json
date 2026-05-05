@@ -1,0 +1,78 @@
+{
+  "trt10": [
+    {
+      "numeroProcesso": "00098765420235100007",
+      "tribunal": "TRT10",
+      "grau": "G1",
+      "classe": {"codigo": 985, "nome": "Ação Trabalhista - Rito Ordinário"},
+      "orgaoJulgador": {
+        "codigoMunicipioIBGE": 5300108,
+        "codigo": 27632,
+        "nome": " 7A VT DE BRASILIA"
+      },
+      "dataAjuizamento": "20230315093000",
+      "movimentos": [
+        {"codigo": 26, "nome": "Distribuição", "dataHora": "2023-03-15T09:30:00.000Z"},
+        {"codigo": 219, "nome": "Sentença", "dataHora": "2023-09-12T14:00:00.000Z"},
+        {"codigo": 11009, "nome": "Trânsito em julgado", "dataHora": "2024-08-15T18:00:00.000Z"}
+      ]
+    },
+    {
+      "numeroProcesso": "00098765420235100007",
+      "tribunal": "TRT10",
+      "grau": "G2",
+      "classe": {"codigo": 1009, "nome": "Recurso Ordinário Trabalhista"},
+      "orgaoJulgador": {
+        "codigoMunicipioIBGE": 5300108,
+        "codigo": 27685,
+        "nome": "1ª Turma"
+      },
+      "dataAjuizamento": "20231120100000",
+      "movimentos": [
+        {
+          "codigo": 123,
+          "nome": "Atribuição de relator",
+          "dataHora": "2023-12-01T08:00:00.000Z",
+          "complementosTabelados": [
+            {
+              "codigo": 5,
+              "valor": 99,
+              "nome": "Maria Aparecida Vieira",
+              "descricao": "tipo_de_relator"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "tst": [
+    {
+      "numeroProcesso": "00098765420235100007",
+      "numeroProcessoStj": "RR-2099876-2024",
+      "tribunal": "TST",
+      "grau": "GS",
+      "classe": {"codigo": 11848, "nome": "Recurso de Revista"},
+      "orgaoJulgador": {
+        "codigoMunicipioIBGE": 5300108,
+        "codigo": 30001,
+        "nome": "5ª Turma"
+      },
+      "dataAjuizamento": "20240901140000",
+      "movimentos": [
+        {
+          "codigo": 123,
+          "nome": "Atribuição de relator",
+          "dataHora": "2024-09-15T10:00:00.000Z",
+          "complementosTabelados": [
+            {
+              "codigo": 5,
+              "valor": 88,
+              "nome": "João Carlos Pereira",
+              "descricao": "tipo_de_relator"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

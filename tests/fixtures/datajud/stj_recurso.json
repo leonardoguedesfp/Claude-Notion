@@ -1,0 +1,32 @@
+{
+  "stj": [
+    {
+      "numeroProcesso": "00045678920238070001",
+      "numeroProcessoStj": "REsp-2123456-2024",
+      "tribunal": "STJ",
+      "grau": "GS",
+      "classe": {"codigo": 198, "nome": "Recurso Especial"},
+      "orgaoJulgador": {
+        "codigoMunicipioIBGE": 5300108,
+        "codigo": 50001,
+        "nome": "3ª Turma"
+      },
+      "dataAjuizamento": "20240310083000",
+      "movimentos": [
+        {
+          "codigo": 123,
+          "nome": "Atribuição de relator",
+          "dataHora": "2024-03-20T11:00:00.000Z",
+          "complementosTabelados": [
+            {
+              "codigo": 5,
+              "valor": 77,
+              "nome": "Ricardo Villas Bôas Cueva",
+              "descricao": "tipo_de_relator"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
