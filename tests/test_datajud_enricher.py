@@ -24,19 +24,21 @@ from notion_rpadv.services.datajud_enricher import (
     DIAG_TRIBUNAL_NS,
     FASE_COGNITIVA,
     FASE_EXECUTIVA,
+    INSTANCIA_1G,
     INSTANCIA_2G,
     INSTANCIA_TST,
     REGRAS_ORIGEM,
     STATUS_ARQUIVADO,
     STATUS_ARQUIVADO_PROVISORIAMENTE,
     STATUS_ATIVO,
+    derivar_data_transito_cognitiva,
     derivar_relator,
     derivar_status,
-    derivar_transito_cognitiva,
     derivar_turma_g2,
     derivar_vara,
     endpoints_candidatos,
     enriquecer,
+    sources_por_grau,
 )
 
 
@@ -202,30 +204,33 @@ def test_status_arquivado_quando_maior_grau_tem_baixa_definitiva() -> None:
 
 
 def test_transito_cognitiva_menor_grau_com_fallback() -> None:
-    """Mov. 11009 (Trânsito) presente no G1 → derivado direto.
-    Quando ausente no G1, fallback pro grau maior."""
-    # Caso 1: trânsito no menor grau
+    """Mov. 848 (Trânsito em julgado, código TPU oficial) presente no G1
+    → derivado direto. Quando ausente no G1, fallback G2 → GS."""
+    # Caso 1: trânsito no menor grau (via fixture com cód 848 atualizado)
     result = _load_fixture("trt10_g2_subiu_tst.json")
     client = _mock_client(consulta_result=result)
     res = enriquecer(
         _processo(tribunal="TRT/10", instancia="TST"),
         client=client,
     )
-    # Fixture trt10_g2_subiu_tst.json tem mov. 11009 no G1 (2024-08-15)
+    # Fixture trt10_g2_subiu_tst.json tem mov. 848 no G1 (2024-08-15)
     assert res.propriedades_sugeridas["Data do trânsito em julgado (cognitiva)"] == "2024-08-15"
 
-    # Caso 2: helper unitário com fallback
-    movs_menor: list[dict[str, Any]] = [
-        {"codigo": 26, "dataHora": "2023-01-01T08:00:00.000Z"},
-    ]
-    movs_maior: list[dict[str, Any]] = [
-        {"codigo": 11009, "dataHora": "2024-09-30T18:00:00.000Z"},
-    ]
-    assert derivar_transito_cognitiva(movs_menor, movs_maior) == "2024-09-30"
+    # Caso 2: helper unitário com fallback (G2 quando G1 não tem)
+    src_menor: dict[str, Any] = {
+        "movimentos": [{"codigo": 26, "dataHora": "2023-01-01T08:00:00.000Z"}],
+    }
+    src_maior: dict[str, Any] = {
+        "movimentos": [{"codigo": 848, "dataHora": "2024-09-30T18:00:00.000Z"}],
+    }
+    assert derivar_data_transito_cognitiva(
+        {"G1": src_menor, "G2": src_maior},
+    ) == "2024-09-30"
 
-    # Caso 3: ausente em ambos → None
-    assert derivar_transito_cognitiva(
-        [{"codigo": 26}], [{"codigo": 219}],
+    # Caso 3: ausente em todos → None
+    assert derivar_data_transito_cognitiva(
+        {"G1": {"movimentos": [{"codigo": 26}]},
+         "G2": {"movimentos": [{"codigo": 219}]}},
     ) is None
 
 
@@ -387,11 +392,10 @@ def test_diagnostico_erro_quando_client_levanta_excecao() -> None:
 def test_diagnostico_ok_no_caso_simples() -> None:
     """1 endpoint, 1 grau, hit → OK.
 
-    O fixture tem mov. 219 (Sentença) sem cumprimento/liquidação → fase
-    'Liquidação pendente' (sentença emitida, liquidação não iniciada).
+    Fixture trt10_g1_simples.json: mov. 219 (Sentença) **sem** mov. 848
+    (Trânsito) ⇒ Fase Cognitiva (Liquidação pendente exige sentença +
+    trânsito ambos).
     """
-    from notion_rpadv.services.datajud_enricher import FASE_LIQUIDACAO_PENDENTE
-
     result = _load_fixture("trt10_g1_simples.json")
     client = _mock_client(consulta_result=result)
     res = enriquecer(
@@ -403,33 +407,36 @@ def test_diagnostico_ok_no_caso_simples() -> None:
     assert res.propriedades_sugeridas["Vara"] == "13"
     assert res.propriedades_sugeridas["Cidade"] == "Brasília"
     assert res.propriedades_sugeridas["Data de distribuição"] == "2024-01-01"
-    assert res.propriedades_sugeridas["Fase"] == FASE_LIQUIDACAO_PENDENTE
+    assert res.propriedades_sugeridas["Fase"] == FASE_COGNITIVA
 
 
 def test_fase_cognitiva_quando_nem_sentenca_nem_cumprimento() -> None:
-    """Movimentos só com Distribuição/Conclusão (sem 219, 848, 471, etc.)
-    → Fase Cognitiva (default)."""
+    """Source só com Distribuição/Conclusão (sem 219, sem classe de
+    execução, sem liquidação) → Fase Cognitiva (default)."""
     from notion_rpadv.services.datajud_enricher import derivar_fase
-    movs: list[dict[str, Any]] = [
-        {"codigo": 26},
-        {"codigo": 51},
-    ]
-    assert derivar_fase(movs) == FASE_COGNITIVA
+    src: dict[str, Any] = {
+        "classe": {"codigo": 985, "nome": "Ação Trabalhista - Rito Ordinário"},
+        "movimentos": [{"codigo": 26}, {"codigo": 51}],
+    }
+    assert derivar_fase(src) == FASE_COGNITIVA
 
 
-def test_fase_liquidacao_pendente_apos_sentenca_sem_liquidacao() -> None:
-    """Sentença (219) sem cumprimento e sem cód de liquidação →
-    Liquidação pendente."""
+def test_fase_liquidacao_pendente_apos_sentenca_e_transito() -> None:
+    """Sentença (219) + Trânsito em julgado (848) sem cumprimento e
+    sem cód de liquidação → Liquidação pendente."""
     from notion_rpadv.services.datajud_enricher import (
         FASE_LIQUIDACAO_PENDENTE,
         derivar_fase,
     )
-    movs: list[dict[str, Any]] = [
-        {"codigo": 26},
-        {"codigo": 219},  # Sentença
-        {"codigo": 11009},  # Trânsito
-    ]
-    assert derivar_fase(movs) == FASE_LIQUIDACAO_PENDENTE
+    src: dict[str, Any] = {
+        "classe": {"codigo": 985, "nome": "Ação Trabalhista - Rito Ordinário"},
+        "movimentos": [
+            {"codigo": 26},
+            {"codigo": 219},  # Sentença
+            {"codigo": 848},  # Trânsito em julgado (cód TPU oficial)
+        ],
+    }
+    assert derivar_fase(src) == FASE_LIQUIDACAO_PENDENTE
 
 
 def test_fase_liquidacao_de_sentenca_quando_cod_liquidacao_presente() -> None:
@@ -438,12 +445,27 @@ def test_fase_liquidacao_de_sentenca_quando_cod_liquidacao_presente() -> None:
         FASE_LIQUIDACAO,
         derivar_fase,
     )
-    movs: list[dict[str, Any]] = [
-        {"codigo": 26},
-        {"codigo": 219},
-        {"codigo": 11528},  # liquidação ampliada
-    ]
-    assert derivar_fase(movs) == FASE_LIQUIDACAO
+    src: dict[str, Any] = {
+        "classe": {"codigo": 985, "nome": "Ação Trabalhista - Rito Ordinário"},
+        "movimentos": [
+            {"codigo": 26},
+            {"codigo": 219},
+            {"codigo": 11528},  # liquidação ampliada
+        ],
+    }
+    assert derivar_fase(src) == FASE_LIQUIDACAO
+
+
+def test_fase_executiva_via_classe_de_cumprimento() -> None:
+    """Classe 159 (Cumprimento de Sentença) → Fase Executiva,
+    independente dos movimentos. Substitui a heurística antiga
+    baseada em código 848 (que era cód de trânsito, não cumprimento)."""
+    from notion_rpadv.services.datajud_enricher import derivar_fase
+    src: dict[str, Any] = {
+        "classe": {"codigo": 159, "nome": "Cumprimento de Sentença"},
+        "movimentos": [{"codigo": 26}],  # só distribuição do cumprimento
+    }
+    assert derivar_fase(src) == FASE_EXECUTIVA
 
 
 def test_log_warning_quando_tribunal_nao_mapeado(
@@ -483,14 +505,28 @@ def test_assertion_em_derivar_fase_garante_vocabulario_notion() -> None:
         derivar_fase,
     )
     # Cada categoria emite valor canônico
-    cenarios: list[tuple[list[dict[str, Any]], str]] = [
-        ([],                                        FASE_COGNITIVA),
-        ([{"codigo": 848}],                          "Executiva"),
-        ([{"codigo": 471}],                          "Liquidação de sentença"),
-        ([{"codigo": 219}],                          "Liquidação pendente"),
+    classe_comum: dict[str, Any] = {"codigo": 985, "nome": "AT"}
+    classe_cumpri: dict[str, Any] = {"codigo": 159, "nome": "Cump."}
+    cenarios: list[tuple[dict[str, Any], str]] = [
+        (
+            {"classe": classe_comum, "movimentos": []},
+            FASE_COGNITIVA,
+        ),
+        (
+            {"classe": classe_cumpri, "movimentos": [{"codigo": 26}]},
+            "Executiva",
+        ),
+        (
+            {"classe": classe_comum, "movimentos": [{"codigo": 471}]},
+            "Liquidação de sentença",
+        ),
+        (
+            {"classe": classe_comum, "movimentos": [{"codigo": 219}, {"codigo": 848}]},
+            "Liquidação pendente",
+        ),
     ]
-    for movs, esperado in cenarios:
-        out = derivar_fase(movs)
+    for src, esperado in cenarios:
+        out = derivar_fase(src)
         assert out == esperado
         assert out in FASE_VOCABULARIO_NOTION
 
@@ -520,19 +556,30 @@ def test_derivar_turma_g2_aceita_turma_e_camara() -> None:
 
 
 def test_derivar_status_sem_movimentos_retorna_ativo() -> None:
-    """Lista vazia de movimentos → Ativo (default)."""
-    assert derivar_status([]) == STATUS_ATIVO
+    """Source sem movimentos / source None → Ativo (default)."""
+    assert derivar_status(None) == STATUS_ATIVO
+    assert derivar_status({"movimentos": []}) == STATUS_ATIVO
 
 
 def test_derivar_status_levantamento_apos_sobrestamento_retorna_ativo() -> None:
-    """Sobrestamento (12092) seguido de levantamento (11458) → Ativo."""
-    movs: list[dict[str, Any]] = [
-        {"codigo": 26},
-        {"codigo": 12092},
-        {"codigo": 11458},
-        {"codigo": 51},
-    ]
-    assert derivar_status(movs) == STATUS_ATIVO
+    """Sobrestamento (cód 11025 da TPU oficial, com complemento Tema 955)
+    seguido de levantamento (12067) posterior → Ativo. Heurística usa
+    ordem cronológica (dataHora), não ordem de inserção."""
+    src: dict[str, Any] = {
+        "movimentos": [
+            {"codigo": 26,    "dataHora": "2023-01-01T00:00:00.000Z"},
+            {
+                "codigo": 11025,
+                "dataHora": "2023-04-01T00:00:00.000Z",
+                "complementosTabelados": [
+                    {"nome": "Tema 955 STJ", "descricao": "motivo_sobrestamento"},
+                ],
+            },
+            {"codigo": 12067, "dataHora": "2024-09-01T00:00:00.000Z"},
+            {"codigo": 51,    "dataHora": "2024-10-01T00:00:00.000Z"},
+        ],
+    }
+    assert derivar_status(src) == STATUS_ATIVO
 
 
 def test_derivar_relator_extrai_de_complementos_tabelados() -> None:
@@ -586,13 +633,83 @@ def test_propriedades_sugeridas_sempre_tem_14_keys() -> None:
     assert set(res.propriedades_sugeridas.keys()) == nomes_esperados
 
 
-def test_fase_executiva_quando_movimentos_tem_cumprimento() -> None:
-    """Mov. 848 (Cumprimento) no maior grau → Fase Executiva."""
-    movs: list[dict[str, Any]] = [
-        {"codigo": 26},
-        {"codigo": 219},  # sentença
-        {"codigo": 11009},  # trânsito
-        {"codigo": 848},  # cumprimento
+def test_sources_por_grau_normaliza_sup_para_gs() -> None:
+    """SUP (TST) é normalizado pra GS, mantendo o source original.
+    Cobre o caso descoberto no smoke real do CNJ 0000789-22.2019.5.10.0004."""
+    sources = [
+        {"grau": "G1", "tribunal": "TRT10", "id": "src_g1"},
+        {"grau": "G2", "tribunal": "TRT10", "id": "src_g2"},
+        {"grau": "SUP", "tribunal": "TST", "id": "src_sup"},
     ]
-    from notion_rpadv.services.datajud_enricher import derivar_fase
-    assert derivar_fase(movs) == FASE_EXECUTIVA
+    out = sources_por_grau(sources)
+    assert set(out.keys()) == {"G1", "G2", "GS"}
+    assert out["GS"]["id"] == "src_sup"
+    assert out["GS"]["tribunal"] == "TST"
+
+
+def test_processo_subiu_ao_tst_resolve_grau_alvo_gs_via_sup() -> None:
+    """Cadastro Notion = TST + API retorna SUP → enricher resolve
+    GS (SUP normalizado) e Instância sugerida = TST."""
+    fake_g1 = {
+        "numeroProcesso": "00007892220195100004",
+        "tribunal": "TRT10", "grau": "G1",
+        "orgaoJulgador": {"codigoMunicipioIBGE": 5300108, "nome": "4A VT DE BRASILIA"},
+        "movimentos": [],
+    }
+    fake_sup = {
+        "numeroProcesso": "00007892220195100004",
+        "tribunal": "TST", "grau": "SUP",
+        "orgaoJulgador": {"codigoMunicipioIBGE": 5300108, "nome": "Gabinete da Presidencia"},
+        "movimentos": [],
+    }
+    client = _mock_client(consulta_result={"trt10": [fake_g1], "tst": [fake_sup]})
+    res = enriquecer(
+        _processo(tribunal="TRT/10", instancia="TST"),
+        client=client,
+    )
+    assert res.diagnostico == DIAG_OK
+    assert "tst" in res.fontes_tribunal
+    assert res.propriedades_sugeridas["Instância"] == INSTANCIA_TST
+
+
+def test_grau_alvo_segue_cadastro_notion_nao_maior_grau_api() -> None:
+    """Cadastro = '1º grau' + API retorna G1+G2 → Status/Fase derivam de G1.
+
+    Decisão arquitetural: cadastro Notion é fonte da verdade pra
+    Instância atual; histórico em G2 não muda Status/Fase sugerido.
+    """
+    fake_g1 = {
+        "numeroProcesso": "07012345620228070001",
+        "tribunal": "TJDFT", "grau": "G1",
+        "classe": {"codigo": 7, "nome": "Procedimento Comum Cível"},
+        "orgaoJulgador": {"codigoMunicipioIBGE": 5300108, "nome": "9ª Vara Cível de Brasília"},
+        "movimentos": [{"codigo": 26}],  # nada relevante
+    }
+    fake_g2 = {
+        "numeroProcesso": "07012345620228070001",
+        "tribunal": "TJDFT", "grau": "G2",
+        "classe": {"codigo": 198, "nome": "Apelação Cível"},
+        "orgaoJulgador": {"codigoMunicipioIBGE": 5300108, "nome": "1ª Turma Cível"},
+        "movimentos": [
+            {"codigo": 22},   # Baixa Definitiva no G2 (acórdão julgado)
+        ],
+    }
+    client = _mock_client(consulta_result={"tjdft": [fake_g1, fake_g2]})
+    res = enriquecer(
+        _processo(tribunal="TJDFT", instancia="1º grau"),
+        client=client,
+    )
+    # Cadastro diz 1º grau → Status do G1 (não tem mov 22 → Ativo).
+    # Se a heurística usasse o maior grau API (G2 com mov 22), daria Arquivado.
+    assert res.propriedades_sugeridas["Instância"] == INSTANCIA_1G
+    assert res.propriedades_sugeridas["Status"] == STATUS_ATIVO
+
+
+def test_vara_aceita_encoding_corrompido_com_interrogacao() -> None:
+    """Pattern de Vara aceita '?' como sinônimo de 'ª' (encoding latin1
+    corrompido na API). Visto no smoke real do CNJ 0016539-47.2015.8.07.0001
+    com órgão '22? VARA C?VEL DE BRAS?LIA'."""
+    assert derivar_vara({"nome": "22? VARA C?VEL DE BRAS?LIA"}) == "22"
+    assert derivar_vara({"nome": "9? VARA C?VEL"}) == "9"
+    # Sanidade: outros formatos continuam casando
+    assert derivar_vara({"nome": "13ª Vara Cível"}) == "13"

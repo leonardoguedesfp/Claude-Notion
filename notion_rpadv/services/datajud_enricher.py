@@ -54,24 +54,54 @@ logger = logging.getLogger("datajud.enricher")
 
 
 # ---------------------------------------------------------------------------
-# Códigos TPU (Tabela Processual Unificada — CNJ Resolução 46/2007)
+# Códigos TPU oficiais — Resolução CNJ 46/2007
+#
+# Verificados contra: TPU TST 08.02.2022; TJDFT andamentos;
+# Portaria CNJ 116/2022. Smoke real do CNJ 0016539-47.2015.8.07.0001
+# expôs que os códigos do spec inline original estavam invertidos
+# (848 era tratado como cumprimento, mas é trânsito em julgado;
+# 11009 era tratado como trânsito, mas é despacho).
 # ---------------------------------------------------------------------------
 
-COD_TRANSITO: Final[int] = 11009
-COD_ARQUIVAMENTO_DEFINITIVO: Final[int] = 246
+COD_TRANSITO_EM_JULGADO: Final[int] = 848        # corrigido (spec dizia 11009)
+COD_DESPACHO: Final[int] = 11009                 # NOVO — só usado em asserts/docs
 COD_BAIXA_DEFINITIVA: Final[int] = 22
-COD_SOBRESTAMENTO: Final[frozenset[int]] = frozenset({12092, 12066})
-COD_LEVANTAMENTO_SOBRESTAMENTO: Final[int] = 11458
-COD_CUMPRIMENTO: Final[int] = 848
-COD_RPV: Final[int] = 123
-COD_PRECATORIO: Final[int] = 61
-# Liquidação cobre múltiplos códigos TPU. Expandir conforme apareçam
-# códigos novos no smoke real (operador adiciona aqui).
+COD_ARQUIVAMENTO_DEFINITIVO: Final[int] = 246
+
+# Sobrestamento: lista ampliada com códigos da TPU oficial.
+# Removido 12092 (não consta na TPU; provavelmente erro do spec original).
+COD_SOBRESTAMENTO: Final[frozenset[int]] = frozenset({
+    11025,   # Suspensão ou Sobrestamento (genérico, TPU)
+    12066,   # Sobrestamento subsidiário (não-precedentes qualificados)
+    14978,   # Suspensão/Sobrestamento por decisão Presidente STJ – SIRDR
+    14981,   # Suspensão/Sobrestamento Determinada por Controvérsia
+})
+COD_LEVANTAMENTO_SOBRESTAMENTO: Final[int] = 12067   # corrigido (spec dizia 11458)
+
+# Liquidação: confirmados 471 e 11528. Outros aparecerão no smoke real;
+# expandir conforme operador identifique.
 COD_LIQUIDACAO: Final[frozenset[int]] = frozenset({
     471,    # Liquidação por Arbitramento
     11528,  # Liquidação Provisória por Cálculos (Justiça do Trabalho)
 })
-COD_SENTENCA: Final[int] = 219
+
+COD_SENTENCA: Final[int] = 219    # NÃO confirmado em fonte oficial; manter
+                                   # como heurística e validar no smoke.
+
+# ---------------------------------------------------------------------------
+# Classes processuais que indicam fase Executiva
+#
+# Quando o processo é cadastrado como "Cumprimento de Sentença" no PJe/legacy,
+# a classe.codigo é uma destas. Mais robusto que rastrear código de movimento
+# (após a descoberta de que 848 não é cumprimento).
+# ---------------------------------------------------------------------------
+
+CLASSES_EXECUCAO: Final[frozenset[int]] = frozenset({
+    159,    # Cumprimento de Sentença
+    156,    # Cumprimento de Sentença contra a Fazenda Pública
+    11538,  # Cumprimento de Sentença (Justiça do Trabalho)
+    1111,   # Execução de Título Judicial
+})
 
 
 # ---------------------------------------------------------------------------
@@ -263,13 +293,16 @@ def endpoints_candidatos(processo_notion: dict[str, Any]) -> list[str]:
 #   " 13A VT DE BRASILIA"           (TRT, com space prefixado)
 #   "13ª Vara Cível de Brasília"    (TJDFT, com ª)
 #   "13a Vara"                      (lowercase a, sem ª)
+#   "22? VARA C?VEL DE BRAS?LIA"    (encoding latin1 corrompido na API:
+#                                    'ª'/'í' viram '?'. Visto no smoke
+#                                    real do CNJ 0016539-47.2015.8.07.0001)
 #   "Vara n. 13"                    (Vara antes do número)
 _VARA_PATTERNS: tuple[re.Pattern[str], ...] = (
     # TRT trabalhista: "<num>A VT" (ex.: " 13A VT DE BRASILIA")
     re.compile(r"(\d+)\s*A\.?\s+VT\b", re.IGNORECASE),
-    # Cível/comum: aceita ª/º/a/A (ou nada) entre número e "Vara".
-    # IGNORECASE deixa [ªºA] casar lowercase também.
-    re.compile(r"(\d+)\s*[ªºA]?\s*Vara", re.IGNORECASE),
+    # Cível/comum: aceita ª/º/a/A/? (ou nada) entre número e "Vara".
+    # `?` cobre encoding corrompido pela API DataJud (ª/í → ?).
+    re.compile(r"(\d+)\s*[ªºA?]?\s*Vara", re.IGNORECASE),
     # "Vara nº 13", "Vara 13"
     re.compile(r"\bVara\s*(?:n[º°]?\.?\s*)?(\d+)", re.IGNORECASE),
 )
@@ -350,114 +383,189 @@ def derivar_turma_g2(orgao_julgador: dict[str, Any] | None) -> str | None:
     return None
 
 
+def parse_data_compacta(raw: Any) -> str | None:
+    """Aceita formato compacto da API (``"20210522081424"``) ou ISO
+    (``"2021-05-22T08:14:24..."``) e devolve 'YYYY-MM-DD'.
+
+    Reutilizável por ``derivar_data_distribuicao`` e
+    ``derivar_data_transito_cognitiva`` — ambas leem strings de data
+    do mesmo formato heterogêneo.
+    """
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    if not s:
+        return None
+    if len(s) >= 8 and s[:8].isdigit():
+        return f"{s[:4]}-{s[4:6]}-{s[6:8]}"
+    if len(s) >= 10 and s[4] == "-" and s[7] == "-":
+        return s[:10]
+    return None
+
+
 def derivar_data_distribuicao(
     menor_grau_source: dict[str, Any] | None,
 ) -> str | None:
-    """Extrai ``dataAjuizamento`` do menor grau como ISO 'YYYY-MM-DD'.
-
-    Aceita formato compacto da API (``"20210522081424"``) e ISO
-    (``"2021-05-22T08:14:24..."``).
-    """
+    """Extrai ``dataAjuizamento`` do menor grau como ISO 'YYYY-MM-DD'."""
     if not menor_grau_source:
         return None
-    raw = str(menor_grau_source.get("dataAjuizamento") or "").strip()
-    if not raw:
-        return None
-    if len(raw) >= 8 and raw[:8].isdigit():
-        return f"{raw[:4]}-{raw[4:6]}-{raw[6:8]}"
-    if len(raw) >= 10 and raw[4] == "-" and raw[7] == "-":
-        return raw[:10]
-    return None
+    return parse_data_compacta(menor_grau_source.get("dataAjuizamento"))
 
 
-def derivar_transito_cognitiva(
-    movimentos_menor: list[dict[str, Any]],
-    movimentos_maior: list[dict[str, Any]],
+def derivar_data_transito_cognitiva(
+    sources_por_grau: dict[str, dict[str, Any]],
 ) -> str | None:
-    """Procura mov. ``COD_TRANSITO`` (11009) no menor grau primeiro,
-    fallback no maior grau. Retorna ISO 'YYYY-MM-DD' ou None.
+    """Procura mov. ``COD_TRANSITO_EM_JULGADO`` (848) no menor grau
+    primeiro (G1), fallback G2, depois GS. Retorna 'YYYY-MM-DD' ou None.
+
+    Política: trânsito cognitivo é o do processo principal (cognição),
+    que tipicamente acontece no G1 ou G2. Iteração ascendente respeita
+    isso. Cód 848 substituiu 11009 (que era tratado erroneamente como
+    trânsito mas é Despacho).
     """
-    for movs in (movimentos_menor, movimentos_maior):
+    for grau_chave in ("G1", "G2", "GS"):
+        src = sources_por_grau.get(grau_chave)
+        if src is None:
+            continue
+        movs = src.get("movimentos") or []
+        if not isinstance(movs, list):
+            continue
         for m in movs:
-            if m.get("codigo") == COD_TRANSITO:
-                dh = str(m.get("dataHora") or "")
-                if len(dh) >= 10:
-                    return dh[:10]
+            if not isinstance(m, dict):
+                continue
+            if m.get("codigo") == COD_TRANSITO_EM_JULGADO:
+                data = parse_data_compacta(m.get("dataHora"))
+                if data is not None:
+                    return data
     return None
 
 
-def derivar_status(movimentos_maior: list[dict[str, Any]]) -> str:
-    """Status canônico do Notion — sentinela de "Tema 955" preservada.
+def derivar_status(source_maior_grau: dict[str, Any] | None) -> str:
+    """Status canônico do Notion — sentinela de Tema 955 via complementos.
 
     Heurísticas (ordem de prioridade):
-    1. Sobrestamento (mov. 12092/12066) sem levantamento posterior
-       (mov. 11458) → "Arquivado provisoriamente (tema 955)".
-    2. Arquivamento definitivo (mov. 246) ou baixa definitiva (mov. 22)
-       sem indicação de reativação → "Arquivado".
+
+    1. **Tema 955**: presença de mov. ∈ ``COD_SOBRESTAMENTO``
+       com ``complementosTabelados[].nome`` ou ``.descricao``
+       contendo "tema 955", **sem** mov. subsequente
+       ``COD_LEVANTAMENTO_SOBRESTAMENTO`` (12067) → "Arquivado
+       provisoriamente (tema 955)". Itera movimentos ordenados por
+       ``dataHora`` para garantir ordem cronológica correta — não
+       confiar na ordem de inserção da API.
+
+    2. Arquivamento definitivo (246) ou baixa definitiva (22) →
+       "Arquivado".
+
     3. Senão → "Ativo".
 
-    Importante: este campo continua válido mesmo que o checkbox
-    "Tema 955 — Sobrestado" não esteja no escopo de enriquecimento.
-    Status e o checkbox são propriedades distintas no Notion.
+    LIMITAÇÃO TEMA 955: O DataJud só consegue detectar sobrestamento
+    por Tema 955 quando o movimento original (cód TPU
+    11025/12066/14978/14981 com complemento "Tema 955") está presente
+    nos dados retornados pela API. Para processos sobrestados antes
+    da plena adoção do DataJud (~2018-2020), esse movimento pode
+    estar ausente, e o enricher sugerirá "Arquivado" em vez de
+    "Arquivado provisoriamente (tema 955)". Tratar como divergência
+    esperada, não erro do enricher.
     """
-    cods: list[int] = []
-    for m in movimentos_maior:
-        c = m.get("codigo")
-        if isinstance(c, int):
-            cods.append(c)
-    if not cods:
+    if source_maior_grau is None:
         return STATUS_ATIVO
-    last_sobrestamento = -1
-    last_levantamento  = -1
-    last_arq           = -1
-    for i, c in enumerate(cods):
-        if c in COD_SOBRESTAMENTO:
-            last_sobrestamento = i
-        if c == COD_LEVANTAMENTO_SOBRESTAMENTO:
-            last_levantamento = i
-        if c in (COD_ARQUIVAMENTO_DEFINITIVO, COD_BAIXA_DEFINITIVA):
-            last_arq = i
-    if last_sobrestamento > last_levantamento:
+
+    movimentos_raw = source_maior_grau.get("movimentos") or []
+    if not isinstance(movimentos_raw, list):
+        movimentos_raw = []
+    movimentos: list[dict[str, Any]] = [
+        m for m in movimentos_raw if isinstance(m, dict)
+    ]
+    if not movimentos:
+        return STATUS_ATIVO
+
+    movs_ordenados = sorted(
+        movimentos,
+        key=lambda m: str(m.get("dataHora") or ""),
+    )
+
+    sobrestado_tema_955 = False
+    for m in movs_ordenados:
+        cod = m.get("codigo")
+        if cod in COD_SOBRESTAMENTO:
+            comps = m.get("complementosTabelados") or []
+            if not isinstance(comps, list):
+                comps = []
+            comps_text = " ".join(
+                (str(c.get("nome", "")) + " " + str(c.get("descricao", "")))
+                for c in comps if isinstance(c, dict)
+            ).lower()
+            if "tema 955" in comps_text:
+                sobrestado_tema_955 = True
+        elif cod == COD_LEVANTAMENTO_SOBRESTAMENTO:
+            sobrestado_tema_955 = False
+
+    if sobrestado_tema_955:
         resultado = STATUS_ARQUIVADO_PROVISORIAMENTE
-    elif last_arq >= 0:
-        resultado = STATUS_ARQUIVADO
     else:
-        resultado = STATUS_ATIVO
+        cods_movs = {m.get("codigo") for m in movs_ordenados}
+        if cods_movs & {COD_BAIXA_DEFINITIVA, COD_ARQUIVAMENTO_DEFINITIVO}:
+            resultado = STATUS_ARQUIVADO
+        else:
+            resultado = STATUS_ATIVO
+
     assert resultado in STATUS_VOCABULARIO_NOTION, (
         f"derivar_status emitiu valor fora do vocabulário Notion: {resultado!r}"
     )
     return resultado
 
 
-def derivar_fase(movimentos_maior: list[dict[str, Any]]) -> str:
-    """Fase canônica do Notion. Prioridade descendente:
-    Executiva → Liquidação de sentença → Liquidação pendente → Cognitiva.
+def derivar_fase(source_maior_grau: dict[str, Any] | None) -> str:
+    """Fase canônica do Notion via classe processual + códigos de movimento.
 
-    - Cumprimento (848) / RPV (123) / Precatório (61) → Executiva
-    - Algum código em ``COD_LIQUIDACAO`` → Liquidação de sentença
-    - Sentença (219) sem cumprimento e sem cód de liquidação →
-      Liquidação pendente (sentença emitida, liquidação ainda não
-      iniciada — semântica do Notion)
-    - Senão → Cognitiva (default; processo cognitivo em curso,
-      sem sentença ainda)
+    Heurística (prioridade descendente):
+
+    1. ``classe.codigo`` ∈ ``CLASSES_EXECUCAO`` (159, 156, 11538, 1111)
+       → "Executiva". Mais robusto que rastrear código de movimento —
+       a classe processual é a fonte canônica para "Cumprimento de
+       Sentença" no PJe.
+
+    2. Algum mov com cód em ``COD_LIQUIDACAO`` → "Liquidação de sentença".
+
+    3. ``COD_SENTENCA`` (219) E ``COD_TRANSITO_EM_JULGADO`` (848)
+       presentes E sem cumprimento/liquidação → "Liquidação pendente"
+       (sentença transitada mas liquidação não iniciada).
+
+    4. Default: "Cognitiva" (processo em curso; vocabulário Notion não
+       distingue mais finamente).
 
     "TJ - sentença não será executada" existe no vocabulário Notion mas
     não é detectável pela API (depende de natureza da decisão); fica
-    fora do output automático e é cadastrado manualmente.
+    fora do output automático.
     """
-    cods: set[int] = set()
-    for m in movimentos_maior:
-        c = m.get("codigo")
-        if isinstance(c, int):
-            cods.add(c)
-    if any(c in cods for c in (COD_CUMPRIMENTO, COD_RPV, COD_PRECATORIO)):
+    if source_maior_grau is None:
+        return FASE_COGNITIVA
+
+    classe = source_maior_grau.get("classe") or {}
+    classe_cod = classe.get("codigo") if isinstance(classe, dict) else None
+
+    movimentos_raw = source_maior_grau.get("movimentos") or []
+    if not isinstance(movimentos_raw, list):
+        movimentos_raw = []
+    cods_movs: set[int] = set()
+    for m in movimentos_raw:
+        if isinstance(m, dict):
+            c = m.get("codigo")
+            if isinstance(c, int):
+                cods_movs.add(c)
+
+    if classe_cod in CLASSES_EXECUCAO:
         resultado = FASE_EXECUTIVA
-    elif cods & COD_LIQUIDACAO:
+    elif cods_movs & COD_LIQUIDACAO:
         resultado = FASE_LIQUIDACAO
-    elif COD_SENTENCA in cods:
+    elif (
+        COD_SENTENCA in cods_movs
+        and COD_TRANSITO_EM_JULGADO in cods_movs
+    ):
         resultado = FASE_LIQUIDACAO_PENDENTE
     else:
         resultado = FASE_COGNITIVA
+
     assert resultado in FASE_VOCABULARIO_NOTION, (
         f"derivar_fase emitiu valor fora do vocabulário Notion: {resultado!r}"
     )
@@ -578,17 +686,20 @@ def enriquecer(
             movimentos_brutos_por_grau={},
         )
 
-    # Indexa sources por grau, anotando o endpoint de origem.
+    # Indexa sources por grau (com SUP→GS normalizado), anotando o
+    # endpoint de origem. Endpoint é necessário downstream para
+    # distinguir GS-stj de GS-tst (Número STJ/TST, Turma STJ/TST).
     por_grau: dict[str, list[tuple[str, dict[str, Any]]]] = {}
     fontes_com_hit: list[str] = []
     for ep, sources in results.items():
         if sources:
             fontes_com_hit.append(ep)
         for src in sources:
-            grau = str(src.get("grau") or "").strip()
-            if not grau:
+            grau_raw = str(src.get("grau") or "").strip()
+            if not grau_raw:
                 continue
-            por_grau.setdefault(grau, []).append((ep, src))
+            chave = "GS" if grau_raw in ("GS", "SUP") else grau_raw
+            por_grau.setdefault(chave, []).append((ep, src))
 
     if not por_grau:
         return ResultadoEnriquecimento(
@@ -602,7 +713,9 @@ def enriquecer(
     todos_eps_hit = len(fontes_com_hit) == len(eps)
     diag = DIAG_OK if todos_eps_hit else DIAG_PARCIAL
 
-    propriedades = _aplicar_regras(por_grau, cnj=cnj)
+    propriedades = _aplicar_regras(
+        por_grau, processo_notion=processo_notion, cnj=cnj,
+    )
 
     movs_brutos: dict[str, list[dict[str, Any]]] = {}
     for grau, items in por_grau.items():
@@ -632,41 +745,103 @@ def _propriedades_vazias() -> dict[str, Any]:
     return {r.nome_notion: None for r in REGRAS_ORIGEM}
 
 
-_GRAU_RANK: Final[dict[str, int]] = {"G1": 0, "G2": 1, "GS": 2}
+# SUP é como o TST representa o grau superior (decidido empiricamente
+# no smoke real do CNJ 0000789-22.2019.5.10.0004). Tratado como
+# sinônimo de GS pra simplificar consumidores downstream.
+_GRAU_RANK: Final[dict[str, int]] = {"G1": 0, "G2": 1, "GS": 2, "SUP": 2}
+
+
+def sources_por_grau(
+    sources: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Normaliza lista de ``_source`` em dict ``grau → primeiro source``.
+
+    SUP é normalizado para GS (TST usa SUP em vez de GS). Quando o
+    mesmo grau aparece mais de uma vez, mantém o primeiro (a API
+    raramente retorna duplicatas; quando ocorre, costumam ser cópias
+    do mesmo registro com timestamps diferentes).
+
+    Útil para alimentar funções derivar_* que consomem source único
+    por grau. Função pública — pode ser usada pelo writer xlsx no
+    Componente 3.
+    """
+    out: dict[str, dict[str, Any]] = {}
+    for src in sources:
+        if not isinstance(src, dict):
+            continue
+        grau_raw = str(src.get("grau") or "").strip()
+        if not grau_raw:
+            continue
+        chave = "GS" if grau_raw in ("GS", "SUP") else grau_raw
+        if chave not in out:
+            out[chave] = src
+    return out
+
+
+def _grau_alvo(processo_notion: dict[str, Any]) -> str:
+    """Mapeia ``Instância`` cadastrada no Notion para o grau DataJud
+    correspondente. É a fonte da verdade para o "maior grau" das
+    REGRAS_ORIGEM — não o maior grau retornado pela API.
+
+    Decisão arquitetural: o cadastro Notion é o oráculo da Instância
+    atual do processo. A API DataJud retorna registros históricos de
+    todos os graus (G1 cognitivo + G2 acórdão + ...), mas o "estado
+    atual" (Status, Fase) deve ser lido do grau que o operador
+    cadastrou. Se o cadastro estiver desatualizado, o operador
+    atualiza manualmente — o enricher não tenta adivinhar.
+    """
+    instancia = (processo_notion.get("Instância") or "").strip()
+    if instancia == INSTANCIA_1G:
+        return "G1"
+    if instancia == INSTANCIA_2G:
+        return "G2"
+    if instancia in (INSTANCIA_TST, INSTANCIA_STJ, INSTANCIA_STF):
+        return "GS"
+    return "G1"  # fallback conservador para Instância vazia/desconhecida
 
 
 def _aplicar_regras(
     por_grau: dict[str, list[tuple[str, dict[str, Any]]]],
     *,
+    processo_notion: dict[str, Any],
     cnj: str,
 ) -> dict[str, Any]:
     """Itera REGRAS_ORIGEM e preenche cada propriedade conforme a regra.
 
-    Indexa source único (primeiro) por grau pra simplificar; payloads
-    com 2 sources mesmo grau são raros e os campos derivados (Vara,
-    Cidade) são iguais entre eles.
-    """
-    graus_disponiveis = sorted(
-        (g for g in por_grau if g in _GRAU_RANK),
-        key=lambda g: _GRAU_RANK[g],
-    )
-    if not graus_disponiveis:
-        return _propriedades_vazias()
-    menor_grau = graus_disponiveis[0]
-    maior_grau = graus_disponiveis[-1]
+    "Maior grau" segue o cadastro Notion (via ``_grau_alvo``), não o
+    maior grau retornado pela API. Decisão arquitetural deliberada:
+    Status/Fase/Instância refletem o estado atual conforme cadastro,
+    não o histórico.
 
-    def _primeiro(grau: str) -> tuple[str, dict[str, Any]] | None:
+    "Menor grau" é G1; quando ausente (caso atípico), faz fallback
+    para o menor grau efetivamente disponível.
+    """
+    if not por_grau:
+        return _propriedades_vazias()
+
+    # Maior grau guiado pelo cadastro Notion. Se o cadastro indica
+    # "1º grau" mas a API só retornou G2, _resolve_grau cai no fallback.
+    grau_alvo_cadastro = _grau_alvo(processo_notion)
+    maior_grau = _resolve_grau(grau_alvo_cadastro, por_grau)
+
+    # Menor grau é G1 quando disponível; senão o menor existente.
+    if "G1" in por_grau:
+        menor_grau: str | None = "G1"
+    else:
+        graus_ordenados = sorted(
+            (g for g in por_grau if g in _GRAU_RANK),
+            key=lambda g: _GRAU_RANK[g],
+        )
+        menor_grau = graus_ordenados[0] if graus_ordenados else None
+
+    if menor_grau is None:
+        return _propriedades_vazias()
+
+    def _primeiro(grau: str | None) -> tuple[str, dict[str, Any]] | None:
+        if grau is None:
+            return None
         items = por_grau.get(grau) or []
         return items[0] if items else None
-
-    def _movs(grau: str) -> list[dict[str, Any]]:
-        items = por_grau.get(grau) or []
-        out: list[dict[str, Any]] = []
-        for _ep, src in items:
-            ms = src.get("movimentos") or []
-            if isinstance(ms, list):
-                out.extend(m for m in ms if isinstance(m, dict))
-        return out
 
     def _stj_tst_source() -> tuple[str, dict[str, Any]] | None:
         """GS originado de endpoint stj/tst (distingue de GS atípicos)."""
@@ -681,12 +856,17 @@ def _aplicar_regras(
     g2_src = _primeiro("G2")
     stj_tst_src = _stj_tst_source()
 
-    movs_menor = _movs(menor_grau)
-    movs_maior = _movs(maior_grau)
+    # View grau→source para derivar_data_transito_cognitiva (helper
+    # iterando G1 → G2 → GS na ordem cronológica de cognição).
+    sources_view: dict[str, dict[str, Any]] = {}
+    for grau in ("G1", "G2", "GS"):
+        s = _primeiro(grau)
+        if s is not None:
+            sources_view[grau] = s[1]
 
     out: dict[str, Any] = _propriedades_vazias()
 
-    # 1. Número do processo (qualquer)
+    # 1. Número do processo (qualquer; usa menor grau)
     if menor_src is not None:
         np = menor_src[1].get("numeroProcesso")
         out["Número do processo"] = str(np) if np else None
@@ -697,8 +877,6 @@ def _aplicar_regras(
         if trib_dj:
             mapeado = DATAJUD_TRIBUNAL_TO_NOTION.get(trib_dj)
             if mapeado is None:
-                # Visível como divergência no xlsx; opera com fallback
-                # cru pra não bloquear, mas loga pra revisão do mapa.
                 logger.warning(
                     "DataJUD: tribunal não mapeado: %r (CNJ %s)",
                     trib_dj, cnj,
@@ -707,8 +885,8 @@ def _aplicar_regras(
             else:
                 out["Tribunal"] = mapeado
 
-    # 3. Instância (maior grau, mapeada via grau + endpoint)
-    if maior_src is not None:
+    # 3. Instância (grau alvo conforme cadastro Notion)
+    if maior_src is not None and maior_grau is not None:
         out["Instância"] = _instancia_canonica(
             maior_grau, maior_src[0], maior_src[1],
         )
@@ -732,18 +910,18 @@ def _aplicar_regras(
     if menor_src is not None:
         out["Data de distribuição"] = derivar_data_distribuicao(menor_src[1])
 
-    # 7. Trânsito cognitiva (menor → fallback maior)
-    out["Data do trânsito em julgado (cognitiva)"] = derivar_transito_cognitiva(
-        movs_menor, movs_maior,
+    # 7. Trânsito cognitivo (G1 → G2 → GS; cód 848)
+    out["Data do trânsito em julgado (cognitiva)"] = (
+        derivar_data_transito_cognitiva(sources_view)
     )
 
-    # 8. Status (maior grau)
-    out["Status"] = derivar_status(movs_maior)
+    # 8. Status (grau alvo do cadastro)
+    out["Status"] = derivar_status(maior_src[1] if maior_src else None)
 
-    # 9. Fase (maior grau)
-    out["Fase"] = derivar_fase(movs_maior)
+    # 9. Fase (grau alvo do cadastro; via classe + códigos)
+    out["Fase"] = derivar_fase(maior_src[1] if maior_src else None)
 
-    # 10. Número STJ/TST (específico)
+    # 10. Número STJ/TST (específico — só GS-stj/tst)
     if stj_tst_src is not None:
         np = stj_tst_src[1].get("numeroProcesso")
         out["Número STJ/TST"] = str(np) if np else None
@@ -777,6 +955,26 @@ def _aplicar_regras(
         out["Relator no STJ/TST"] = derivar_relator(movs_st)
 
     return out
+
+
+def _resolve_grau(
+    grau_alvo: str,
+    por_grau: dict[str, list[tuple[str, dict[str, Any]]]],
+) -> str | None:
+    """Resolve o grau efetivo: usa ``grau_alvo`` se disponível na API;
+    senão faz fallback para o maior grau efetivamente retornado.
+
+    Garante que Status/Fase/Instância sempre tenham um source pra
+    consumir, mesmo quando o cadastro Notion está desatualizado e
+    a API só conhece outros graus do processo.
+    """
+    if grau_alvo in por_grau:
+        return grau_alvo
+    graus_disponiveis = sorted(
+        (g for g in por_grau if g in _GRAU_RANK),
+        key=lambda g: _GRAU_RANK[g],
+    )
+    return graus_disponiveis[-1] if graus_disponiveis else None
 
 
 def _instancia_canonica(

@@ -93,10 +93,11 @@ TRIB_ENDPOINT: Final[dict[str, str]] = {
 
 _VALID_ENDPOINTS: Final[frozenset[str]] = frozenset(TRIB_ENDPOINT.values())
 
-# Ordem canônica de grau: G1 < G2 < GS. Outros valores caem no fim
-# (ordenação defensiva — se a API trouxer um grau inesperado, não
-# quebra; apenas vai pro final da lista).
-_GRAU_ORDEM: Final[dict[str, int]] = {"G1": 0, "G2": 1, "GS": 2}
+# Ordem canônica de grau: G1 < G2 < GS/SUP. Outros valores caem no
+# fim (ordenação defensiva). SUP é como o TST representa o grau
+# superior (descoberto empiricamente no smoke real do
+# CNJ 0000789-22.2019.5.10.0004); tratado como sinônimo de GS.
+_GRAU_ORDEM: Final[dict[str, int]] = {"G1": 0, "G2": 1, "GS": 2, "SUP": 2}
 _GRAU_FALLBACK_RANK: Final[int] = 99
 
 
