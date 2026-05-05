@@ -1,0 +1,33 @@
+{
+  "trt10": [
+    {
+      "numeroProcesso": "00012345620245100013",
+      "tribunal": "TRT10",
+      "grau": "G1",
+      "classe": {"codigo": 985, "nome": "Ação Trabalhista - Rito Ordinário"},
+      "orgaoJulgador": {
+        "codigoMunicipioIBGE": 5300108,
+        "codigo": 27640,
+        "nome": " 13A VT DE BRASILIA"
+      },
+      "dataAjuizamento": "20240101080000",
+      "movimentos": [
+        {
+          "codigo": 26,
+          "nome": "Distribuição",
+          "dataHora": "2024-01-01T08:00:00.000Z"
+        },
+        {
+          "codigo": 51,
+          "nome": "Conclusão",
+          "dataHora": "2024-02-15T10:30:00.000Z"
+        },
+        {
+          "codigo": 219,
+          "nome": "Sentença",
+          "dataHora": "2024-06-01T15:00:00.000Z"
+        }
+      ]
+    }
+  ]
+}

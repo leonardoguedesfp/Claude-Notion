@@ -25,6 +25,7 @@ from notion_rpadv.pages.catalogo import CatalogoPage
 from notion_rpadv.pages.clientes import ClientesPage
 from notion_rpadv.pages.configuracoes import ConfiguracoesPage
 from notion_rpadv.pages.dashboard import DashboardPage
+from notion_rpadv.pages.datajud import DataJUDPage
 from notion_rpadv.pages.exportar import ExportarPage
 from notion_rpadv.pages.importar import ImportarPage
 from notion_rpadv.pages.leitor_dje import LeitorDJEPage
@@ -55,6 +56,7 @@ _PAGE_CATALOGO   = "catalogo"
 _PAGE_IMPORTAR   = "importar"
 _PAGE_EXPORTAR   = "exportar"
 _PAGE_LEITOR_DJE = "leitor_dje"
+_PAGE_DATAJUD    = "datajud"
 _PAGE_LOGS       = "logs"
 _PAGE_CONFIG     = "config"
 
@@ -75,6 +77,7 @@ _NAV_COMMANDS: dict[str, str] = {
     "nav_importar":   _PAGE_IMPORTAR,
     "nav_exportar":   _PAGE_EXPORTAR,
     "nav_leitor_dje": _PAGE_LEITOR_DJE,
+    "nav_datajud":    _PAGE_DATAJUD,
     "nav_logs":       _PAGE_LOGS,
     "nav_config":     _PAGE_CONFIG,
 }
@@ -230,6 +233,7 @@ class MainWindow(QMainWindow):
             {"id": "nav_importar",   "label": "Importar Planilha",       "section": "Ações"},
             {"id": "nav_exportar",   "label": "Exportar dados",          "section": "Ações"},
             {"id": "nav_leitor_dje", "label": "Leitor DJE",              "section": "Ações"},
+            {"id": "nav_datajud",    "label": "DataJUD CNJ",             "section": "Ações"},
             {"id": "nav_logs",       "label": "Ver Logs de Edição",      "section": "Ações"},
             {"id": "nav_config",     "label": "Configurações",           "section": "Ações"},
             {"id": "sync_all",       "label": "Sincronizar tudo",        "section": "Ações"},
@@ -324,6 +328,16 @@ class MainWindow(QMainWindow):
         )
         leitor_dje.toast_requested.connect(self._push_toast)
         self._add_page(_PAGE_LEITOR_DJE, leitor_dje)
+
+        # DataJUD CNJ — gera planilha xlsx de revisão humana via API
+        # pública DataJud do CNJ. Compatível com aba Importar.
+        datajud = DataJUDPage(
+            conn=self._conn,
+            token=self._token,
+            schema_registry=self._schema_registry,
+        )
+        datajud.toast_requested.connect(self._push_toast)
+        self._add_page(_PAGE_DATAJUD, datajud)
 
         if LogsPage is not None:
             # BUG-OP-09: LogsPage reads edit_log from audit.db.

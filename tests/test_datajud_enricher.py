@@ -1,0 +1,771 @@
+"""Testes do ``notion_rpadv.services.datajud_enricher``: roteamento de
+endpoints, regras de origem por propriedade, heurísticas de status/fase/
+trânsito, comportamento tolerante (Dados parciais, Não encontrado, Erro).
+
+Sem chamada real à API: ``consultar_multi`` é mockado via
+``MagicMock(spec=DataJudClient)``. Fixtures JSON em
+``tests/fixtures/datajud/`` simulam respostas de cada endpoint.
+"""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+from unittest.mock import MagicMock
+
+import pytest
+
+from notion_rpadv.services.datajud_client import DataJudAPIError, DataJudClient
+from notion_rpadv.services.datajud_enricher import (
+    DIAG_NAO_ENCONTRADO,
+    DIAG_OK,
+    DIAG_PARCIAL,
+    DIAG_STF,
+    DIAG_TRIBUNAL_NS,
+    FASE_COGNITIVA,
+    FASE_EXECUTIVA,
+    INSTANCIA_1G,
+    INSTANCIA_2G,
+    INSTANCIA_TST,
+    REGRAS_ORIGEM,
+    STATUS_ARQUIVADO,
+    STATUS_ARQUIVADO_PROVISORIAMENTE,
+    STATUS_ATIVO,
+    derivar_data_transito_cognitiva,
+    derivar_relator,
+    derivar_status,
+    derivar_turma_g2,
+    derivar_vara,
+    endpoints_candidatos,
+    enriquecer,
+    sources_por_grau,
+)
+
+
+# ---------------------------------------------------------------------------
+# Fixtures helpers
+# ---------------------------------------------------------------------------
+
+
+_FIXTURES_DIR: Path = (
+    Path(__file__).resolve().parent / "fixtures" / "datajud"
+)
+
+
+def _load_fixture(name: str) -> dict[str, list[dict[str, Any]]]:
+    """Carrega fixture JSON (formato dict[endpoint, list[_source]])."""
+    raw = json.loads((_FIXTURES_DIR / name).read_text(encoding="utf-8"))
+    # Remove eventual chave "_comment" sem afetar tipagem
+    return {k: v for k, v in raw.items() if k != "_comment"}
+
+
+def _mock_client(
+    consulta_result: dict[str, list[dict[str, Any]]] | None = None,
+    raises: Exception | None = None,
+) -> MagicMock:
+    """Cria mock de ``DataJudClient`` com ``consultar_multi`` pré-config.
+
+    Quando ``raises`` for setado, qualquer chamada de ``consultar_multi``
+    levanta a exceção (testa caminho ``Erro: <detalhe>`` do enricher).
+    Caso contrário, devolve apenas as keys da fixture que foram pedidas
+    (espelha o comportamento real).
+    """
+    client = MagicMock(spec=DataJudClient)
+    if raises is not None:
+        client.consultar_multi.side_effect = raises
+    else:
+        result_full = consulta_result or {}
+
+        def _fake(cnj: str, eps: list[str], **_: Any) -> dict[str, list[dict[str, Any]]]:
+            return {ep: result_full.get(ep, []) for ep in eps}
+
+        client.consultar_multi.side_effect = _fake
+    return client
+
+
+def _processo(
+    *, tribunal: str, instancia: str, cnj: str = "0001234-56.2024.5.10.0013",
+    **extra: Any,
+) -> dict[str, Any]:
+    """Constrói dict de processo do cache no formato consumido por ``enriquecer``."""
+    base: dict[str, Any] = {
+        "Número do processo": cnj,
+        "Tribunal":           tribunal,
+        "Instância":          instancia,
+    }
+    base.update(extra)
+    return base
+
+
+# ---------------------------------------------------------------------------
+# 1) endpoints_candidatos — para cada instância
+# ---------------------------------------------------------------------------
+
+
+def test_endpoints_candidatos_para_cada_instancia() -> None:
+    """Mapeamento canônico de instância para endpoints candidatos."""
+    # 1º grau no TJDFT → [tjdft]
+    assert endpoints_candidatos(_processo(tribunal="TJDFT", instancia="1º grau")) == ["tjdft"]
+    # 2º grau no TRT/10 → [trt10]
+    assert endpoints_candidatos(_processo(tribunal="TRT/10", instancia="2º grau")) == ["trt10"]
+    # TST a partir do TRT/10 → [trt10, tst]
+    assert endpoints_candidatos(_processo(tribunal="TRT/10", instancia="TST")) == ["trt10", "tst"]
+    # TST a partir do TST (dedup) → [tst]
+    assert endpoints_candidatos(_processo(tribunal="TST", instancia="TST")) == ["tst"]
+    # STJ a partir do TJDFT → [tjdft, stj]
+    assert endpoints_candidatos(_processo(tribunal="TJDFT", instancia="STJ")) == ["tjdft", "stj"]
+    # STJ a partir do STJ (dedup) → [stj]
+    assert endpoints_candidatos(_processo(tribunal="STJ", instancia="STJ")) == ["stj"]
+
+
+# ---------------------------------------------------------------------------
+# 2) endpoints_candidatos — Outro retorna vazio
+# ---------------------------------------------------------------------------
+
+
+def test_endpoints_candidatos_outro_retorna_vazio() -> None:
+    """Tribunal == 'Outro' (ou string vazia, ou não mapeado) → []."""
+    assert endpoints_candidatos(_processo(tribunal="Outro", instancia="1º grau")) == []
+    assert endpoints_candidatos(_processo(tribunal="", instancia="1º grau")) == []
+    assert endpoints_candidatos(_processo(tribunal="TRIBUNAL_INEXISTENTE", instancia="1º grau")) == []
+
+
+# ---------------------------------------------------------------------------
+# 3) endpoints_candidatos — STF retorna vazio
+# ---------------------------------------------------------------------------
+
+
+def test_endpoints_candidatos_stf_retorna_vazio() -> None:
+    """STF não tem endpoint público — sempre []."""
+    assert endpoints_candidatos(_processo(tribunal="TJDFT", instancia="STF")) == []
+    assert endpoints_candidatos(_processo(tribunal="STF",   instancia="STF")) == []
+
+
+# ---------------------------------------------------------------------------
+# 4) Tribunal vem do menor grau (com mapeamento DataJud → Notion)
+# ---------------------------------------------------------------------------
+
+
+def test_tribunal_vem_do_menor_grau() -> None:
+    """Em processo com G1 e G2, Tribunal sugerido vem do G1.
+
+    Memória do projeto: 'Tribunal sempre registra o juízo de origem
+    de primeiro grau e nunca muda'. O mapeamento DataJud→Notion
+    converte 'TRT10' (sem barra) para 'TRT/10' (com barra).
+    """
+    result = _load_fixture("trt10_g2_subiu_tst.json")
+    client = _mock_client(consulta_result=result)
+    res = enriquecer(
+        _processo(tribunal="TRT/10", instancia="TST"),
+        client=client,
+    )
+    # G1 do trt10 tem tribunal="TRT10" → mapeado pra "TRT/10"
+    assert res.propriedades_sugeridas["Tribunal"] == "TRT/10"
+
+
+# ---------------------------------------------------------------------------
+# 5) Status vem do maior grau
+# ---------------------------------------------------------------------------
+
+
+def test_status_vem_do_maior_grau() -> None:
+    """Status aplicado sobre movimentos do MAIOR grau encontrado.
+
+    No TRT10 com G1+G2 e GS no TST, os movimentos do GS (TST) são os
+    consumidos por derivar_status. Como o fixture não tem mov. de
+    arquivamento/sobrestamento no GS, status = Ativo (mesmo que G1
+    tenha trânsito em julgado registrado).
+    """
+    result = _load_fixture("trt10_g2_subiu_tst.json")
+    client = _mock_client(consulta_result=result)
+    res = enriquecer(
+        _processo(tribunal="TRT/10", instancia="TST"),
+        client=client,
+    )
+    # GS no TST é o maior grau; sem arquivamento/sobrestamento → Ativo
+    assert res.propriedades_sugeridas["Status"] == STATUS_ATIVO
+
+
+def test_status_arquivado_quando_maior_grau_tem_baixa_definitiva() -> None:
+    """G1 do TJDFT com mov. 246 (Arquivamento Definitivo) e 22
+    (Baixa Definitiva) → status 'Arquivado'."""
+    result = _load_fixture("tjdft_g1_arquivado.json")
+    client = _mock_client(consulta_result=result)
+    res = enriquecer(
+        _processo(tribunal="TJDFT", instancia="1º grau"),
+        client=client,
+    )
+    assert res.propriedades_sugeridas["Status"] == STATUS_ARQUIVADO
+
+
+# ---------------------------------------------------------------------------
+# 6) Trânsito cognitiva: menor grau com fallback ao maior
+# ---------------------------------------------------------------------------
+
+
+def test_transito_cognitiva_menor_grau_com_fallback() -> None:
+    """Mov. 848 (Trânsito em julgado, código TPU oficial) presente no G1
+    → derivado direto. Quando ausente no G1, fallback G2 → GS."""
+    # Caso 1: trânsito no menor grau (via fixture com cód 848 atualizado)
+    result = _load_fixture("trt10_g2_subiu_tst.json")
+    client = _mock_client(consulta_result=result)
+    res = enriquecer(
+        _processo(tribunal="TRT/10", instancia="TST"),
+        client=client,
+    )
+    # Fixture trt10_g2_subiu_tst.json tem mov. 848 no G1 (2024-08-15)
+    assert res.propriedades_sugeridas["Data do trânsito em julgado (cognitiva)"] == "2024-08-15"
+
+    # Caso 2: helper unitário com fallback (G2 quando G1 não tem)
+    src_menor: dict[str, Any] = {
+        "movimentos": [{"codigo": 26, "dataHora": "2023-01-01T08:00:00.000Z"}],
+    }
+    src_maior: dict[str, Any] = {
+        "movimentos": [{"codigo": 848, "dataHora": "2024-09-30T18:00:00.000Z"}],
+    }
+    assert derivar_data_transito_cognitiva(
+        {"G1": src_menor, "G2": src_maior},
+    ) == "2024-09-30"
+
+    # Caso 3: ausente em todos → None
+    assert derivar_data_transito_cognitiva(
+        {"G1": {"movimentos": [{"codigo": 26}]},
+         "G2": {"movimentos": [{"codigo": 219}]}},
+    ) is None
+
+
+# ---------------------------------------------------------------------------
+# 7) Relator marcado como baixa confiança na tabela de regras
+# ---------------------------------------------------------------------------
+
+
+def test_relator_marcado_baixa_confianca() -> None:
+    """REGRAS_ORIGEM lista os 2 relatores com confianca == 'baixa';
+    todas as outras 12 propriedades têm confianca == 'alta'."""
+    baixa = {r.nome_notion for r in REGRAS_ORIGEM if r.confianca == "baixa"}
+    assert baixa == {"Relator no 2º grau", "Relator no STJ/TST"}
+
+    alta = {r.nome_notion for r in REGRAS_ORIGEM if r.confianca == "alta"}
+    assert len(alta) == 12
+    assert "Status" in alta
+    assert "Tribunal" in alta
+
+
+# ---------------------------------------------------------------------------
+# 8) Dados parciais: 1 endpoint com hit, outro vazio
+# ---------------------------------------------------------------------------
+
+
+def test_dados_parciais_quando_um_endpoint_vazio() -> None:
+    """Processo no TRT/10 instância TST: consulta trt10 + tst.
+    trt10 retorna G1+G2; tst retorna []. Diagnóstico = Dados parciais.
+    Ainda assim o enricher devolve as propriedades do que conseguiu."""
+    result = _load_fixture("trt10_g2_subiu_tst.json")
+    # Zera o tst → endpoint consultado mas sem hit
+    result["tst"] = []
+    client = _mock_client(consulta_result=result)
+    res = enriquecer(
+        _processo(tribunal="TRT/10", instancia="TST"),
+        client=client,
+    )
+    assert res.diagnostico == DIAG_PARCIAL
+    # trt10 deu hit: fontes inclui apenas trt10
+    assert res.fontes_tribunal == ["trt10"]
+    # Mas propriedades derivadas do menor/maior grau encontrado (G1, G2)
+    assert res.propriedades_sugeridas["Tribunal"] == "TRT/10"
+    assert res.propriedades_sugeridas["Instância"] == INSTANCIA_2G  # G2 é o maior disponível
+    # Sem GS de stj/tst → Número STJ/TST e Turma STJ/TST ficam None
+    assert res.propriedades_sugeridas["Número STJ/TST"] is None
+    assert res.propriedades_sugeridas["Turma no STJ/TST"] is None
+
+
+# ---------------------------------------------------------------------------
+# 9) Não encontrado quando todos endpoints retornam vazio
+# ---------------------------------------------------------------------------
+
+
+def test_nao_encontrado_quando_todos_endpoints_vazios() -> None:
+    """Todos os endpoints retornam lista vazia → Não encontrado.
+    Propriedades vazias (todas as 14 keys com None)."""
+    result = _load_fixture("nao_encontrado.json")  # {"trt10": []}
+    client = _mock_client(consulta_result=result)
+    res = enriquecer(
+        _processo(tribunal="TRT/10", instancia="1º grau"),
+        client=client,
+    )
+    assert res.diagnostico == DIAG_NAO_ENCONTRADO
+    assert res.fontes_tribunal == []
+    assert all(v is None for v in res.propriedades_sugeridas.values())
+    # Mas todas as 14 keys estão presentes (caller pode iterar com confiança)
+    assert len(res.propriedades_sugeridas) == 14
+
+
+# ---------------------------------------------------------------------------
+# 10) Processo que subiu ao TST consulta 2 endpoints
+# ---------------------------------------------------------------------------
+
+
+def test_processo_que_subiu_ao_tst_consulta_dois_endpoints() -> None:
+    """Tribunal=TRT/10 + Instância=TST → consultar_multi recebe ['trt10', 'tst'].
+    Diagnóstico OK quando ambos têm hit. Instância no resultado = TST
+    (vem do GS no endpoint tst)."""
+    result = _load_fixture("trt10_g2_subiu_tst.json")
+    client = _mock_client(consulta_result=result)
+    res = enriquecer(
+        _processo(tribunal="TRT/10", instancia="TST"),
+        client=client,
+    )
+    # Verifica que os 2 endpoints foram consultados
+    client.consultar_multi.assert_called_once()
+    args = client.consultar_multi.call_args
+    eps_chamados = args.args[1]
+    assert eps_chamados == ["trt10", "tst"]
+
+    # E o diagnóstico é OK porque ambos tiveram hit
+    assert res.diagnostico == DIAG_OK
+    assert set(res.fontes_tribunal) == {"trt10", "tst"}
+    # Instância derivada do GS no endpoint tst → "TST"
+    assert res.propriedades_sugeridas["Instância"] == INSTANCIA_TST
+
+
+# ---------------------------------------------------------------------------
+# 11) Status "Arquivado provisoriamente (tema 955)" — sentinela
+# ---------------------------------------------------------------------------
+
+
+def test_status_arquivado_provisoriamente_tema_955_ainda_funciona() -> None:
+    """Heurística sentinela: sobrestamento (mov. 12092) sem
+    levantamento (mov. 11458) posterior → Status =
+    'Arquivado provisoriamente (tema 955)'.
+
+    Esta heurística continua válida no campo Status mesmo sem o
+    checkbox 'Tema 955 — Sobrestado' no escopo da Fase 1.
+    """
+    result = _load_fixture("tjdft_g1_tema_955.json")
+    client = _mock_client(consulta_result=result)
+    res = enriquecer(
+        _processo(tribunal="TJDFT", instancia="1º grau"),
+        client=client,
+    )
+    assert res.propriedades_sugeridas["Status"] == STATUS_ARQUIVADO_PROVISORIAMENTE
+
+
+# ---------------------------------------------------------------------------
+# Testes auxiliares — caminhos de erro e helpers individuais
+# ---------------------------------------------------------------------------
+
+
+def test_diagnostico_stf_quando_instancia_stf() -> None:
+    """STF como instância → 'STF não coberto', sem chamada HTTP."""
+    client = _mock_client()
+    res = enriquecer(
+        _processo(tribunal="TJDFT", instancia="STF"),
+        client=client,
+    )
+    assert res.diagnostico == DIAG_STF
+    client.consultar_multi.assert_not_called()
+
+
+def test_diagnostico_tribunal_nao_suportado_quando_outro() -> None:
+    """Tribunal=Outro → 'Tribunal não suportado', sem chamada HTTP."""
+    client = _mock_client()
+    res = enriquecer(
+        _processo(tribunal="Outro", instancia="1º grau"),
+        client=client,
+    )
+    assert res.diagnostico == DIAG_TRIBUNAL_NS
+    client.consultar_multi.assert_not_called()
+
+
+def test_diagnostico_erro_quando_client_levanta_excecao() -> None:
+    """DataJudAPIError → diagnóstico 'Erro: <detalhe>' truncado a 120 chars."""
+    client = _mock_client(raises=DataJudAPIError(503, "serviço indisponível"))
+    res = enriquecer(
+        _processo(tribunal="TJDFT", instancia="1º grau"),
+        client=client,
+    )
+    assert res.diagnostico.startswith("Erro:")
+    assert "503" in res.diagnostico
+    assert all(v is None for v in res.propriedades_sugeridas.values())
+
+
+def test_diagnostico_ok_no_caso_simples() -> None:
+    """1 endpoint, 1 grau, hit → OK.
+
+    Fixture trt10_g1_simples.json: mov. 219 (Sentença) **sem** mov. 848
+    (Trânsito) ⇒ Fase Cognitiva (Liquidação pendente exige sentença +
+    trânsito ambos).
+    """
+    result = _load_fixture("trt10_g1_simples.json")
+    client = _mock_client(consulta_result=result)
+    res = enriquecer(
+        _processo(tribunal="TRT/10", instancia="1º grau"),
+        client=client,
+    )
+    assert res.diagnostico == DIAG_OK
+    assert res.propriedades_sugeridas["Tribunal"] == "TRT/10"
+    assert res.propriedades_sugeridas["Vara"] == "13"
+    assert res.propriedades_sugeridas["Cidade"] == "Brasília"
+    assert res.propriedades_sugeridas["Data de distribuição"] == "2024-01-01"
+    assert res.propriedades_sugeridas["Fase"] == FASE_COGNITIVA
+
+
+def test_fase_cognitiva_quando_nem_sentenca_nem_cumprimento() -> None:
+    """Source só com Distribuição/Conclusão (sem 219, sem classe de
+    execução, sem liquidação) → Fase Cognitiva (default)."""
+    from notion_rpadv.services.datajud_enricher import derivar_fase
+    src: dict[str, Any] = {
+        "classe": {"codigo": 985, "nome": "Ação Trabalhista - Rito Ordinário"},
+        "movimentos": [{"codigo": 26}, {"codigo": 51}],
+    }
+    assert derivar_fase(src) == FASE_COGNITIVA
+
+
+def test_fase_liquidacao_pendente_apos_sentenca_e_transito() -> None:
+    """Sentença (219) + Trânsito em julgado (848) sem cumprimento e
+    sem cód de liquidação → Liquidação pendente."""
+    from notion_rpadv.services.datajud_enricher import (
+        FASE_LIQUIDACAO_PENDENTE,
+        derivar_fase,
+    )
+    src: dict[str, Any] = {
+        "classe": {"codigo": 985, "nome": "Ação Trabalhista - Rito Ordinário"},
+        "movimentos": [
+            {"codigo": 26},
+            {"codigo": 219},  # Sentença
+            {"codigo": 848},  # Trânsito em julgado (cód TPU oficial)
+        ],
+    }
+    assert derivar_fase(src) == FASE_LIQUIDACAO_PENDENTE
+
+
+def test_fase_liquidacao_de_sentenca_quando_cod_liquidacao_presente() -> None:
+    """Mov. 11528 (Liquidação Provisória por Cálculos JT) → Liquidação de sentença."""
+    from notion_rpadv.services.datajud_enricher import (
+        FASE_LIQUIDACAO,
+        derivar_fase,
+    )
+    src: dict[str, Any] = {
+        "classe": {"codigo": 985, "nome": "Ação Trabalhista - Rito Ordinário"},
+        "movimentos": [
+            {"codigo": 26},
+            {"codigo": 219},
+            {"codigo": 11528},  # liquidação ampliada
+        ],
+    }
+    assert derivar_fase(src) == FASE_LIQUIDACAO
+
+
+def test_fase_executiva_via_classe_de_cumprimento() -> None:
+    """Classe 159 (Cumprimento de Sentença) → Fase Executiva,
+    independente dos movimentos. Substitui a heurística antiga
+    baseada em código 848 (que era cód de trânsito, não cumprimento)."""
+    from notion_rpadv.services.datajud_enricher import derivar_fase
+    src: dict[str, Any] = {
+        "classe": {"codigo": 159, "nome": "Cumprimento de Sentença"},
+        "movimentos": [{"codigo": 26}],  # só distribuição do cumprimento
+    }
+    assert derivar_fase(src) == FASE_EXECUTIVA
+
+
+def test_log_warning_quando_tribunal_nao_mapeado(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Source com tribunal fora do DATAJUD_TRIBUNAL_TO_NOTION dispara
+    WARNING e usa fallback cru."""
+    import logging
+    caplog.set_level(logging.WARNING, logger="datajud.enricher")
+    fake_source = {
+        "numeroProcesso": "00012345620245100013",
+        "tribunal":       "TRJ_INVENTADO",
+        "grau":           "G1",
+        "orgaoJulgador":  {"codigoMunicipioIBGE": 5300108, "nome": "Vara X"},
+        "dataAjuizamento": "20240101",
+        "movimentos":     [],
+    }
+    client = _mock_client(consulta_result={"trt10": [fake_source]})
+    res = enriquecer(
+        _processo(tribunal="TRT/10", instancia="1º grau"),
+        client=client,
+    )
+    # Fallback cru no Tribunal sugerido
+    assert res.propriedades_sugeridas["Tribunal"] == "TRJ_INVENTADO"
+    # WARNING específico
+    assert any(
+        "tribunal não mapeado" in rec.message and "TRJ_INVENTADO" in rec.message
+        for rec in caplog.records
+        if rec.name == "datajud.enricher"
+    )
+
+
+def test_assertion_em_derivar_fase_garante_vocabulario_notion() -> None:
+    """Verifica que FASE_VOCABULARIO_NOTION cobre o que derivar_fase pode emitir."""
+    from notion_rpadv.services.datajud_enricher import (
+        FASE_VOCABULARIO_NOTION,
+        derivar_fase,
+    )
+    # Cada categoria emite valor canônico
+    classe_comum: dict[str, Any] = {"codigo": 985, "nome": "AT"}
+    classe_cumpri: dict[str, Any] = {"codigo": 159, "nome": "Cump."}
+    cenarios: list[tuple[dict[str, Any], str]] = [
+        (
+            {"classe": classe_comum, "movimentos": []},
+            FASE_COGNITIVA,
+        ),
+        (
+            {"classe": classe_cumpri, "movimentos": [{"codigo": 26}]},
+            "Executiva",
+        ),
+        (
+            {"classe": classe_comum, "movimentos": [{"codigo": 471}]},
+            "Liquidação de sentença",
+        ),
+        (
+            {"classe": classe_comum, "movimentos": [{"codigo": 219}, {"codigo": 848}]},
+            "Liquidação pendente",
+        ),
+    ]
+    for src, esperado in cenarios:
+        out = derivar_fase(src)
+        assert out == esperado
+        assert out in FASE_VOCABULARIO_NOTION
+
+
+# ---------------------------------------------------------------------------
+# Helpers individuais
+# ---------------------------------------------------------------------------
+
+
+def test_derivar_vara_aceita_variacoes_de_formato() -> None:
+    """Padrões reconhecidos: TRT (' 13A VT'), TJDFT ('13ª Vara'), e similares."""
+    assert derivar_vara({"nome": " 13A VT DE BRASILIA"}) == "13"
+    assert derivar_vara({"nome": "13ª Vara Cível de Brasília"}) == "13"
+    assert derivar_vara({"nome": "13a Vara"}) == "13"
+    assert derivar_vara({"nome": "VARA ÚNICA"}) is None  # sem número
+    assert derivar_vara({"nome": ""}) is None
+    assert derivar_vara(None) is None
+
+
+def test_derivar_turma_g2_aceita_turma_e_camara() -> None:
+    """5ª Turma / 1ª Câmara → número. Gabinete (sem ordinal) → None."""
+    assert derivar_turma_g2({"nome": "5ª Turma Cível"}) == "5"
+    assert derivar_turma_g2({"nome": "1ª Turma"}) == "1"
+    assert derivar_turma_g2({"nome": "3ª CAMARA"}) == "3"
+    assert derivar_turma_g2({"nome": "GABINETE DO DESEMBARGADOR DORIVAL BORGES"}) is None
+    assert derivar_turma_g2(None) is None
+
+
+def test_derivar_status_sem_movimentos_retorna_ativo() -> None:
+    """Source sem movimentos / source None → Ativo (default)."""
+    assert derivar_status(None) == STATUS_ATIVO
+    assert derivar_status({"movimentos": []}) == STATUS_ATIVO
+
+
+def test_derivar_status_levantamento_apos_sobrestamento_retorna_ativo() -> None:
+    """Sobrestamento (cód 11025 da TPU oficial, com complemento Tema 955)
+    seguido de levantamento (12067) posterior → Ativo. Heurística usa
+    ordem cronológica (dataHora), não ordem de inserção."""
+    src: dict[str, Any] = {
+        "movimentos": [
+            {"codigo": 26,    "dataHora": "2023-01-01T00:00:00.000Z"},
+            {
+                "codigo": 11025,
+                "dataHora": "2023-04-01T00:00:00.000Z",
+                "complementosTabelados": [
+                    {"nome": "Tema 955 STJ", "descricao": "motivo_sobrestamento"},
+                ],
+            },
+            {"codigo": 12067, "dataHora": "2024-09-01T00:00:00.000Z"},
+            {"codigo": 51,    "dataHora": "2024-10-01T00:00:00.000Z"},
+        ],
+    }
+    assert derivar_status(src) == STATUS_ATIVO
+
+
+def test_derivar_relator_extrai_de_complementos_tabelados() -> None:
+    """complementosTabelados[].descricao contendo 'relator' → nome."""
+    movs: list[dict[str, Any]] = [
+        {
+            "codigo": 123,
+            "complementosTabelados": [
+                {
+                    "codigo": 5,
+                    "valor": 99,
+                    "nome": "Maria Aparecida Vieira",
+                    "descricao": "tipo_de_relator",
+                },
+            ],
+        },
+    ]
+    assert derivar_relator(movs) == "Maria Aparecida Vieira"
+    # Sem complementos com "relator" → None
+    assert derivar_relator([{"codigo": 26}]) is None
+
+
+def test_cidade_ibge_desconhecido_loga_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """IBGE não cadastrado dispara WARNING no namespace datajud.enricher
+    com formato 'cidade IBGE desconhecida: %d (CNJ %s)'."""
+    import logging
+    caplog.set_level(logging.WARNING, logger="datajud.enricher")
+
+    from notion_rpadv.services.datajud_enricher import derivar_cidade
+    cidade = derivar_cidade(9999999, cnj="0000000-00.0000.0.00.0000")
+
+    assert cidade is None
+    assert any(
+        "cidade IBGE desconhecida: 9999999" in rec.message
+        for rec in caplog.records
+        if rec.name == "datajud.enricher"
+    )
+
+
+def test_propriedades_sugeridas_sempre_tem_14_keys() -> None:
+    """Mesmo em diagnóstico de erro, as 14 keys das REGRAS_ORIGEM
+    estão presentes em propriedades_sugeridas (com None)."""
+    client = _mock_client(raises=DataJudAPIError(500, "boom"))
+    res = enriquecer(
+        _processo(tribunal="TJDFT", instancia="1º grau"),
+        client=client,
+    )
+    nomes_esperados = {r.nome_notion for r in REGRAS_ORIGEM}
+    assert set(res.propriedades_sugeridas.keys()) == nomes_esperados
+
+
+def test_sources_por_grau_normaliza_sup_para_gs() -> None:
+    """SUP (TST) é normalizado pra GS, mantendo o source original.
+    Cobre o caso descoberto no smoke real do CNJ 0000789-22.2019.5.10.0004."""
+    sources = [
+        {"grau": "G1", "tribunal": "TRT10", "id": "src_g1"},
+        {"grau": "G2", "tribunal": "TRT10", "id": "src_g2"},
+        {"grau": "SUP", "tribunal": "TST", "id": "src_sup"},
+    ]
+    out = sources_por_grau(sources)
+    assert set(out.keys()) == {"G1", "G2", "GS"}
+    assert out["GS"]["id"] == "src_sup"
+    assert out["GS"]["tribunal"] == "TST"
+
+
+def test_processo_subiu_ao_tst_resolve_grau_alvo_gs_via_sup() -> None:
+    """Cadastro Notion = TST + API retorna SUP → enricher resolve
+    GS (SUP normalizado) e Instância sugerida = TST."""
+    fake_g1 = {
+        "numeroProcesso": "00007892220195100004",
+        "tribunal": "TRT10", "grau": "G1",
+        "orgaoJulgador": {"codigoMunicipioIBGE": 5300108, "nome": "4A VT DE BRASILIA"},
+        "movimentos": [],
+    }
+    fake_sup = {
+        "numeroProcesso": "00007892220195100004",
+        "tribunal": "TST", "grau": "SUP",
+        "orgaoJulgador": {"codigoMunicipioIBGE": 5300108, "nome": "Gabinete da Presidencia"},
+        "movimentos": [],
+    }
+    client = _mock_client(consulta_result={"trt10": [fake_g1], "tst": [fake_sup]})
+    res = enriquecer(
+        _processo(tribunal="TRT/10", instancia="TST"),
+        client=client,
+    )
+    assert res.diagnostico == DIAG_OK
+    assert "tst" in res.fontes_tribunal
+    assert res.propriedades_sugeridas["Instância"] == INSTANCIA_TST
+
+
+def test_grau_alvo_segue_cadastro_notion_nao_maior_grau_api() -> None:
+    """Cadastro = '1º grau' + API retorna G1+G2 → Status/Fase derivam de G1.
+
+    Decisão arquitetural: cadastro Notion é fonte da verdade pra
+    Instância atual; histórico em G2 não muda Status/Fase sugerido.
+    """
+    fake_g1 = {
+        "numeroProcesso": "07012345620228070001",
+        "tribunal": "TJDFT", "grau": "G1",
+        "classe": {"codigo": 7, "nome": "Procedimento Comum Cível"},
+        "orgaoJulgador": {"codigoMunicipioIBGE": 5300108, "nome": "9ª Vara Cível de Brasília"},
+        "movimentos": [{"codigo": 26}],  # nada relevante
+    }
+    fake_g2 = {
+        "numeroProcesso": "07012345620228070001",
+        "tribunal": "TJDFT", "grau": "G2",
+        "classe": {"codigo": 198, "nome": "Apelação Cível"},
+        "orgaoJulgador": {"codigoMunicipioIBGE": 5300108, "nome": "1ª Turma Cível"},
+        "movimentos": [
+            {"codigo": 22},   # Baixa Definitiva no G2 (acórdão julgado)
+        ],
+    }
+    client = _mock_client(consulta_result={"tjdft": [fake_g1, fake_g2]})
+    res = enriquecer(
+        _processo(tribunal="TJDFT", instancia="1º grau"),
+        client=client,
+    )
+    # Cadastro diz 1º grau → Status do G1 (não tem mov 22 → Ativo).
+    # Se a heurística usasse o maior grau API (G2 com mov 22), daria Arquivado.
+    assert res.propriedades_sugeridas["Instância"] == INSTANCIA_1G
+    assert res.propriedades_sugeridas["Status"] == STATUS_ATIVO
+
+
+def test_formatar_cnj_com_mascara() -> None:
+    """Helper de máscara CNJ — aplica NNNNNNN-NN.AAAA.J.TR.OOOO."""
+    from notion_rpadv.services.datajud_enricher import formatar_cnj_com_mascara
+    assert formatar_cnj_com_mascara("00004497120255100003") == "0000449-71.2025.5.10.0003"
+    # Já com máscara: re-normaliza
+    assert formatar_cnj_com_mascara("0000449-71.2025.5.10.0003") == "0000449-71.2025.5.10.0003"
+    # Vazio/None
+    assert formatar_cnj_com_mascara(None) is None
+    assert formatar_cnj_com_mascara("") is None
+    assert formatar_cnj_com_mascara("   ") is None
+    # Atípico (não 20 dígitos): devolve cru
+    assert formatar_cnj_com_mascara("12345") == "12345"
+
+
+def test_numero_do_processo_volta_com_mascara_apos_enriquecer() -> None:
+    """Após o smoke real exposer divergência cosmética (DataJud=sem máscara,
+    Notion=com máscara) em todos os 3 CNJs, o enricher passa a aplicar a
+    máscara antes de devolver `propriedades_sugeridas["Número do processo"]`.
+    """
+    fake_g1 = {
+        "numeroProcesso": "00004497120255100003",  # 20 dígitos, sem máscara
+        "tribunal": "TRT10", "grau": "G1",
+        "orgaoJulgador": {"codigoMunicipioIBGE": 5300108, "nome": "3A VT DE BRASILIA"},
+        "movimentos": [],
+    }
+    client = _mock_client(consulta_result={"trt10": [fake_g1]})
+    res = enriquecer(
+        _processo(tribunal="TRT/10", instancia="1º grau"),
+        client=client,
+    )
+    assert res.propriedades_sugeridas["Número do processo"] == "0000449-71.2025.5.10.0003"
+
+
+def test_numero_stj_tst_tambem_volta_com_mascara() -> None:
+    """Mesmo tratamento para Número STJ/TST (vem do source GS-stj/tst)."""
+    fake_g1 = {
+        "numeroProcesso": "00007892220195100004",
+        "tribunal": "TRT10", "grau": "G1",
+        "orgaoJulgador": {"codigoMunicipioIBGE": 5300108, "nome": "4A VT"},
+        "movimentos": [],
+    }
+    fake_sup = {
+        "numeroProcesso": "00007892220195100004",
+        "tribunal": "TST", "grau": "SUP",
+        "orgaoJulgador": {"codigoMunicipioIBGE": 5300108, "nome": "5ª Turma"},
+        "movimentos": [],
+    }
+    client = _mock_client(consulta_result={"trt10": [fake_g1], "tst": [fake_sup]})
+    res = enriquecer(
+        _processo(tribunal="TRT/10", instancia="TST"),
+        client=client,
+    )
+    assert res.propriedades_sugeridas["Número STJ/TST"] == "0000789-22.2019.5.10.0004"
+    assert res.propriedades_sugeridas["Número do processo"] == "0000789-22.2019.5.10.0004"
+
+
+def test_vara_aceita_encoding_corrompido_com_interrogacao() -> None:
+    """Pattern de Vara aceita '?' como sinônimo de 'ª' (encoding latin1
+    corrompido na API). Visto no smoke real do CNJ 0016539-47.2015.8.07.0001
+    com órgão '22? VARA C?VEL DE BRAS?LIA'."""
+    assert derivar_vara({"nome": "22? VARA C?VEL DE BRAS?LIA"}) == "22"
+    assert derivar_vara({"nome": "9? VARA C?VEL"}) == "9"
+    # Sanidade: outros formatos continuam casando
+    assert derivar_vara({"nome": "13ª Vara Cível"}) == "13"
