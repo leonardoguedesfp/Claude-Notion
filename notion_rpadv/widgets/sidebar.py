@@ -57,6 +57,7 @@ _DADOS_NAV: list[tuple[str, str, str | None]] = [
     ("importar",   "Importar planilha", None),
     ("exportar",   "Exportar dados",    None),
     ("leitor_dje", "Leitor DJE",        None),
+    ("datajud",    "DataJUD CNJ",       None),
     ("logs",       "Logs",              None),
 ]
 
@@ -74,6 +75,7 @@ _ICONS: dict[str, str] = {
     "importar":   "↑",
     "exportar":   "↓",
     "leitor_dje": "🔍",
+    "datajud":    "🔎",
     "logs":       "📝",
     "config":     "⚙",
 }
