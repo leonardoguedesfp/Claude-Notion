@@ -82,10 +82,14 @@ def _make_worker(
     schema: dict[str, _SpecMock] | None = None,
     max_workers: int = 4,
 ) -> DataJudWorker:
-    client = MagicMock(spec=DataJudClient)
+    """Factory devolve mock por chamada — comportamento espelha o
+    cenário real onde cada thread do pool tem seu próprio client."""
+    def _factory() -> DataJudClient:
+        return MagicMock(spec=DataJudClient)
+
     return DataJudWorker(
         processos=processos,
-        client=client,
+        client_factory=_factory,
         schema=schema or _schema_minimo(),
         output_path=output_path,
         max_workers=max_workers,
@@ -336,11 +340,45 @@ def test_worker_max_workers_4_default(tmp_path: Path) -> None:
     """Construtor sem ``max_workers`` usa 4."""
     worker = DataJudWorker(
         processos=[],
-        client=MagicMock(spec=DataJudClient),
+        client_factory=lambda: MagicMock(spec=DataJudClient),
         schema=_schema_minimo(),
         output_path=tmp_path / "out.xlsx",
     )
     assert worker._max_workers == 4
+
+
+def test_worker_chama_factory_uma_vez_por_thread(tmp_path: Path) -> None:
+    """Como o ThreadPoolExecutor reusa threads, factory é chamada no
+    máximo ``max_workers`` vezes — não ``len(processos)``. Confirma
+    que clients são reutilizados via threading.local."""
+    processos = [_proc_cache(f"p{i}", f"000000{i}-00.0000.0.00.0000")
+                 for i in range(1, 11)]  # 10 processos
+    factory_calls: list[None] = []
+
+    def _factory() -> DataJudClient:
+        factory_calls.append(None)
+        return MagicMock(spec=DataJudClient)
+
+    worker = DataJudWorker(
+        processos=processos,
+        client_factory=_factory,
+        schema=_schema_minimo(),
+        output_path=tmp_path / "out.xlsx",
+        max_workers=4,
+    )
+
+    fake_resultado = _resultado_factory(DIAG_OK, "px")
+    with patch(
+        "notion_rpadv.services.datajud_worker.enriquecer",
+        return_value=fake_resultado,
+    ):
+        worker.run()
+
+    # No máximo 4 (max_workers); pode ser menos se o pool reusou
+    # threads aggressivamente. Crucial: nunca == 10 (1 por processo).
+    assert len(factory_calls) <= 4
+    # E pelo menos 1 (fluxo OK)
+    assert len(factory_calls) >= 1
 
 
 # ---------------------------------------------------------------------------

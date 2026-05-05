@@ -7,10 +7,13 @@ para integração com ``QThread`` na UI.
 Diferenças vs ``SyncWorker``:
 
 - **Paralelismo**: usa ``ThreadPoolExecutor(max_workers=4)`` para
-  processar múltiplos CNJs concorrentemente. Cada worker chama
-  ``enricher.enriquecer(processo, client=client)``. O ``_throttle()``
-  do client é por instância — 4 workers × 2s sleep agregam ≈ 2 req/s
-  efetivos (DataJud não tem rate limit oficial publicado; aceitável).
+  processar múltiplos CNJs concorrentemente. **Cada thread do pool
+  recebe sua própria instância de ``DataJudClient``** (via
+  ``threading.local``), criada sob demanda no primeiro uso da thread.
+  Compartilhar 1 client entre threads serializaria a fila por causa
+  do throttle per-instance + lock implícito do ``requests.Session``.
+  N=4 clients ⇒ N=4 sessions HTTP (keep-alive preservado),
+  ≈ 2 req/s agregados efetivos.
 
 - **Cancelamento**: ``cancel()`` seta uma flag (``threading.Event``).
   Workers em execução terminam o ciclo HTTP atual (não interrompe
@@ -36,6 +39,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
@@ -127,12 +131,15 @@ class DataJudWorker(QObject):
         processos: lista de registros do cache (cada dict com chaves
             slug do schema + ``page_id``). Worker faz a conversão pra
             ``notion_name`` internamente.
-        client: instância de ``DataJudClient`` reutilizada pelos 4
-            threads (rate limit aplicado por instância).
+        client_factory: callable que cria uma nova instância de
+            ``DataJudClient``. Chamada **uma vez por thread do pool**
+            (via ``threading.local``), garantindo paralelismo real.
+            Cada thread mantém sua própria ``requests.Session`` com
+            keep-alive ativo.
         schema: schema da base Processos (``dict[chave_slug, PropSpec]``).
         output_path: caminho absoluto da planilha de saída.
         max_workers: tamanho do pool (default 4 — empírico, ~2 req/s
-            agregados com o throttle do client).
+            agregados com 4 clients independentes throttle-isolados).
     """
 
     total: Signal     = Signal(int)
@@ -144,18 +151,23 @@ class DataJudWorker(QObject):
     def __init__(
         self,
         processos: list[dict[str, Any]],
-        client: DataJudClient,
+        client_factory: Callable[[], DataJudClient],
         schema: dict[str, Any],
         output_path: Path,
         max_workers: int = 4,
     ) -> None:
         super().__init__()
         self._processos = processos
-        self._client = client
+        self._client_factory = client_factory
         self._schema = schema
         self._output_path = output_path
         self._max_workers = max_workers
         self._cancel_event = threading.Event()
+        # threading.local: cada thread do ThreadPoolExecutor tem seu
+        # próprio client. Como o pool reusa threads, criamos no máximo
+        # ``max_workers`` clients no total — cada um com session HTTP
+        # própria e throttle independente.
+        self._tls = threading.local()
 
     @Slot()
     def cancel(self) -> None:
@@ -244,11 +256,30 @@ class DataJudWorker(QObject):
         resultados_validos = [r for r in resultados if r is not None]
         self._gerar_xlsx_e_emitir_finished(resultados_validos)
 
+    def _get_thread_client(self) -> DataJudClient:
+        """Devolve o client da thread atual; cria sob demanda na primeira
+        chamada de cada thread (lazy + threading.local)."""
+        client = getattr(self._tls, "client", None)
+        if client is None:
+            client = self._client_factory()
+            self._tls.client = client
+            logger.debug(
+                "DataJUD worker: novo client criado para thread %s",
+                threading.current_thread().name,
+            )
+        return client
+
     def _processar_um(
         self, proc_enricher: dict[str, Any], idx: int,
     ) -> ResultadoEnriquecimento:
-        """Chamado por cada thread do pool — wrapper sobre ``enriquecer``."""
-        return enriquecer(proc_enricher, client=self._client)
+        """Chamado por cada thread do pool — wrapper sobre ``enriquecer``.
+
+        Usa ``_get_thread_client()`` (threading.local) garantindo que
+        cada thread reuse seu próprio cliente HTTP em chamadas
+        sucessivas, sem compartilhar throttle/session com outras.
+        """
+        client = self._get_thread_client()
+        return enriquecer(proc_enricher, client=client)
 
     def _gerar_xlsx_e_emitir_finished(
         self, resultados: list[ResultadoEnriquecimento],

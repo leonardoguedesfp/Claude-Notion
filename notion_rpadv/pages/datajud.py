@@ -611,10 +611,15 @@ class DataJUDPage(QWidget):
             )
             return
 
-        client = DataJudClient()
+        # Factory: cada thread do pool cria seu próprio client (1
+        # session HTTP por thread, throttle independente). Sem isso,
+        # 4 workers compartilhariam o mesmo client e serializariam.
+        def _client_factory() -> DataJudClient:
+            return DataJudClient()
+
         self._worker = DataJudWorker(
             processos=processos,
-            client=client,
+            client_factory=_client_factory,
             schema=schema,
             output_path=output_path,
         )
