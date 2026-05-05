@@ -416,6 +416,32 @@ def gerar_xlsx(
 
     Returns:
         None. Arquivo gravado em ``output_path``.
+
+    Note:
+        Uso real com schema da base ⚖️ Processos (37 propriedades):
+        14 enriquecidas + **23 auxiliares ▸ atual ocultas**. O writer
+        é genérico — itera todas as propriedades fora da lista de
+        ``REGRAS_ORIGEM`` e adiciona uma coluna oculta para cada,
+        independente do tipo (rich_text, multi_select, relation,
+        checkbox, last_edited_time, etc.). Não há corte deliberado
+        de propriedades; o que define a quantidade é o schema passado.
+
+        Categorização das 23 auxiliares no schema atual:
+            - 5 relations: Clientes, Tarefas, Desdobramentos,
+              Processo pai, Documentos.
+            - 4 selects: Natureza, Tipo de processo, Posição do cliente,
+              Tipo de ação (multi-select).
+            - 4 checkboxes: Tema 955 — Sobrestado, Sobrestado - IRR 20,
+              Sobrestado - TJ conexa, e (espaço pra novos).
+            - 3 datas/timestamps: Data trânsito (executiva),
+              Atualizado em (last_edited_time), Criado em (created_time).
+            - 4 textos: Detalhamento da ação, Observações,
+              Turma no STF, Relator no STF.
+            - 2 numerações: ID Legal One, Número STF.
+            - 1 url: Link externo.
+
+        Todas vão pra coluna ▸ atual ocultada. O operador pode desocultar
+        (não recomendado — a aba Importar não consome essas colunas).
     """
     ts = ts_consulta or datetime.now(timezone.utc)
     ts_iso = ts.replace(microsecond=0).isoformat()

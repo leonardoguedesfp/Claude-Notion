@@ -705,6 +705,62 @@ def test_grau_alvo_segue_cadastro_notion_nao_maior_grau_api() -> None:
     assert res.propriedades_sugeridas["Status"] == STATUS_ATIVO
 
 
+def test_formatar_cnj_com_mascara() -> None:
+    """Helper de máscara CNJ — aplica NNNNNNN-NN.AAAA.J.TR.OOOO."""
+    from notion_rpadv.services.datajud_enricher import formatar_cnj_com_mascara
+    assert formatar_cnj_com_mascara("00004497120255100003") == "0000449-71.2025.5.10.0003"
+    # Já com máscara: re-normaliza
+    assert formatar_cnj_com_mascara("0000449-71.2025.5.10.0003") == "0000449-71.2025.5.10.0003"
+    # Vazio/None
+    assert formatar_cnj_com_mascara(None) is None
+    assert formatar_cnj_com_mascara("") is None
+    assert formatar_cnj_com_mascara("   ") is None
+    # Atípico (não 20 dígitos): devolve cru
+    assert formatar_cnj_com_mascara("12345") == "12345"
+
+
+def test_numero_do_processo_volta_com_mascara_apos_enriquecer() -> None:
+    """Após o smoke real exposer divergência cosmética (DataJud=sem máscara,
+    Notion=com máscara) em todos os 3 CNJs, o enricher passa a aplicar a
+    máscara antes de devolver `propriedades_sugeridas["Número do processo"]`.
+    """
+    fake_g1 = {
+        "numeroProcesso": "00004497120255100003",  # 20 dígitos, sem máscara
+        "tribunal": "TRT10", "grau": "G1",
+        "orgaoJulgador": {"codigoMunicipioIBGE": 5300108, "nome": "3A VT DE BRASILIA"},
+        "movimentos": [],
+    }
+    client = _mock_client(consulta_result={"trt10": [fake_g1]})
+    res = enriquecer(
+        _processo(tribunal="TRT/10", instancia="1º grau"),
+        client=client,
+    )
+    assert res.propriedades_sugeridas["Número do processo"] == "0000449-71.2025.5.10.0003"
+
+
+def test_numero_stj_tst_tambem_volta_com_mascara() -> None:
+    """Mesmo tratamento para Número STJ/TST (vem do source GS-stj/tst)."""
+    fake_g1 = {
+        "numeroProcesso": "00007892220195100004",
+        "tribunal": "TRT10", "grau": "G1",
+        "orgaoJulgador": {"codigoMunicipioIBGE": 5300108, "nome": "4A VT"},
+        "movimentos": [],
+    }
+    fake_sup = {
+        "numeroProcesso": "00007892220195100004",
+        "tribunal": "TST", "grau": "SUP",
+        "orgaoJulgador": {"codigoMunicipioIBGE": 5300108, "nome": "5ª Turma"},
+        "movimentos": [],
+    }
+    client = _mock_client(consulta_result={"trt10": [fake_g1], "tst": [fake_sup]})
+    res = enriquecer(
+        _processo(tribunal="TRT/10", instancia="TST"),
+        client=client,
+    )
+    assert res.propriedades_sugeridas["Número STJ/TST"] == "0000789-22.2019.5.10.0004"
+    assert res.propriedades_sugeridas["Número do processo"] == "0000789-22.2019.5.10.0004"
+
+
 def test_vara_aceita_encoding_corrompido_com_interrogacao() -> None:
     """Pattern de Vara aceita '?' como sinônimo de 'ª' (encoding latin1
     corrompido na API). Visto no smoke real do CNJ 0016539-47.2015.8.07.0001

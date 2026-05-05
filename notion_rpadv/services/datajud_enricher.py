@@ -383,6 +383,31 @@ def derivar_turma_g2(orgao_julgador: dict[str, Any] | None) -> str | None:
     return None
 
 
+def formatar_cnj_com_mascara(numero_cnj: str | None) -> str | None:
+    """Aplica máscara CNJ ``NNNNNNN-NN.AAAA.J.TR.OOOO`` aos 20 dígitos.
+
+    O cadastro Notion usa o formato com máscara; a API DataJud devolve
+    sem máscara (``"00004497120255100003"``). Sem essa formatação, a
+    coluna ▸ status sairia divergente em todos os processos por causa
+    da diferença puramente cosmética. Aplicada em ``_aplicar_regras``
+    antes de popular ``propriedades_sugeridas["Número do processo"]``.
+
+    Tolerante a entrada vazia/None (devolve None) e a entrada já
+    formatada (re-normaliza pra garantir formato canônico). Quando o
+    input não tem 20 dígitos, devolve o valor cru — caller decide o
+    que fazer com input atípico.
+    """
+    if numero_cnj is None:
+        return None
+    raw = str(numero_cnj).strip()
+    if not raw:
+        return None
+    digits = "".join(ch for ch in raw if ch.isdigit())
+    if len(digits) != 20:
+        return raw  # input atípico — devolve cru
+    return f"{digits[:7]}-{digits[7:9]}.{digits[9:13]}.{digits[13:14]}.{digits[14:16]}.{digits[16:20]}"
+
+
 def parse_data_compacta(raw: Any) -> str | None:
     """Aceita formato compacto da API (``"20210522081424"``) ou ISO
     (``"2021-05-22T08:14:24..."``) e devolve 'YYYY-MM-DD'.
@@ -888,10 +913,13 @@ def _aplicar_regras(
 
     out: dict[str, Any] = _propriedades_vazias()
 
-    # 1. Número do processo (qualquer; usa menor grau)
+    # 1. Número do processo (qualquer; usa menor grau, com máscara
+    # NNNNNNN-NN.AAAA.J.TR.OOOO para casar com formato cadastrado no
+    # Notion — sem isso saía como divergência puramente cosmética em
+    # todos os processos)
     if menor_src is not None:
         np = menor_src[1].get("numeroProcesso")
-        out["Número do processo"] = str(np) if np else None
+        out["Número do processo"] = formatar_cnj_com_mascara(str(np)) if np else None
 
     # 2. Tribunal (menor grau, com mapeamento DataJud → Notion)
     if menor_src is not None:
@@ -943,10 +971,11 @@ def _aplicar_regras(
     # 9. Fase (grau alvo do cadastro; via classe + códigos)
     out["Fase"] = derivar_fase(maior_src[1] if maior_src else None)
 
-    # 10. Número STJ/TST (específico — só GS-stj/tst)
+    # 10. Número STJ/TST (específico — só GS-stj/tst).
+    # Aplica máscara CNJ pelo mesmo motivo do "Número do processo".
     if stj_tst_src is not None:
         np = stj_tst_src[1].get("numeroProcesso")
-        out["Número STJ/TST"] = str(np) if np else None
+        out["Número STJ/TST"] = formatar_cnj_com_mascara(str(np)) if np else None
 
     # 11. Turma 2º grau
     if g2_src is not None:
