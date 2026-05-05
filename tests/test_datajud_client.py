@@ -365,3 +365,67 @@ def test_payload_sem_hits_retorna_lista_vazia() -> None:
     sources = client.consultar("0000398-69.2021.5.10.0013", "trt10")
 
     assert sources == []
+
+
+# ---------------------------------------------------------------------------
+# consultar_multi — orquestração de múltiplos endpoints
+# ---------------------------------------------------------------------------
+
+
+def test_consultar_multi_chama_cada_endpoint_uma_vez() -> None:
+    """consultar_multi(["trt10", "tst"]) faz exatamente 2 chamadas HTTP."""
+    payload_trt = _payload_es(_source_for_grau("G1"))
+    payload_tst = _payload_es(_source_for_grau("GS"))
+    session = _make_session([
+        _mock_response(200, payload_trt),
+        _mock_response(200, payload_tst),
+    ])
+    client = _make_client(session=session)
+
+    result = client.consultar_multi(
+        "0000398-69.2021.5.10.0013",
+        ["trt10", "tst"],
+    )
+
+    assert set(result.keys()) == {"trt10", "tst"}
+    assert len(result["trt10"]) == 1
+    assert result["trt10"][0]["grau"] == "G1"
+    assert len(result["tst"]) == 1
+    assert result["tst"][0]["grau"] == "GS"
+    assert session.post.call_count == 2
+
+
+def test_consultar_multi_dedup_endpoints_duplicados() -> None:
+    """Endpoints duplicados (e.g. tribunal == STJ + instância == STJ)
+    causam apenas 1 chamada — o caller (enricher) confia nessa dedup."""
+    payload = _payload_es(_source_for_grau("GS"))
+    session = _make_session([_mock_response(200, payload)])
+    client = _make_client(session=session)
+
+    result = client.consultar_multi(
+        "0000398-69.2021.5.10.0013",
+        ["stj", "stj"],
+    )
+
+    assert list(result.keys()) == ["stj"]
+    assert session.post.call_count == 1
+
+
+def test_consultar_multi_endpoint_com_zero_hits_aparece_no_dict() -> None:
+    """Endpoint que devolve 0 hits aparece no dict com lista vazia
+    (caller distingue "consultei e não tem nada" de "nem consultei")."""
+    payload_trt = _payload_es(_source_for_grau("G1"))
+    payload_vazio = {"hits": {"total": {"value": 0}, "hits": []}}
+    session = _make_session([
+        _mock_response(200, payload_trt),
+        _mock_response(200, payload_vazio),
+    ])
+    client = _make_client(session=session)
+
+    result = client.consultar_multi(
+        "0000398-69.2021.5.10.0013",
+        ["trt10", "tst"],
+    )
+
+    assert len(result["trt10"]) == 1
+    assert result["tst"] == []

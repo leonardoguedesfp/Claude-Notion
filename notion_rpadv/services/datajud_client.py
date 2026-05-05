@@ -272,6 +272,38 @@ class DataJudClient:
         }
         return self._post_with_retry(url, body, endpoint=endpoint)
 
+    def consultar_multi(
+        self,
+        numero_cnj: str,
+        endpoints: list[str],
+        *,
+        size: int = DEFAULT_SIZE,
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Consulta o mesmo CNJ em N endpoints, devolve dict
+        ``endpoint → list[_source]``.
+
+        Endpoints com 0 hits aparecem com lista vazia. Endpoints
+        duplicados na entrada são deduplicados preservando a primeira
+        ocorrência (e.g. ``["trt10", "tst", "tst"]`` → 2 chamadas).
+
+        Esta é a porta de entrada do ``datajud_enricher``: ele decide
+        a lista de endpoints (via ``endpoints_candidatos``), passa
+        para cá, e foca em mesclar resultados — toda a orquestração
+        HTTP (throttle, retry, exceções) fica no cliente.
+
+        Erros de qualquer endpoint propagam (``DataJudAPIError`` /
+        ``DataJudRateLimitError``) — caller decide como classificar
+        diagnóstico do processo. Não silencia falhas parciais.
+        """
+        seen: set[str] = set()
+        result: dict[str, list[dict[str, Any]]] = {}
+        for ep in endpoints:
+            if ep in seen:
+                continue
+            seen.add(ep)
+            result[ep] = self.consultar(numero_cnj, ep, size=size)
+        return result
+
     # ------------------------------------------------------------------
     # Internos
     # ------------------------------------------------------------------
