@@ -608,6 +608,11 @@ class ResultadoEnriquecimento:
 
     Attributes:
         numero_cnj: CNJ do processo consultado (do Notion).
+        page_id: ID da página Notion do processo (extraído do
+            ``processo_notion["page_id"]``). Vincula o resultado de
+            volta ao registro do cache; consumido pelo writer xlsx
+            como chave da coluna A (compat com aba Importar).
+            Pode ser string vazia se o caller não populou.
         diagnostico: ``OK`` | ``Não encontrado`` | ``STF não coberto`` |
             ``Tribunal não suportado`` | ``Dados parciais`` | ``Erro: <detalhe>``.
         propriedades_sugeridas: dict ``nome_notion → valor`` para as
@@ -622,6 +627,7 @@ class ResultadoEnriquecimento:
     """
 
     numero_cnj: str
+    page_id: str
     diagnostico: str
     propriedades_sugeridas: dict[str, Any]
     fontes_tribunal: list[str]
@@ -658,6 +664,7 @@ def enriquecer(
         ``ResultadoEnriquecimento`` — sempre populado, mesmo em erro.
     """
     cnj = str(processo_notion.get("Número do processo") or "").strip()
+    page_id = str(processo_notion.get("page_id") or "").strip()
 
     eps = endpoints_candidatos(processo_notion)
     if not eps:
@@ -669,6 +676,7 @@ def enriquecer(
             diag = DIAG_TRIBUNAL_NS
         return ResultadoEnriquecimento(
             numero_cnj=cnj,
+            page_id=page_id,
             diagnostico=diag,
             propriedades_sugeridas=_propriedades_vazias(),
             fontes_tribunal=[],
@@ -680,6 +688,7 @@ def enriquecer(
     except DataJudAPIError as exc:
         return ResultadoEnriquecimento(
             numero_cnj=cnj,
+            page_id=page_id,
             diagnostico=f"Erro: {str(exc)[:120]}",
             propriedades_sugeridas=_propriedades_vazias(),
             fontes_tribunal=[],
@@ -704,6 +713,7 @@ def enriquecer(
     if not por_grau:
         return ResultadoEnriquecimento(
             numero_cnj=cnj,
+            page_id=page_id,
             diagnostico=DIAG_NAO_ENCONTRADO,
             propriedades_sugeridas=_propriedades_vazias(),
             fontes_tribunal=[],
@@ -728,6 +738,7 @@ def enriquecer(
 
     return ResultadoEnriquecimento(
         numero_cnj=cnj,
+        page_id=page_id,
         diagnostico=diag,
         propriedades_sugeridas=propriedades,
         fontes_tribunal=fontes_com_hit,
@@ -783,12 +794,23 @@ def _grau_alvo(processo_notion: dict[str, Any]) -> str:
     correspondente. É a fonte da verdade para o "maior grau" das
     REGRAS_ORIGEM — não o maior grau retornado pela API.
 
-    Decisão arquitetural: o cadastro Notion é o oráculo da Instância
-    atual do processo. A API DataJud retorna registros históricos de
-    todos os graus (G1 cognitivo + G2 acórdão + ...), mas o "estado
-    atual" (Status, Fase) deve ser lido do grau que o operador
-    cadastrou. Se o cadastro estiver desatualizado, o operador
-    atualiza manualmente — o enricher não tenta adivinhar.
+    Decisão arquitetural (validada no smoke real do CNJ
+    0016539-47.2015.8.07.0001 com cadastro=1º grau e API com G1+G2):
+    **Status, Fase, Instância e Turma derivam do grau cadastrado no
+    Notion, não do maior grau retornado pela API. Preserva intenção
+    do operador.**
+
+    A API DataJud retorna registros históricos de todos os graus do
+    processo (G1 cognitivo + G2 acórdão + GS recurso superior). Mas
+    o "estado atual" do processo, conforme o operador, está no grau
+    que ele cadastrou. Se o cadastro estiver desatualizado (ex.:
+    processo subiu pro TST mas Notion ainda diz "2º grau"), o
+    enricher reporta o estado em G2 e **não detecta a subida** — o
+    operador conferiria a Instância antes de rodar enriquecimento
+    em massa. O enricher não tenta adivinhar progressões.
+
+    Esta nota é replicada na aba Instruções da planilha xlsx
+    (Componente 3) como aviso operacional ao usuário.
     """
     instancia = (processo_notion.get("Instância") or "").strip()
     if instancia == INSTANCIA_1G:
