@@ -411,6 +411,48 @@ def test_consultar_multi_dedup_endpoints_duplicados() -> None:
     assert session.post.call_count == 1
 
 
+def test_extract_sources_descarta_hits_com_numero_divergente(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Defesa contra match fuzzy: hits cujo numeroProcesso divirja
+    do CNJ pedido são descartados em ``_extract_sources``, com WARNING."""
+    import logging
+    caplog.set_level(logging.WARNING, logger="datajud.client")
+
+    payload_misto = _payload_es(
+        _source_for_grau("G1", numeroProcesso="00003986920215100013"),  # certo
+        _source_for_grau("G2", numeroProcesso="99999999999999999999"),  # divergente
+    )
+    session = _make_session([_mock_response(200, payload_misto)])
+    client = _make_client(session=session)
+
+    sources = client.consultar("0000398-69.2021.5.10.0013", "trt10")
+
+    # Apenas o source com numeroProcesso correto sobrevive
+    assert len(sources) == 1
+    assert sources[0]["numeroProcesso"] == "00003986920215100013"
+    # WARNING específico foi emitido
+    assert any(
+        "1 hit(s) descartado(s)" in rec.message
+        and "00003986920215100013" in rec.message
+        for rec in caplog.records
+        if rec.name == "datajud.client"
+    )
+
+
+def test_extract_sources_sem_cnj_pedido_nao_filtra() -> None:
+    """Quando _extract_sources é chamado sem ``cnj_pedido`` (caminho
+    direto/teste interno), nenhum hit é descartado — comportamento
+    legado preservado."""
+    from notion_rpadv.services.datajud_client import _extract_sources
+    payload = _payload_es(
+        _source_for_grau("G1", numeroProcesso="11111111111111111111"),
+        _source_for_grau("G2", numeroProcesso="22222222222222222222"),
+    )
+    sources = _extract_sources(payload)
+    assert len(sources) == 2
+
+
 def test_consultar_multi_endpoint_com_zero_hits_aparece_no_dict() -> None:
     """Endpoint que devolve 0 hits aparece no dict com lista vazia
     (caller distingue "consultei e não tem nada" de "nem consultei")."""

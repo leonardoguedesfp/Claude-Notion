@@ -270,7 +270,9 @@ class DataJudClient:
             "query": {"match": {"numeroProcesso": digits}},
             "size":  size,
         }
-        return self._post_with_retry(url, body, endpoint=endpoint)
+        return self._post_with_retry(
+            url, body, endpoint=endpoint, cnj_pedido=digits,
+        )
 
     def consultar_multi(
         self,
@@ -325,12 +327,17 @@ class DataJudClient:
         body: dict[str, Any],
         *,
         endpoint: str,
+        cnj_pedido: str = "",
     ) -> list[dict[str, Any]]:
         """POST com retry pra status transientes (429/503/erro de rede).
 
         Após esgotar retries, levanta ``DataJudRateLimitError`` (429) ou
         ``DataJudAPIError`` (outros). 4xx ≠ 429 não retry — levanta
         imediatamente.
+
+        ``cnj_pedido`` é repassado a ``_extract_sources`` para guardar
+        contra hits cujo ``numeroProcesso`` retornado pela API divirja
+        do CNJ pedido (caso defensivo do match Elasticsearch fuzzy).
         """
         attempts = 1 + len(RETRY_BACKOFFS)  # 3 totais
         last_status: int = 0
@@ -360,7 +367,7 @@ class DataJudClient:
                     raise DataJudAPIError(
                         status, f"JSON inválido: {exc}",
                     ) from exc
-                return _extract_sources(payload)
+                return _extract_sources(payload, cnj_pedido=cnj_pedido)
 
             if status in _RETRY_STATUS:
                 last_status = status
@@ -413,13 +420,23 @@ class DataJudClient:
 # ---------------------------------------------------------------------------
 
 
-def _extract_sources(payload: Any) -> list[dict[str, Any]]:
+def _extract_sources(
+    payload: Any,
+    *,
+    cnj_pedido: str = "",
+) -> list[dict[str, Any]]:
     """Extrai ``_source`` de cada hit do payload Elasticsearch e ordena
     por grau ascendente (G1 < G2 < GS).
 
     Defensivo contra variações de schema (payload não-dict, ``hits``
     ausente, hits sem ``_source``, etc.) — devolve lista vazia ao
     invés de quebrar.
+
+    Quando ``cnj_pedido`` (20 dígitos sem máscara) é informado, descarta
+    hits cujo ``_source.numeroProcesso`` (após remoção de máscara)
+    divirja. Defesa contra fuzzy match do Elasticsearch (raro, mas
+    silencia uma classe inteira de bugs sutis). Hits descartados
+    geram WARNING específico no logger.
     """
     if not isinstance(payload, dict):
         return []
@@ -436,6 +453,25 @@ def _extract_sources(payload: Any) -> list[dict[str, Any]]:
         src = h.get("_source")
         if isinstance(src, dict):
             sources.append(src)
+
+    if cnj_pedido:
+        digits_pedido = "".join(ch for ch in cnj_pedido if ch.isdigit())
+        if digits_pedido:
+            filtrados: list[dict[str, Any]] = []
+            for s in sources:
+                np_raw = str(s.get("numeroProcesso", ""))
+                np_digits = "".join(ch for ch in np_raw if ch.isdigit())
+                if np_digits == digits_pedido:
+                    filtrados.append(s)
+            descartados = len(sources) - len(filtrados)
+            if descartados > 0:
+                logger.warning(
+                    "DataJUD: %d hit(s) descartado(s) por numeroProcesso "
+                    "divergente (pedido=%s)",
+                    descartados, digits_pedido,
+                )
+            sources = filtrados
+
     sources.sort(
         key=lambda s: _GRAU_ORDEM.get(
             str(s.get("grau", "")), _GRAU_FALLBACK_RANK,
