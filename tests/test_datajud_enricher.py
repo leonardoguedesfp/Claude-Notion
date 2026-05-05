@@ -385,7 +385,13 @@ def test_diagnostico_erro_quando_client_levanta_excecao() -> None:
 
 
 def test_diagnostico_ok_no_caso_simples() -> None:
-    """1 endpoint, 1 grau, hit → OK."""
+    """1 endpoint, 1 grau, hit → OK.
+
+    O fixture tem mov. 219 (Sentença) sem cumprimento/liquidação → fase
+    'Liquidação pendente' (sentença emitida, liquidação não iniciada).
+    """
+    from notion_rpadv.services.datajud_enricher import FASE_LIQUIDACAO_PENDENTE
+
     result = _load_fixture("trt10_g1_simples.json")
     client = _mock_client(consulta_result=result)
     res = enriquecer(
@@ -397,7 +403,96 @@ def test_diagnostico_ok_no_caso_simples() -> None:
     assert res.propriedades_sugeridas["Vara"] == "13"
     assert res.propriedades_sugeridas["Cidade"] == "Brasília"
     assert res.propriedades_sugeridas["Data de distribuição"] == "2024-01-01"
-    assert res.propriedades_sugeridas["Fase"] == FASE_COGNITIVA  # só sentença, sem cumprimento
+    assert res.propriedades_sugeridas["Fase"] == FASE_LIQUIDACAO_PENDENTE
+
+
+def test_fase_cognitiva_quando_nem_sentenca_nem_cumprimento() -> None:
+    """Movimentos só com Distribuição/Conclusão (sem 219, 848, 471, etc.)
+    → Fase Cognitiva (default)."""
+    from notion_rpadv.services.datajud_enricher import derivar_fase
+    movs: list[dict[str, Any]] = [
+        {"codigo": 26},
+        {"codigo": 51},
+    ]
+    assert derivar_fase(movs) == FASE_COGNITIVA
+
+
+def test_fase_liquidacao_pendente_apos_sentenca_sem_liquidacao() -> None:
+    """Sentença (219) sem cumprimento e sem cód de liquidação →
+    Liquidação pendente."""
+    from notion_rpadv.services.datajud_enricher import (
+        FASE_LIQUIDACAO_PENDENTE,
+        derivar_fase,
+    )
+    movs: list[dict[str, Any]] = [
+        {"codigo": 26},
+        {"codigo": 219},  # Sentença
+        {"codigo": 11009},  # Trânsito
+    ]
+    assert derivar_fase(movs) == FASE_LIQUIDACAO_PENDENTE
+
+
+def test_fase_liquidacao_de_sentenca_quando_cod_liquidacao_presente() -> None:
+    """Mov. 11528 (Liquidação Provisória por Cálculos JT) → Liquidação de sentença."""
+    from notion_rpadv.services.datajud_enricher import (
+        FASE_LIQUIDACAO,
+        derivar_fase,
+    )
+    movs: list[dict[str, Any]] = [
+        {"codigo": 26},
+        {"codigo": 219},
+        {"codigo": 11528},  # liquidação ampliada
+    ]
+    assert derivar_fase(movs) == FASE_LIQUIDACAO
+
+
+def test_log_warning_quando_tribunal_nao_mapeado(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Source com tribunal fora do DATAJUD_TRIBUNAL_TO_NOTION dispara
+    WARNING e usa fallback cru."""
+    import logging
+    caplog.set_level(logging.WARNING, logger="datajud.enricher")
+    fake_source = {
+        "numeroProcesso": "00012345620245100013",
+        "tribunal":       "TRJ_INVENTADO",
+        "grau":           "G1",
+        "orgaoJulgador":  {"codigoMunicipioIBGE": 5300108, "nome": "Vara X"},
+        "dataAjuizamento": "20240101",
+        "movimentos":     [],
+    }
+    client = _mock_client(consulta_result={"trt10": [fake_source]})
+    res = enriquecer(
+        _processo(tribunal="TRT/10", instancia="1º grau"),
+        client=client,
+    )
+    # Fallback cru no Tribunal sugerido
+    assert res.propriedades_sugeridas["Tribunal"] == "TRJ_INVENTADO"
+    # WARNING específico
+    assert any(
+        "tribunal não mapeado" in rec.message and "TRJ_INVENTADO" in rec.message
+        for rec in caplog.records
+        if rec.name == "datajud.enricher"
+    )
+
+
+def test_assertion_em_derivar_fase_garante_vocabulario_notion() -> None:
+    """Verifica que FASE_VOCABULARIO_NOTION cobre o que derivar_fase pode emitir."""
+    from notion_rpadv.services.datajud_enricher import (
+        FASE_VOCABULARIO_NOTION,
+        derivar_fase,
+    )
+    # Cada categoria emite valor canônico
+    cenarios: list[tuple[list[dict[str, Any]], str]] = [
+        ([],                                        FASE_COGNITIVA),
+        ([{"codigo": 848}],                          "Executiva"),
+        ([{"codigo": 471}],                          "Liquidação de sentença"),
+        ([{"codigo": 219}],                          "Liquidação pendente"),
+    ]
+    for movs, esperado in cenarios:
+        out = derivar_fase(movs)
+        assert out == esperado
+        assert out in FASE_VOCABULARIO_NOTION
 
 
 # ---------------------------------------------------------------------------

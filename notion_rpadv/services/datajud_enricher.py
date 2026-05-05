@@ -65,7 +65,12 @@ COD_LEVANTAMENTO_SOBRESTAMENTO: Final[int] = 11458
 COD_CUMPRIMENTO: Final[int] = 848
 COD_RPV: Final[int] = 123
 COD_PRECATORIO: Final[int] = 61
-COD_LIQUIDACAO: Final[int] = 471
+# Liquidação cobre múltiplos códigos TPU. Expandir conforme apareçam
+# códigos novos no smoke real (operador adiciona aqui).
+COD_LIQUIDACAO: Final[frozenset[int]] = frozenset({
+    471,    # Liquidação por Arbitramento
+    11528,  # Liquidação Provisória por Cálculos (Justiça do Trabalho)
+})
 COD_SENTENCA: Final[int] = 219
 
 
@@ -109,15 +114,49 @@ STATUS_ATIVO: Final[str]                     = "Ativo"
 STATUS_ARQUIVADO_PROVISORIAMENTE: Final[str] = "Arquivado provisoriamente (tema 955)"
 STATUS_ARQUIVADO: Final[str]                 = "Arquivado"
 
-FASE_COGNITIVA: Final[str]  = "Cognitiva"
-FASE_LIQUIDACAO: Final[str] = "Liquidação de sentença"
-FASE_EXECUTIVA: Final[str]  = "Executiva"
+FASE_COGNITIVA: Final[str]           = "Cognitiva"
+FASE_LIQUIDACAO_PENDENTE: Final[str] = "Liquidação pendente"
+FASE_LIQUIDACAO: Final[str]          = "Liquidação de sentença"
+FASE_EXECUTIVA: Final[str]           = "Executiva"
+FASE_TJ_NAO_EXECUTAVEL: Final[str]   = "TJ - sentença não será executada"
 
 INSTANCIA_1G: Final[str]  = "1º grau"
 INSTANCIA_2G: Final[str]  = "2º grau"
 INSTANCIA_TST: Final[str] = "TST"
 INSTANCIA_STJ: Final[str] = "STJ"
 INSTANCIA_STF: Final[str] = "STF"
+
+
+# ---------------------------------------------------------------------------
+# Vocabulários autoritativos do Notion (selects fechados)
+#
+# Fonte: schema vivo da base ⚖️ Processos. Qualquer função que emita
+# valor para essas três propriedades DEVE garantir que o resultado
+# pertence ao vocabulário — assertions no fim de derivar_fase,
+# derivar_status e _instancia_canonica fazem essa proteção.
+# ---------------------------------------------------------------------------
+
+STATUS_VOCABULARIO_NOTION: Final[tuple[str, ...]] = (
+    STATUS_ATIVO,
+    STATUS_ARQUIVADO_PROVISORIAMENTE,
+    STATUS_ARQUIVADO,
+)
+
+FASE_VOCABULARIO_NOTION: Final[tuple[str, ...]] = (
+    FASE_COGNITIVA,
+    FASE_EXECUTIVA,
+    FASE_LIQUIDACAO_PENDENTE,
+    FASE_LIQUIDACAO,
+    FASE_TJ_NAO_EXECUTAVEL,
+)
+
+INSTANCIA_VOCABULARIO_NOTION: Final[tuple[str, ...]] = (
+    INSTANCIA_1G,
+    INSTANCIA_2G,
+    INSTANCIA_TST,
+    INSTANCIA_STJ,
+    INSTANCIA_STF,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -379,20 +418,32 @@ def derivar_status(movimentos_maior: list[dict[str, Any]]) -> str:
         if c in (COD_ARQUIVAMENTO_DEFINITIVO, COD_BAIXA_DEFINITIVA):
             last_arq = i
     if last_sobrestamento > last_levantamento:
-        return STATUS_ARQUIVADO_PROVISORIAMENTE
-    if last_arq >= 0:
-        return STATUS_ARQUIVADO
-    return STATUS_ATIVO
+        resultado = STATUS_ARQUIVADO_PROVISORIAMENTE
+    elif last_arq >= 0:
+        resultado = STATUS_ARQUIVADO
+    else:
+        resultado = STATUS_ATIVO
+    assert resultado in STATUS_VOCABULARIO_NOTION, (
+        f"derivar_status emitiu valor fora do vocabulário Notion: {resultado!r}"
+    )
+    return resultado
 
 
 def derivar_fase(movimentos_maior: list[dict[str, Any]]) -> str:
     """Fase canônica do Notion. Prioridade descendente:
-    Executiva → Liquidação → Cognitiva.
+    Executiva → Liquidação de sentença → Liquidação pendente → Cognitiva.
 
     - Cumprimento (848) / RPV (123) / Precatório (61) → Executiva
-    - Liquidação (471) → Liquidação de sentença
-    - Senão → Cognitiva (default — sentença ainda em fase cognitiva,
-      ou processo só com despachos/distribuição)
+    - Algum código em ``COD_LIQUIDACAO`` → Liquidação de sentença
+    - Sentença (219) sem cumprimento e sem cód de liquidação →
+      Liquidação pendente (sentença emitida, liquidação ainda não
+      iniciada — semântica do Notion)
+    - Senão → Cognitiva (default; processo cognitivo em curso,
+      sem sentença ainda)
+
+    "TJ - sentença não será executada" existe no vocabulário Notion mas
+    não é detectável pela API (depende de natureza da decisão); fica
+    fora do output automático e é cadastrado manualmente.
     """
     cods: set[int] = set()
     for m in movimentos_maior:
@@ -400,10 +451,17 @@ def derivar_fase(movimentos_maior: list[dict[str, Any]]) -> str:
         if isinstance(c, int):
             cods.add(c)
     if any(c in cods for c in (COD_CUMPRIMENTO, COD_RPV, COD_PRECATORIO)):
-        return FASE_EXECUTIVA
-    if COD_LIQUIDACAO in cods:
-        return FASE_LIQUIDACAO
-    return FASE_COGNITIVA
+        resultado = FASE_EXECUTIVA
+    elif cods & COD_LIQUIDACAO:
+        resultado = FASE_LIQUIDACAO
+    elif COD_SENTENCA in cods:
+        resultado = FASE_LIQUIDACAO_PENDENTE
+    else:
+        resultado = FASE_COGNITIVA
+    assert resultado in FASE_VOCABULARIO_NOTION, (
+        f"derivar_fase emitiu valor fora do vocabulário Notion: {resultado!r}"
+    )
+    return resultado
 
 
 def derivar_relator(movimentos: list[dict[str, Any]]) -> str | None:
@@ -637,7 +695,17 @@ def _aplicar_regras(
     if menor_src is not None:
         trib_dj = str(menor_src[1].get("tribunal") or "").strip()
         if trib_dj:
-            out["Tribunal"] = DATAJUD_TRIBUNAL_TO_NOTION.get(trib_dj, trib_dj)
+            mapeado = DATAJUD_TRIBUNAL_TO_NOTION.get(trib_dj)
+            if mapeado is None:
+                # Visível como divergência no xlsx; opera com fallback
+                # cru pra não bloquear, mas loga pra revisão do mapa.
+                logger.warning(
+                    "DataJUD: tribunal não mapeado: %r (CNJ %s)",
+                    trib_dj, cnj,
+                )
+                out["Tribunal"] = trib_dj
+            else:
+                out["Tribunal"] = mapeado
 
     # 3. Instância (maior grau, mapeada via grau + endpoint)
     if maior_src is not None:
@@ -721,22 +789,30 @@ def _instancia_canonica(
     G1 → "1º grau"; G2 → "2º grau"; GS → STJ/TST/STF conforme endpoint
     de origem (ou source.tribunal como fallback pra GS atípicos em
     endpoint TJ/TRT).
+
+    Retorna None apenas em GS atípico não-resolvível. Garante invariante
+    de vocabulário Notion via assertion.
     """
+    resultado: str | None = None
     if grau == "G1":
-        return INSTANCIA_1G
-    if grau == "G2":
-        return INSTANCIA_2G
-    if grau == "GS":
+        resultado = INSTANCIA_1G
+    elif grau == "G2":
+        resultado = INSTANCIA_2G
+    elif grau == "GS":
         if endpoint == "stj":
-            return INSTANCIA_STJ
-        if endpoint == "tst":
-            return INSTANCIA_TST
-        # GS num endpoint TJ/TRT — atípico; tenta source.tribunal.
-        trib = str(source.get("tribunal") or "").upper()
-        if trib == "STJ":
-            return INSTANCIA_STJ
-        if trib == "TST":
-            return INSTANCIA_TST
-        if trib == "STF":
-            return INSTANCIA_STF
-    return None
+            resultado = INSTANCIA_STJ
+        elif endpoint == "tst":
+            resultado = INSTANCIA_TST
+        else:
+            # GS num endpoint TJ/TRT — atípico; tenta source.tribunal.
+            trib = str(source.get("tribunal") or "").upper()
+            if trib == "STJ":
+                resultado = INSTANCIA_STJ
+            elif trib == "TST":
+                resultado = INSTANCIA_TST
+            elif trib == "STF":
+                resultado = INSTANCIA_STF
+    assert resultado is None or resultado in INSTANCIA_VOCABULARIO_NOTION, (
+        f"_instancia_canonica emitiu valor fora do vocabulário Notion: {resultado!r}"
+    )
+    return resultado
