@@ -1627,6 +1627,9 @@ def test_AUD_10_no_outbound_urls_other_than_notion() -> None:
                 # (Diário de Justiça Eletrônico Nacional). Integração
                 # deliberada e auditada em notion_rpadv/services/dje_client.py.
                 "comunicaapi.pje.jus.br",
+                # Fase 1 DataJUD: API pública DataJud do CNJ. Integração
+                # deliberada e auditada em notion_rpadv/services/datajud_client.py.
+                "api-publica.datajud.cnj.jus.br",
             )):
                 continue
             bad.append(f"{f.name}:{url}")
