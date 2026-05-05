@@ -148,6 +148,58 @@ def test_sidebar_renderiza_com_item_datajud() -> None:
     assert item.page_id == "datajud"
 
 
+def test_set_cancelando_feedback_visual_no_botao() -> None:
+    """``_ModoAWidget.set_cancelando()`` muda texto pra 'Cancelando…' e
+    desabilita o botão. ``set_em_execucao(False)`` reseta tudo."""
+    _qapp()
+    from notion_rpadv.pages.datajud import _ModoAWidget
+    from notion_rpadv.theme.tokens import LIGHT
+    w = _ModoAWidget(LIGHT)
+    w.set_em_execucao(True)
+    # Estado inicial em execução
+    assert w._cancelar_btn.text() == "Cancelar"  # noqa: SLF001
+    assert w._cancelar_btn.isEnabled() is True  # noqa: SLF001
+    # Cancelando…
+    w.set_cancelando()
+    assert "Cancelando" in w._cancelar_btn.text()  # noqa: SLF001
+    assert w._cancelar_btn.isEnabled() is False  # noqa: SLF001
+    assert "aguardando" in w._progress_label.text().lower()  # noqa: SLF001
+    # Reset ao próximo run
+    w.set_em_execucao(False)
+    w.set_em_execucao(True)
+    assert w._cancelar_btn.text() == "Cancelar"  # noqa: SLF001
+    assert w._cancelar_btn.isEnabled() is True  # noqa: SLF001
+
+
+def test_cancelar_worker_atualiza_ui_e_chama_cancel() -> None:
+    """``_cancelar_worker`` na page: muda texto do botão pra
+    'Cancelando…' ANTES de chamar ``worker.cancel()``, seta flag
+    ``_was_cancelled = True`` para o toast final mostrar mensagem
+    parcial."""
+    _qapp()
+    from notion_rpadv.pages.datajud import DataJUDPage
+
+    with _patch_cache_records([]):
+        page = DataJUDPage(conn=MagicMock(), token="dummy")
+
+    # Mock do worker já configurado em estado de "em execução"
+    fake_worker = MagicMock()
+    page._worker = fake_worker  # noqa: SLF001
+    page._modo_b = False  # noqa: SLF001
+    page._modo_a.set_em_execucao(True)  # noqa: SLF001
+
+    # Click em cancelar dispara _cancelar_worker direto
+    page._cancelar_worker()  # noqa: SLF001
+
+    # Worker.cancel() chamado (1 vez)
+    fake_worker.cancel.assert_called_once()
+    # Flag setada para alterar mensagem do toast em _on_finished
+    assert page._was_cancelled is True  # noqa: SLF001
+    # Botão atualizado imediatamente — sem esperar o worker terminar
+    assert "Cancelando" in page._modo_a._cancelar_btn.text()  # noqa: SLF001
+    assert page._modo_a._cancelar_btn.isEnabled() is False  # noqa: SLF001
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

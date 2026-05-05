@@ -206,8 +206,27 @@ class _ModoAWidget(QWidget):
     def set_em_execucao(self, em_exec: bool) -> None:
         self._iniciar_btn.setVisible(not em_exec)
         self._cancelar_btn.setVisible(em_exec)
+        # Reset do estado do botão Cancelar a cada novo run.
+        self._cancelar_btn.setText("Cancelar")
+        self._cancelar_btn.setEnabled(True)
         self._progress.setVisible(em_exec)
         self._progress_label.setVisible(em_exec)
+
+    def set_cancelando(self) -> None:
+        """Feedback visual imediato após click em Cancelar.
+
+        Muda texto do botão para 'Cancelando…', desabilita-o (evita
+        clicks duplos), e atualiza a label de progresso pra explicar
+        que workers ativos vão completar o ciclo HTTP atual antes do
+        shutdown limpo (até ~30s no pior caso por causa do timeout
+        HTTP do client).
+        """
+        self._cancelar_btn.setText("Cancelando…")
+        self._cancelar_btn.setEnabled(False)
+        self._progress_label.setText(
+            "Cancelando — aguardando workers terminarem ciclo atual "
+            "(até ~30s)…",
+        )
 
     def _on_iniciar(self) -> None:
         s = QSettings(_SETTINGS_ORG, _SETTINGS_APP)
@@ -439,6 +458,10 @@ class DataJUDPage(QWidget):
         self._worker: DataJudWorker | None = None
         self._thread: QThread | None = None
         self._last_output_path: str = ""
+        # Flags pra distinguir cancelamento explícito do usuário no
+        # toast final (mensagem diferente quando foi cancelado).
+        self._was_cancelled: bool = False
+        self._total_processos: int = 0
 
         self._build_ui()
         self._refresh_modo_a_estimativa()
@@ -637,6 +660,8 @@ class DataJUDPage(QWidget):
         self._worker.error.connect(self._thread.quit)
 
         self._modo_b = modo_b
+        self._was_cancelled = False
+        self._total_processos = len(processos)
         widget_progress = self._step3 if modo_b else self._modo_a
         widget_progress.set_em_execucao(True)
         self._thread.start()
@@ -657,13 +682,25 @@ class DataJUDPage(QWidget):
         widget = self._step3 if self._modo_b else self._modo_a
         widget.set_em_execucao(False)
         self._last_output_path = output_path
-        msg = (
-            f"Consulta concluída: {ok} OK, {parciais} parciais, "
-            f"{erros} erros, {nao_encontrados} não encontrados. "
-            f"Arquivo: {Path(output_path).name}"
-        )
-        kind = "warning" if erros > 0 else "success"
+        total_processados = ok + parciais + erros + nao_encontrados
+        nome_arquivo = Path(output_path).name
+        if self._was_cancelled:
+            msg = (
+                f"Cancelado após {total_processados} de "
+                f"{self._total_processos} processos. "
+                f"Planilha parcial salva: {nome_arquivo}"
+            )
+            kind = "warning"
+        else:
+            msg = (
+                f"Consulta concluída: {ok} OK, {parciais} parciais, "
+                f"{erros} erros, {nao_encontrados} não encontrados. "
+                f"Arquivo: {nome_arquivo}"
+            )
+            kind = "warning" if erros > 0 else "success"
         self.toast_requested.emit(msg, kind)
+        # Reseta a flag pro próximo run.
+        self._was_cancelled = False
 
     def _on_error(self, message: str) -> None:
         widget = self._step3 if self._modo_b else self._modo_a
@@ -671,8 +708,24 @@ class DataJUDPage(QWidget):
         self.toast_requested.emit(f"Erro: {message}", "error")
 
     def _cancelar_worker(self) -> None:
-        if self._worker is not None:
-            self._worker.cancel()
+        """Feedback visual imediato + sinaliza cancelamento ao worker.
+
+        Slot conectado ao botão 'Cancelar' das duas modos. Atualiza a
+        UI **antes** de chamar ``worker.cancel()`` (que retorna em µs
+        — só seta uma ``threading.Event``). O worker em sua thread vai
+        completar o ciclo HTTP atual (até ~30s no timeout DataJud),
+        emitir ``cancelled`` + ``finished`` com totais parciais, e o
+        ``_on_finished`` mostra o toast com a contagem do que foi
+        processado antes do cancelamento.
+        """
+        if self._worker is None:
+            return
+        widget = self._step3 if self._modo_b else self._modo_a
+        # Feedback visual imediato — UI muda antes de qualquer signal.
+        widget.set_cancelando()
+        self._was_cancelled = True
+        # Sinal pro worker (retorna instantaneamente — só Event.set()).
+        self._worker.cancel()
 
     # ------------------------------------------------------------------
     # Helpers
