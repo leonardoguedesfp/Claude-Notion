@@ -386,6 +386,61 @@ def test_worker_chama_factory_uma_vez_por_thread(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_worker_cancel_retorna_imediatamente(tmp_path: Path) -> None:
+    """``cancel()`` não pode aguardar workers — só seta a Event.
+    Mesmo com workers em execução, retorna em < 100ms.
+
+    Cenário: 100 processos no pool, ``enriquecer`` mockado pra
+    bloquear num ``threading.Event`` (simula trabalho HTTP em curso).
+    O ``cancel()`` é cronometrado: tempo entre o clique e o retorno.
+    Workers terminam quando o barrier é liberado.
+    """
+    import time
+
+    processos = [
+        _proc_cache(f"p{i}", f"{i:07d}-00.0000.0.00.0000")
+        for i in range(100)
+    ]
+    worker = _make_worker(processos, tmp_path / "out.xlsx", max_workers=4)
+
+    barrier = threading.Event()
+
+    def _slow_enriquecer(*_a: Any, **_k: Any) -> Any:
+        barrier.wait(timeout=10.0)
+        return _resultado_factory(DIAG_OK, "px")
+
+    # ``run`` em thread Python pura (sem QThread) — basta pra exercitar
+    # o ThreadPoolExecutor interno do worker.
+    runner = threading.Thread(target=worker.run, daemon=True)
+
+    with patch(
+        "notion_rpadv.services.datajud_worker.enriquecer",
+        side_effect=_slow_enriquecer,
+    ), patch(
+        "notion_rpadv.services.datajud_worker.gerar_xlsx",
+    ):
+        runner.start()
+        # Espera o pool pegar pelo menos um future (eles vão bloquear
+        # no barrier — timeout de polling pequeno garante CI estável).
+        time.sleep(0.2)
+
+        # Cronometra o cancel.
+        t0 = time.perf_counter()
+        worker.cancel()
+        elapsed_ms = (time.perf_counter() - t0) * 1000
+
+        assert elapsed_ms < 100, (
+            f"cancel() levou {elapsed_ms:.1f}ms; deve retornar em <100ms"
+        )
+        assert worker.is_cancelled()
+
+        # Libera os workers presos no barrier; runner vai finalizar
+        # normalmente (com gerar_xlsx mockado).
+        barrier.set()
+        runner.join(timeout=10.0)
+        assert not runner.is_alive(), "runner não terminou após cancel"
+
+
 def test_worker_lista_vazia_emite_finished_com_zeros(tmp_path: Path) -> None:
     worker = _make_worker([], tmp_path / "out.xlsx")
     finished_payload: list[tuple[Any, ...]] = []
