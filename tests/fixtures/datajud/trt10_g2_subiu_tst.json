@@ -30,7 +30,7 @@
       "dataAjuizamento": "20231120100000",
       "movimentos": [
         {
-          "codigo": 123,
+          "codigo": 15040,
           "nome": "Atribuição de relator",
           "dataHora": "2023-12-01T08:00:00.000Z",
           "complementosTabelados": [
@@ -60,7 +60,7 @@
       "dataAjuizamento": "20240901140000",
       "movimentos": [
         {
-          "codigo": 123,
+          "codigo": 15040,
           "nome": "Atribuição de relator",
           "dataHora": "2024-09-15T10:00:00.000Z",
           "complementosTabelados": [
