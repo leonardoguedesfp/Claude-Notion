@@ -1287,10 +1287,17 @@ def test_R7c_R31_NAO_dispara_sem_processo_cadastrado() -> None:
 # ===========================================================================
 
 
-def test_R7c_R38_dispara_link_proc_vazio_pub_populado() -> None:
+# Round 8 (2026-05-06): Regra 38 DESATIVADA — disparava em 93% das pubs,
+# virou ruído. Função mantida no módulo retornando sempre None para
+# preservar a numeração canônica do doc v8 e facilitar reativação
+# futura. Testes refletem o estado atual.
+
+def test_R8_R38_NAO_dispara_link_proc_vazio_pub_populado() -> None:
+    """Após desativação Round 8, mesmo o cenário que antes disparava
+    (Proc.link vazio + Pub.link populado) não dispara mais."""
     pub = _pub(link="https://pje.trt10.jus.br/pjekz/...")
     proc = _proc(link_externo="")
-    assert regra_38_capturar_link_externo(pub, proc) == ALERTA_CAPTURAR_LINK_EXTERNO
+    assert regra_38_capturar_link_externo(pub, proc) is None
 
 
 def test_R7c_R38_NAO_dispara_se_proc_link_populado() -> None:
@@ -1308,6 +1315,19 @@ def test_R7c_R38_NAO_dispara_se_pub_link_vazio() -> None:
 def test_R7c_R38_NAO_dispara_sem_processo_cadastrado() -> None:
     pub = _pub(link="https://pje.trt10.jus.br/")
     assert regra_38_capturar_link_externo(pub, None) is None
+
+
+def test_R8_R38_constante_existe_mas_nao_e_emitida() -> None:
+    """Sanity check: a constante ALERTA_CAPTURAR_LINK_EXTERNO permanece
+    no módulo (não removida) mas a regra não a emite mais.
+    """
+    # Constante ainda existe pra retro-compat
+    assert ALERTA_CAPTURAR_LINK_EXTERNO == "Capturar link externo"
+    # Mas a regra retorna sempre None
+    pub = _pub(link="https://qualquer-coisa.example.com/")
+    for proc_link in ("", "preenchido", None):
+        proc = _proc(link_externo=proc_link)
+        assert regra_38_capturar_link_externo(pub, proc) is None
 
 
 # ===========================================================================
@@ -2072,3 +2092,213 @@ def test_R7_composicao_pub_distribuicao_3_alertas_simultaneos() -> None:
     assert tarefas == ["Nada para fazer"]
     assert "Processo/recurso distribuído" in alertas  # camada base R40
     assert ALERTA_CAPTURAR_DATA_DISTRIBUICAO in alertas  # R33
+
+
+# ===========================================================================
+# Round 8 (2026-05-06) — Regressões do bug de normalização assimétrica
+# ===========================================================================
+#
+# Bug encontrado: Regras 19/20, 21/22, 23, 24 normalizavam apenas o lado
+# da Publicação. Após migração da base Processos para guardar o nome
+# completo do órgão (ex: "14ª Vara do Trabalho de Brasília - DF"), 100%
+# dos processos disparavam Vara/Turma/Cidade/Relator desatualizados.
+# Fix: aplicar a mesma normalização nos dois lados.
+#
+# Caso de teste do user (CNJ 0001736-51.2016.5.10.0014):
+#   Pub.Órgão = "14ª Vara do Trabalho de Brasília - DF"
+#   Proc.vara = "14ª Vara do Trabalho de Brasília - DF"
+#   Esperado: Vara desatualizada NÃO dispara.
+
+
+# --- Regra 21/22 (Vara) ---
+
+
+def test_R8_R21_NAO_dispara_quando_proc_tem_nome_completo_canonico() -> None:
+    """Regressão do bug. Pub.Órgão e Proc.vara idênticos no formato
+    canônico (nome completo com cidade) — não deve disparar."""
+    pub = _pub(
+        siglaTribunal="TRT10",
+        nomeOrgao="14ª Vara do Trabalho de Brasília - DF",
+    )
+    proc = _proc(
+        instancia=INSTANCIA_PRIMEIRO_GRAU,
+        vara="14ª Vara do Trabalho de Brasília - DF",
+    )
+    assert regra_21_22_vara_desatualizada(pub, proc) is None
+
+
+def test_R8_R21_NAO_dispara_quando_proc_tem_apenas_prefixo() -> None:
+    """Tolerância: Proc.vara com prefixo curto ("14ª Vara do Trabalho")
+    e Pub com nome completo — devem normalizar ao mesmo prefixo."""
+    pub = _pub(
+        siglaTribunal="TRT10",
+        nomeOrgao="14ª Vara do Trabalho de Brasília - DF",
+    )
+    proc = _proc(
+        instancia=INSTANCIA_PRIMEIRO_GRAU,
+        vara="14ª Vara do Trabalho",
+    )
+    assert regra_21_22_vara_desatualizada(pub, proc) is None
+
+
+def test_R8_R22_dispara_quando_proc_tem_ordinal_velho() -> None:
+    """Cadastro com ordinal nu ("14") ainda dispara — sinal de cadastro
+    velho que precisa migrar para o formato canônico."""
+    pub = _pub(
+        siglaTribunal="TRT10",
+        nomeOrgao="14ª Vara do Trabalho de Brasília - DF",
+    )
+    proc = _proc(instancia=INSTANCIA_PRIMEIRO_GRAU, vara="14")
+    assert regra_21_22_vara_desatualizada(pub, proc) == ALERTA_VARA_DESATUALIZADA
+
+
+def test_R8_R22_dispara_quando_proc_tem_outra_vara_canonica() -> None:
+    """Vara legitimamente diferente (3ª Cível vs 14ª Trabalho) — dispara."""
+    pub = _pub(
+        siglaTribunal="TRT10",
+        nomeOrgao="14ª Vara do Trabalho de Brasília - DF",
+    )
+    proc = _proc(
+        instancia=INSTANCIA_PRIMEIRO_GRAU,
+        vara="3ª Vara Cível de Brasília",
+    )
+    assert regra_21_22_vara_desatualizada(pub, proc) == ALERTA_VARA_DESATUALIZADA
+
+
+# --- Regra 23 (Turma) ---
+
+
+def test_R8_R23_NAO_dispara_quando_proc_tem_nome_completo_canonico() -> None:
+    """Proc.turma_no_2o_grau armazenando nome completo ("5ª Turma Cível")."""
+    pub = _pub(
+        siglaTribunal="TJDFT",
+        tipoDocumento="Acórdão",
+        nomeOrgao="5ª Turma Cível",
+    )
+    proc = _proc(
+        instancia=INSTANCIA_SEGUNDO_GRAU,
+        turma_no_2o_grau="5ª Turma Cível",
+    )
+    assert regra_23_turma_desatualizada(pub, proc) is None
+
+
+def test_R8_R23_dispara_quando_proc_tem_ordinal_velho() -> None:
+    """Cadastro com ordinal nu ("5") — dispara."""
+    pub = _pub(
+        siglaTribunal="TJDFT",
+        tipoDocumento="Acórdão",
+        nomeOrgao="5ª Turma Cível",
+    )
+    proc = _proc(
+        instancia=INSTANCIA_SEGUNDO_GRAU,
+        turma_no_2o_grau="5",
+    )
+    assert regra_23_turma_desatualizada(pub, proc) == ALERTA_TURMA_DESATUALIZADA
+
+
+# --- Regra 24 (Relator) ---
+
+
+def test_R8_R24_NAO_dispara_quando_proc_tem_prefixo_de_tratamento() -> None:
+    """Proc.relator_no_2o_grau armazenando "Des. ELKE DORIS JUST"
+    (com prefixo) e Pub com "Desembargadora ELKE DORIS JUST" — depois
+    da normalização simétrica, ambos viram "ELKE DORIS JUST"."""
+    pub = _pub(
+        siglaTribunal="TJDFT",
+        tipoDocumento="Acórdão",
+        nomeOrgao="Desembargadora ELKE DORIS JUST",
+    )
+    proc = _proc(
+        instancia=INSTANCIA_SEGUNDO_GRAU,
+        relator_no_2o_grau="Des. ELKE DORIS JUST",
+    )
+    assert regra_24_relator_faltando(pub, proc) is None
+
+
+def test_R8_R24_NAO_dispara_quando_proc_tem_prefixo_completo() -> None:
+    """Proc.relator com 'Desembargadora ELKE DORIS JUST' (prefixo full)."""
+    pub = _pub(
+        siglaTribunal="TJDFT",
+        tipoDocumento="Acórdão",
+        nomeOrgao="Desembargadora ELKE DORIS JUST",
+    )
+    proc = _proc(
+        instancia=INSTANCIA_SEGUNDO_GRAU,
+        relator_no_2o_grau="Desembargadora ELKE DORIS JUST",
+    )
+    assert regra_24_relator_faltando(pub, proc) is None
+
+
+def test_R8_R24_NAO_dispara_quando_proc_tem_apenas_nome_puro() -> None:
+    """Proc.relator com nome puro (sem prefixo) e Pub com prefixo —
+    ainda compatível após normalização."""
+    pub = _pub(
+        siglaTribunal="TJDFT",
+        tipoDocumento="Acórdão",
+        nomeOrgao="Desembargadora ELKE DORIS JUST",
+    )
+    proc = _proc(
+        instancia=INSTANCIA_SEGUNDO_GRAU,
+        relator_no_2o_grau="ELKE DORIS JUST",
+    )
+    assert regra_24_relator_faltando(pub, proc) is None
+
+
+def test_R8_R24_dispara_quando_relatores_realmente_diferem() -> None:
+    """Relator legitimamente diferente — ainda dispara."""
+    pub = _pub(
+        siglaTribunal="TJDFT",
+        tipoDocumento="Acórdão",
+        nomeOrgao="Desembargadora ELKE DORIS JUST",
+    )
+    proc = _proc(
+        instancia=INSTANCIA_SEGUNDO_GRAU,
+        relator_no_2o_grau="OUTRO RELATOR",
+    )
+    assert regra_24_relator_faltando(pub, proc) == ALERTA_RELATOR_DESATUALIZADO
+
+
+# --- Regra 19/20 (Cidade) ---
+
+
+def test_R8_R19_NAO_dispara_quando_proc_cidade_tem_uf_sufixo() -> None:
+    """Proc.cidade com sufixo "- DF" — dois lados normalizam pra
+    cidade pura."""
+    pub = _pub(
+        siglaTribunal="TJDFT",
+        nomeOrgao="3ª Vara Cível de Brasília - DF",
+    )
+    proc = _proc(
+        instancia=INSTANCIA_PRIMEIRO_GRAU,
+        cidade="Brasília - DF",
+    )
+    assert regra_19_20_cidade_desatualizada(pub, proc) is None
+
+
+# --- Caso integrado (cenário real do CNJ 0001736-51.2016.5.10.0014) ---
+
+
+def test_R8_cenario_real_cnj_0001736_nao_dispara_vara() -> None:
+    """Reprodução do caso reportado pelo user. Antes do Round 8, este
+    cenário disparava 'Vara desatualizada' em 100% das publicações
+    desse processo (8 publicações ao longo de jan-mai/2026).
+    Depois do Round 8: zero alertas dessa regra.
+    """
+    pub = _pub(
+        siglaTribunal="TRT10",
+        tipoComunicacao="Intimação",
+        tipoDocumento="Decisão",
+        nomeOrgao="14ª Vara do Trabalho de Brasília - DF",
+        nomeClasse="AGRAVO DE PETIÇÃO",
+    )
+    proc = _proc(
+        tribunal="TRT/10",
+        instancia=INSTANCIA_PRIMEIRO_GRAU,
+        vara="14ª Vara do Trabalho de Brasília - DF",
+        cidade="Brasília",
+        fase=FASE_EXECUTIVA,
+        partes_adversas=["Banco do Brasil"],
+    )
+    _, alertas = aplicar_todas_regras(pub, proc)
+    assert ALERTA_VARA_DESATUALIZADA not in alertas
+    assert ALERTA_CIDADE_DESATUALIZADA not in alertas

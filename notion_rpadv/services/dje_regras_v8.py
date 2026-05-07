@@ -914,6 +914,46 @@ def _extrair_relator(orgao: str | None) -> str | None:
     return None
 
 
+# Prefixos comuns que aparecem em ``Proc.relator_no_*`` ou no Pub.Órgão
+# antes do nome. Usado por ``_normalizar_nome_relator`` para tirar o
+# prefixo e comparar só o nome canônico entre Pub e Proc.
+_RX_PREFIXO_RELATOR = re.compile(
+    r"^\s*(?:Gabinete\s+(?:do|da)\s+)?"
+    r"(?:Desembargador[a]?\.?|Des\.?|"
+    r"Juiz[a]?\s+Convocad[oa]|"
+    r"Ministr[oa]\.?|Min\.?)\s+",
+    re.IGNORECASE,
+)
+
+
+def _normalizar_nome_relator(valor: str | None) -> str | None:
+    """Devolve o nome do relator sem prefixo de tratamento.
+
+    Aceita variações comuns que podem aparecer tanto em ``Pub.Órgão``
+    quanto em ``Proc.relator_no_*``:
+
+    - ``"Desembargadora ELKE DORIS JUST"`` → ``"ELKE DORIS JUST"``
+    - ``"Des. Joaquim"``                   → ``"Joaquim"``
+    - ``"Gabinete da Desembargadora X"``   → ``"X"``
+    - ``"Ministro Marco Aurélio"``         → ``"Marco Aurélio"``
+    - ``"ELKE DORIS JUST"`` (sem prefixo)  → ``"ELKE DORIS JUST"``
+    - ``""`` ou ``None``                    → ``None``
+
+    Round 8: usado pela Regra 24 para simetrizar a comparação entre
+    Pub.Órgão (que sempre tem prefixo) e Proc.relator (que pode ou
+    não ter).
+    """
+    if not valor:
+        return None
+    s = str(valor).strip()
+    if not s:
+        return None
+    s = _RX_PREFIXO_RELATOR.sub("", s).strip()
+    if not s:
+        return None
+    return re.sub(r"\s+", " ", s)
+
+
 def _campo_turma_para_instancia(instancia: str) -> str | None:
     """Mapeia Proc.instancia → nome do campo ``turma_no_*`` em Proc."""
     return {
@@ -947,15 +987,25 @@ def regra_19_20_cidade_desatualizada(
     - Explicação: órgão de 1º grau quase sempre nomeia a cidade —
       basta extrair e popular. Divergência indica redistribuição entre
       comarcas (raro) ou cadastro errado.
+
+    Round 8 (2026-05-06): comparação simétrica com tolerância a sufixo
+    "- UF". Antes a regra comparava ``cidade_pub`` extraída via regex
+    com ``cidade_proc`` cru — se Proc.cidade fosse "Brasília - DF",
+    diferia de "Brasília" extraído da Pub e disparava falso-positivo.
+    Agora ambos os lados passam pelo mesmo limpo de UF.
     """
     if processo_record is None:
         return None
     cidade_pub = _extrair_cidade_do_orgao(publicacao.get("nomeOrgao"))
     if not cidade_pub:
         return None
-    cidade_proc = (processo_record.get("cidade") or "").strip()
-    if not cidade_proc:
+    cidade_proc_raw = (processo_record.get("cidade") or "").strip()
+    if not cidade_proc_raw:
         return ALERTA_CIDADE_DESATUALIZADA  # Regra 19
+    # Normalização simétrica: remove sufixo "- UF" se houver, normaliza
+    # espaços. Mesmo tratamento aplicado ao lado da Pub via regex.
+    cidade_proc = re.sub(r"\s*-\s*[A-Z]{2}\s*$", "", cidade_proc_raw)
+    cidade_proc = re.sub(r"\s+", " ", cidade_proc).strip()
     # Comparação case-insensitive
     if cidade_pub.upper() != cidade_proc.upper():
         return ALERTA_CIDADE_DESATUALIZADA  # Regra 20
@@ -974,6 +1024,30 @@ def regra_21_22_vara_desatualizada(
       - 22: Mesma situação, mas Proc.vara populada e diferente do
         normalizado.
     - Alerta: ``Vara desatualizada``.
+
+    Round 8 (2026-05-06): normalização SIMÉTRICA — fix do bug que
+    fazia 100% dos processos com Vara em formato canônico (ex:
+    ``"14ª Vara do Trabalho de Brasília - DF"``) dispararem falso-
+    positivo. Antes só o lado da Pub passava por ``_normalizar_vara``
+    (que captura só o prefixo "Nª Vara X"); o Proc era comparado cru,
+    então "14ª Vara do Trabalho" (do Pub normalizado) sempre divergia
+    de "14ª Vara do Trabalho de Brasília - DF" (Proc cru).
+
+    Tabela do novo comportamento:
+
+    +-----------------------------------+--------------+----------+
+    | Pub.Órgão                         | Proc.vara    | Resultado|
+    +===================================+==============+==========+
+    | "14ª Vara do Trabalho de Bsb -DF" | mesmo        | OK       |
+    | "14ª Vara do Trabalho de Bsb -DF" | "14ª Vara…"  | OK       |
+    | "14ª Vara do Trabalho de Bsb -DF" | "14"         | DISPARA  |
+    | "14ª Vara do Trabalho de Bsb -DF" | ""           | DISPARA  |
+    | "14ª Vara do Trabalho de Bsb -DF" | "3ª Vara C." | DISPARA  |
+    +-----------------------------------+--------------+----------+
+
+    Cadastro com ordinal puro ("14") continua disparando — sinal
+    legítimo de cadastro velho que precisa migrar para o formato
+    canônico.
     """
     if processo_record is None:
         return None
@@ -981,14 +1055,20 @@ def regra_21_22_vara_desatualizada(
         return None
     if instancia_implicada(publicacao) != INSTANCIA_PRIMEIRO_GRAU:
         return None
-    vara_pub = _normalizar_vara(publicacao.get("nomeOrgao"))
-    if not vara_pub:
+    vara_pub_norm = _normalizar_vara(publicacao.get("nomeOrgao"))
+    if not vara_pub_norm:
         return None
-    vara_proc = (processo_record.get("vara") or "").strip()
-    if not vara_proc:
+    vara_proc_raw = (processo_record.get("vara") or "").strip()
+    if not vara_proc_raw:
+        return ALERTA_VARA_DESATUALIZADA  # Regra 21 — vazio
+    vara_proc_norm = _normalizar_vara(vara_proc_raw)
+    if not vara_proc_norm:
+        # Proc.vara cadastrado mas em formato não canônico (ex: ordinal
+        # nu "14", ou string atípica). Comparação canônica impossível
+        # → trata como desatualizado para forçar revisão.
         return ALERTA_VARA_DESATUALIZADA
-    if vara_pub.upper() != vara_proc.upper():
-        return ALERTA_VARA_DESATUALIZADA
+    if vara_pub_norm.upper() != vara_proc_norm.upper():
+        return ALERTA_VARA_DESATUALIZADA  # Regra 22 — divergente
     return None
 
 
@@ -1005,6 +1085,12 @@ def regra_23_turma_desatualizada(
     - Explicação: quando Pub.Órgão é gabinete (não turma explícita),
       a Tabela auxiliar Desembargador→Turma não é alimentada por esta
       regra (X.9 do doc v8). Apenas turmas/câmaras explícitas disparam.
+
+    Round 8 (2026-05-06): normalização SIMÉTRICA. Mesmo bug e fix da
+    Regra 21/22: o cadastro hoje guarda nome completo ("5ª Turma
+    Cível"), o regex extrai exatamente isso da Pub, mas a comparação
+    cru com o lado Proc também aplica o regex agora. Cadastro com
+    ordinal nu ("5") sai como DISPARA — sinal de cadastro velho.
     """
     if processo_record is None:
         return None
@@ -1017,10 +1103,15 @@ def regra_23_turma_desatualizada(
     campo = _campo_turma_para_instancia(instancia_proc)
     if not campo:
         return None
-    turma_proc = (processo_record.get(campo) or "").strip()
-    if not turma_proc:
+    turma_proc_raw = (processo_record.get(campo) or "").strip()
+    if not turma_proc_raw:
+        return ALERTA_TURMA_DESATUALIZADA  # vazio
+    turma_proc_norm = _extrair_turma_camara(turma_proc_raw)
+    if not turma_proc_norm:
+        # Cadastro em formato não canônico (ex: ordinal nu "5", ou
+        # string atípica). Trata como desatualizado para revisão.
         return ALERTA_TURMA_DESATUALIZADA
-    if turma_pub.upper() != turma_proc.upper():
+    if turma_pub.upper() != turma_proc_norm.upper():
         return ALERTA_TURMA_DESATUALIZADA
     return None
 
@@ -1037,6 +1128,12 @@ def regra_24_relator_faltando(
       Convocad[oa]|Ministr[oa]) (.+)`` E o campo ``Proc.relator_no_*``
       correspondente está vazio OU diferente.
     - Alerta: ``Relator desatualizado``.
+
+    Round 8 (2026-05-06): normalização SIMÉTRICA via
+    ``_normalizar_nome_relator`` que tira prefixos de tratamento
+    ("Desembargadora", "Des.", "Ministro" etc.) dos dois lados antes
+    de comparar. Antes, Proc.relator com prefixo (ex: "Des. ELKE
+    DORIS JUST") divergia de "ELKE DORIS JUST" extraído da Pub.
     """
     if processo_record is None:
         return None
@@ -1049,10 +1146,16 @@ def regra_24_relator_faltando(
     campo = _campo_relator_para_instancia(instancia_proc)
     if not campo:
         return None
-    relator_proc = (processo_record.get(campo) or "").strip()
-    if not relator_proc:
+    relator_proc_raw = (processo_record.get(campo) or "").strip()
+    if not relator_proc_raw:
+        return ALERTA_RELATOR_DESATUALIZADO  # vazio
+    # Aplica a mesma normalização nos dois lados — o helper aceita
+    # tanto "Desembargadora ELKE…" quanto "ELKE…" puro.
+    relator_pub_norm = _normalizar_nome_relator(relator_pub)
+    relator_proc_norm = _normalizar_nome_relator(relator_proc_raw)
+    if relator_pub_norm is None or relator_proc_norm is None:
         return ALERTA_RELATOR_DESATUALIZADO
-    if relator_pub.upper() != relator_proc.upper():
+    if relator_pub_norm.upper() != relator_proc_norm.upper():
         return ALERTA_RELATOR_DESATUALIZADO
     return None
 
@@ -1352,22 +1455,21 @@ def regra_38_capturar_link_externo(
 ) -> str | None:
     """Regra 38 — Link externo vazio.
 
+    Round 8 (2026-05-06): **DESATIVADA** por decisão de produto.
+    93% das publicações disparavam o alerta, virou ruído. A regra
+    permanece no módulo (não removida) para preservar o número
+    canônico do doc v8 e facilitar reativação futura caso se
+    decida construir URL heurística automaticamente.
+
+    Histórico da regra (mantido na docstring):
+
     - Condições: ``Proc.link_externo`` vazio **e** ``Pub.Link``
       populado.
     - Alerta: ``Capturar link externo``.
     - Explicação: sugerir construção heurística de URL para o processo
-      a partir do domínio do ``Pub.Link`` + CNJ. Não prioritário —
-      mais um auxílio operacional do que um erro a corrigir.
+      a partir do domínio do ``Pub.Link`` + CNJ.
     """
-    if processo_record is None:
-        return None
-    link_proc = (processo_record.get("link_externo") or "").strip()
-    if link_proc:
-        return None
-    link_pub = (publicacao.get("link") or "").strip()
-    if not link_pub:
-        return None
-    return ALERTA_CAPTURAR_LINK_EXTERNO
+    return None
 
 
 def regra_2_capturar_numeracao_stj_tst(
