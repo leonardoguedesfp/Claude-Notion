@@ -274,8 +274,9 @@ def test_dados_parciais_quando_um_endpoint_vazio() -> None:
     # Mas propriedades derivadas do menor/maior grau encontrado (G1, G2)
     assert res.propriedades_sugeridas["Tribunal"] == "TRT/10"
     assert res.propriedades_sugeridas["Instância"] == INSTANCIA_2G  # G2 é o maior disponível
-    # Sem GS de stj/tst → Número STJ/TST e Turma STJ/TST ficam None
-    assert res.propriedades_sugeridas["Número STJ/TST"] is None
+    # Sem GS de stj/tst → Número STJ e Turma STJ/TST ficam None
+    # Round 9: "Número STJ/TST" foi renomeado para "Número STJ"
+    assert res.propriedades_sugeridas["Número STJ"] is None
     assert res.propriedades_sugeridas["Turma no STJ/TST"] is None
 
 
@@ -739,7 +740,9 @@ def test_numero_do_processo_volta_com_mascara_apos_enriquecer() -> None:
 
 
 def test_numero_stj_tst_tambem_volta_com_mascara() -> None:
-    """Mesmo tratamento para Número STJ/TST (vem do source GS-stj/tst)."""
+    """Mesmo tratamento para Número STJ (vem do source GS-stj/tst).
+    Round 9: a propriedade no Notion virou "Número STJ" (TST mantém
+    o CNJ original do tribunal de origem)."""
     fake_g1 = {
         "numeroProcesso": "00007892220195100004",
         "tribunal": "TRT10", "grau": "G1",
@@ -757,7 +760,7 @@ def test_numero_stj_tst_tambem_volta_com_mascara() -> None:
         _processo(tribunal="TRT/10", instancia="TST"),
         client=client,
     )
-    assert res.propriedades_sugeridas["Número STJ/TST"] == "0000789-22.2019.5.10.0004"
+    assert res.propriedades_sugeridas["Número STJ"] == "0000789-22.2019.5.10.0004"
     assert res.propriedades_sugeridas["Número do processo"] == "0000789-22.2019.5.10.0004"
 
 

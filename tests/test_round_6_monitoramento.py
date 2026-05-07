@@ -602,16 +602,19 @@ def test_R6_R27_nao_dispara_se_proc_liquidacao_pendente() -> None:
 # ===========================================================================
 
 
-def test_R6_R28_dispara_cognitiva_em_proc_executiva() -> None:
+def test_R9_R28_NAO_dispara_mais_cognitiva_em_proc_executiva() -> None:
+    """Round 9: R28 desativada — Classe permanente do CNJ no PJe
+    trabalhista gerava 240 FP de 247 alertas."""
     pub = _pub(nomeClasse="AÇÃO TRABALHISTA - RITO ORDINÁRIO")
     proc = _proc(instancia="1º grau", fase=FASE_EXECUTIVA)
-    assert regra_28_fase_cognitiva_contradita_por_classe(pub, proc) == ALERTA_FASE_DESATUALIZADA_COGNITIVA
+    assert regra_28_fase_cognitiva_contradita_por_classe(pub, proc) is None
 
 
-def test_R6_R28_dispara_cognitiva_em_proc_liquidacao() -> None:
+def test_R9_R28_NAO_dispara_mais_cognitiva_em_proc_liquidacao() -> None:
+    """Round 9: R28 desativada."""
     pub = _pub(nomeClasse="PROCEDIMENTO COMUM CÍVEL")
     proc = _proc(instancia="1º grau", fase=FASE_LIQUIDACAO)
-    assert regra_28_fase_cognitiva_contradita_por_classe(pub, proc) == ALERTA_FASE_DESATUALIZADA_COGNITIVA
+    assert regra_28_fase_cognitiva_contradita_por_classe(pub, proc) is None
 
 
 def test_R6_R28_nao_dispara_se_proc_cognitiva() -> None:
@@ -863,26 +866,29 @@ def test_R6_processo_nao_cadastrado_NAO_dispara_se_processo_cadastrado() -> None
 
 
 def test_R7a_R2_dispara_pub_stj_proc_sem_numero() -> None:
+    """Round 9: usa snake_case `numero_stj` (renomeado de `numero_stj_tst`)."""
     pub = _pub(siglaTribunal="STJ")
-    proc = _proc(instancia=INSTANCIA_STJ, numero_stj_tst="")
+    proc = _proc(instancia=INSTANCIA_STJ, numero_stj="")
     assert regra_2_capturar_numeracao_stj_tst(pub, proc) == ALERTA_CAPTURAR_NUMERACAO_STJ_TST
 
 
-def test_R7a_R2_dispara_pub_tst_proc_sem_numero() -> None:
+def test_R9_R2_NAO_dispara_pub_tst() -> None:
+    """Round 9 (2026-05-07): Pub.TST NÃO dispara mais — TST mantém o
+    CNJ original do tribunal de origem, sem numeração nova."""
     pub = _pub(siglaTribunal="TST")
-    proc = _proc(instancia=INSTANCIA_TST, numero_stj_tst="")
-    assert regra_2_capturar_numeracao_stj_tst(pub, proc) == ALERTA_CAPTURAR_NUMERACAO_STJ_TST
+    proc = _proc(instancia=INSTANCIA_TST, numero_stj="")
+    assert regra_2_capturar_numeracao_stj_tst(pub, proc) is None
 
 
 def test_R7a_R2_NAO_dispara_se_numero_existe() -> None:
     pub = _pub(siglaTribunal="STJ")
-    proc = _proc(instancia=INSTANCIA_STJ, numero_stj_tst="REsp 123456/DF")
+    proc = _proc(instancia=INSTANCIA_STJ, numero_stj="REsp 123456/DF")
     assert regra_2_capturar_numeracao_stj_tst(pub, proc) is None
 
 
 def test_R7a_R2_NAO_dispara_para_tribunal_local() -> None:
     pub = _pub(siglaTribunal="TJDFT")
-    proc = _proc(instancia=INSTANCIA_PRIMEIRO_GRAU, numero_stj_tst="")
+    proc = _proc(instancia=INSTANCIA_PRIMEIRO_GRAU, numero_stj="")
     assert regra_2_capturar_numeracao_stj_tst(pub, proc) is None
 
 
@@ -891,15 +897,24 @@ def test_R7a_R2_NAO_dispara_sem_processo_cadastrado() -> None:
     assert regra_2_capturar_numeracao_stj_tst(pub, None) is None
 
 
-# ===========================================================================
-# Round 7a — Regra 3: Capturar numeração STF
-# ===========================================================================
+def test_R9_R2_alerta_renomeado_para_capturar_numeracao_stj() -> None:
+    """Round 9: a constante manteve o nome para retro-compat dos
+    imports, mas o valor agora é 'Capturar numeração STJ'."""
+    assert ALERTA_CAPTURAR_NUMERACAO_STJ_TST == "Capturar numeração STJ"
 
 
-def test_R7a_R3_dispara_pub_stf_proc_sem_numero() -> None:
+# ===========================================================================
+# Round 9 (2026-05-07) — Regra 3: Capturar numeração STF (DESATIVADA)
+# ===========================================================================
+# A propriedade Número STF foi removida do schema de Processos no Notion
+# (o STF não atribui numeração nova). A regra virou stub.
+
+
+def test_R9_R3_NAO_dispara_mais_pub_stf_proc_sem_numero() -> None:
+    """Cenário que antes disparava — agora retorna None sempre."""
     pub = _pub(siglaTribunal="STF")
     proc = _proc(instancia="STF", numero_stf="")
-    assert regra_3_capturar_numeracao_stf(pub, proc) == ALERTA_CAPTURAR_NUMERACAO_STF
+    assert regra_3_capturar_numeracao_stf(pub, proc) is None
 
 
 def test_R7a_R3_NAO_dispara_se_numero_existe() -> None:
@@ -1522,34 +1537,36 @@ def test_R7d_R9_NAO_dispara_para_recurso() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_R7d_R10_dispara_cliente_polo_ativo_proc_reu() -> None:
+def test_R9_R10_NAO_dispara_mais_cliente_polo_ativo_proc_reu() -> None:
+    """Round 9: regra desativada. Cenário antes-FP agora retorna None."""
     pub = _pub_destinatarios(
-        ("JOSÉ DA SILVA SAUTNER", "A"),  # cliente em Polo Ativo
+        ("JOSÉ DA SILVA SAUTNER", "A"),
         ("BANCO DO BRASIL SA", "P"),
     )
     proc = _proc(
         tipo_de_processo="Principal",
         instancia=INSTANCIA_PRIMEIRO_GRAU,
-        posicao_do_cliente="Réu",  # mas cadastrado como Réu
+        posicao_do_cliente="Réu",
     )
     assert regra_10_polo_inconsistente(
         pub, proc, indice_clientes=_INDICE_CLIENTES_MOCK,
-    ) == ALERTA_CONFERIR_POSICAO_DO_CLIENTE
+    ) is None
 
 
-def test_R7d_R10_dispara_cliente_polo_passivo_proc_autor() -> None:
+def test_R9_R10_NAO_dispara_mais_cliente_polo_passivo_proc_autor() -> None:
+    """Round 9: regra desativada. Cenário antes-FP agora retorna None."""
     pub = _pub_destinatarios(
         ("AUTOR ADVERSÁRIO", "A"),
-        ("JOSÉ DA SILVA SAUTNER", "P"),  # cliente em Polo Passivo
+        ("JOSÉ DA SILVA SAUTNER", "P"),
     )
     proc = _proc(
         tipo_de_processo="Principal",
         instancia=INSTANCIA_PRIMEIRO_GRAU,
-        posicao_do_cliente="Autor",  # mas cadastrado como Autor
+        posicao_do_cliente="Autor",
     )
     assert regra_10_polo_inconsistente(
         pub, proc, indice_clientes=_INDICE_CLIENTES_MOCK,
-    ) == ALERTA_CONFERIR_POSICAO_DO_CLIENTE
+    ) is None
 
 
 def test_R7d_R10_NAO_dispara_se_polo_consistente() -> None:
@@ -1903,10 +1920,13 @@ def _pub_previ_resp(**kwargs) -> dict:
     return base
 
 
-def test_R7f_R32_dispara_previ_resp_decisao_sem_sobrestamento() -> None:
+def test_R9_R32_NAO_dispara_mais() -> None:
+    """Round 9: R32 desativada — 41 dos 43 alertas eram FP. A
+    heurística usava proxies fracos (PREVI, RESP) sem leitura real
+    do texto."""
     pub = _pub_previ_resp()
     proc = _proc(status="Ativo", tema_955_sobrestado=False)
-    assert regra_32_conferir_tema_955(pub, proc) == ALERTA_CONFERIR_TEMA_955
+    assert regra_32_conferir_tema_955(pub, proc) is None
 
 
 def test_R7f_R32_NAO_dispara_se_status_arquivado_tema955() -> None:
@@ -2182,8 +2202,12 @@ def test_R8_R23_NAO_dispara_quando_proc_tem_nome_completo_canonico() -> None:
     assert regra_23_turma_desatualizada(pub, proc) is None
 
 
-def test_R8_R23_dispara_quando_proc_tem_ordinal_velho() -> None:
-    """Cadastro com ordinal nu ("5") — dispara."""
+def test_R9_R23_NAO_dispara_quando_proc_tem_ordinal_velho() -> None:
+    """Round 9: comparação por ordinal — '5' (cadastro velho) é
+    equivalente a '5ª Turma Cível' (Pub) pois ambos extraem ord=5.
+    Antes do Round 9, esse cenário disparava 'Turma desatualizada'
+    em ~5 processos com formato ordinal residual de migração antiga.
+    """
     pub = _pub(
         siglaTribunal="TJDFT",
         tipoDocumento="Acórdão",
@@ -2192,6 +2216,35 @@ def test_R8_R23_dispara_quando_proc_tem_ordinal_velho() -> None:
     proc = _proc(
         instancia=INSTANCIA_SEGUNDO_GRAU,
         turma_no_2o_grau="5",
+    )
+    assert regra_23_turma_desatualizada(pub, proc) is None
+
+
+def test_R9_R23_NAO_dispara_quando_proc_tem_float_string() -> None:
+    """Round 9: '5.0' (resíduo de migração) também é equivalente a
+    '5ª Turma Cível' (Pub) — ambos ord=5."""
+    pub = _pub(
+        siglaTribunal="TJDFT",
+        tipoDocumento="Acórdão",
+        nomeOrgao="5ª Turma Cível",
+    )
+    proc = _proc(
+        instancia=INSTANCIA_SEGUNDO_GRAU,
+        turma_no_2o_grau="5.0",
+    )
+    assert regra_23_turma_desatualizada(pub, proc) is None
+
+
+def test_R9_R23_dispara_quando_ordinais_diferem() -> None:
+    """Round 9: ordinal diferente continua disparando — '6' vs '5'."""
+    pub = _pub(
+        siglaTribunal="TJDFT",
+        tipoDocumento="Acórdão",
+        nomeOrgao="5ª Turma Cível",
+    )
+    proc = _proc(
+        instancia=INSTANCIA_SEGUNDO_GRAU,
+        turma_no_2o_grau="6",
     )
     assert regra_23_turma_desatualizada(pub, proc) == ALERTA_TURMA_DESATUALIZADA
 
@@ -2302,3 +2355,160 @@ def test_R8_cenario_real_cnj_0001736_nao_dispara_vara() -> None:
     _, alertas = aplicar_todas_regras(pub, proc)
     assert ALERTA_VARA_DESATUALIZADA not in alertas
     assert ALERTA_CIDADE_DESATUALIZADA not in alertas
+
+
+# ===========================================================================
+# Round 9 (2026-05-07) — Regressões dos fixes de Regra 11 (BB / CASSI / BB Adm)
+# ===========================================================================
+
+
+def _pub_destinatarios_r11(*destinatarios):
+    return _pub(destinatarios=[
+        {"nome": n, "polo": p} for n, p in destinatarios
+    ])
+
+
+def test_R9_R11_BB_NAO_dispara_em_previ_razao_social() -> None:
+    """Bug do Round 8: 'CAIXA DE PREVIDÊNCIA DOS FUNCS DO BANCO DO
+    BRASIL' (PREVI razão social) disparava 'BB ausente'. Round 9
+    neutraliza essa string antes do match de BB."""
+    pub = _pub_destinatarios_r11(
+        ("CAIXA DE PREVIDÊNCIA DOS FUNCS DO BANCO DO BRASIL", "P"),
+        ("AUTOR FULANO", "A"),
+    )
+    proc = _proc(partes_adversas=["PREVI"])
+    alertas = regra_11_partes_adversas_ausentes(pub, proc)
+    assert ALERTA_PARTE_ADVERSA_BB not in alertas
+
+
+def test_R9_R11_BB_dispara_quando_BB_real_aparece() -> None:
+    """BB real (banco) ainda dispara — não removemos a regra, só
+    neutralizamos PREVI/CASSI razão social."""
+    pub = _pub_destinatarios_r11(
+        ("BANCO DO BRASIL S.A.", "P"),
+        ("AUTOR FULANO", "A"),
+    )
+    proc = _proc(partes_adversas=["PREVI"])
+    alertas = regra_11_partes_adversas_ausentes(pub, proc)
+    assert ALERTA_PARTE_ADVERSA_BB in alertas
+
+
+def test_R9_R11_BB_NAO_dispara_em_cassi_razao_social() -> None:
+    """CASSI razão social ('CAIXA DE ASSISTÊNCIA DOS FUNCS DO BANCO
+    DO BRASIL') também é neutralizada."""
+    pub = _pub_destinatarios_r11(
+        ("CAIXA DE ASSISTÊNCIA DOS FUNCIONARIOS DO BANCO DO BRASIL", "P"),
+        ("AUTOR FULANO", "A"),
+    )
+    proc = _proc(partes_adversas=["CASSI"])
+    alertas = regra_11_partes_adversas_ausentes(pub, proc)
+    assert ALERTA_PARTE_ADVERSA_BB not in alertas
+
+
+def test_R9_R11_CASSI_NAO_dispara_em_nome_proprio() -> None:
+    """Bug do Round 8: 'ALESSANDRO CASSIO' / 'MARISA DE CASSIA'
+    matchavam 'CASSI'. Round 9 exige word-boundary."""
+    pub = _pub_destinatarios_r11(
+        ("ALESSANDRO CASSIO DA SILVA", "P"),
+    )
+    proc = _proc(partes_adversas=[])
+    alertas = regra_11_partes_adversas_ausentes(pub, proc)
+    assert ALERTA_PARTE_ADVERSA_CASSI not in alertas
+
+
+def test_R9_R11_CASSI_dispara_em_nome_canonico() -> None:
+    """Match de CASSI canônico continua funcionando."""
+    pub = _pub_destinatarios_r11(("CASSI", "P"))
+    proc = _proc(partes_adversas=[])
+    alertas = regra_11_partes_adversas_ausentes(pub, proc)
+    assert ALERTA_PARTE_ADVERSA_CASSI in alertas
+
+
+def test_R9_R11_BB_Consorcios_reconhece_variante_administradora() -> None:
+    """Bug do Round 8: 'BB administradora de Consórcios S.A'
+    cadastrado em Proc não era reconhecido como equivalente ao
+    canônico 'BB Adm. Consórcios'. Round 9 normaliza ortografia."""
+    pub = _pub_destinatarios_r11(
+        ("BB ADMINISTRADORA DE CONSÓRCIOS S.A.", "P"),
+    )
+    proc = _proc(partes_adversas=["BB administradora de Consórcios S.A"])
+    alertas = regra_11_partes_adversas_ausentes(pub, proc)
+    assert ALERTA_PARTE_ADVERSA_BB_CONSORCIOS not in alertas
+
+
+# ===========================================================================
+# Round 9 (2026-05-07) — Regressões dos fixes de Regra 9 (matching cliente)
+# ===========================================================================
+#
+# A base de Clientes foi importada sem acentos/cedilhas (DEBORA, MENDONCA,
+# JOAO, etc); o PJe devolve com acentos (DÉBORA, MENDONÇA, JOÃO). Sem
+# normalização tolerante, a Regra 9 disparava FP eternamente.
+
+
+def test_R9_R9_match_cliente_tolera_cedilha() -> None:
+    """Cadastro 'MENDONCA' bate com pub 'MENDONÇA'."""
+    from notion_rpadv.services.dje_regras_v8 import _eh_match_cliente
+    assert _eh_match_cliente("MARIA MENDONCA", "MARIA MENDONÇA")
+    assert _eh_match_cliente("MARIA MENDONÇA", "MARIA MENDONCA")
+
+
+def test_R9_R9_match_cliente_tolera_acento() -> None:
+    """Cadastro 'DEBORA' bate com pub 'DÉBORA'."""
+    from notion_rpadv.services.dje_regras_v8 import _eh_match_cliente
+    assert _eh_match_cliente("DEBORA SOUZA", "DÉBORA SOUZA")
+
+
+def test_R9_R9_match_cliente_tolera_apostrofo() -> None:
+    """'D'ARC' bate com 'D ARC' (apóstrofo vira espaço)."""
+    from notion_rpadv.services.dje_regras_v8 import _eh_match_cliente
+    assert _eh_match_cliente("MARIA D'ARC SOUZA", "MARIA D ARC SOUZA")
+    assert _eh_match_cliente("MARIA D ARC SOUZA", "MARIA D'ARC SOUZA")
+
+
+def test_R9_R9_match_cliente_iniciais_sigilo_de_justica() -> None:
+    """'M.E.N.L.M.' bate com 'MARIA EDUARDA NOGUEIRA LIMA MELLO'
+    (sigilo)."""
+    from notion_rpadv.services.dje_regras_v8 import _eh_match_cliente
+    assert _eh_match_cliente(
+        "MARIA EDUARDA NOGUEIRA LIMA MELLO",
+        "M.E.N.L.M.",
+    )
+
+
+def test_R9_R9_match_cliente_tokens_subset_sufixo_faltando() -> None:
+    """Cadastro com sobrenome de casada cortado na pub."""
+    from notion_rpadv.services.dje_regras_v8 import _eh_match_cliente
+    assert _eh_match_cliente(
+        "MARIA SILVA SANTOS",       # cadastro
+        "MARIA SILVA SANTOS PEREIRA",  # pub (acrescentou sobrenome)
+    )
+    assert _eh_match_cliente(
+        "MARIA SILVA SANTOS PEREIRA",  # cadastro
+        "MARIA SILVA SANTOS",       # pub (cortou sobrenome)
+    )
+
+
+def test_R9_R9_match_cliente_NAO_match_pessoas_diferentes() -> None:
+    """Cuidado pra não fazer match overzealous — nomes
+    significativamente diferentes não devem bater."""
+    from notion_rpadv.services.dje_regras_v8 import _eh_match_cliente
+    assert not _eh_match_cliente("MARIA SILVA", "JOÃO PEREIRA")
+    assert not _eh_match_cliente("ANA SOUZA", "ANA SOUSA OLIVEIRA SANTOS COSTA")  # tokens não subsetam
+
+
+# ===========================================================================
+# Round 9 (2026-05-07) — Cenário composto BB + PREVI ausentes simultâneos
+# ===========================================================================
+
+
+def test_R9_R11_pub_com_BB_e_PREVI_dispara_so_o_que_falta() -> None:
+    """Cliente cadastrado tem só PREVI; pub traz BB e PREVI razão
+    social. Esperado: dispara só BB ausente (PREVI já está)."""
+    pub = _pub_destinatarios_r11(
+        ("BANCO DO BRASIL S.A.", "P"),
+        ("CAIXA DE PREVIDÊNCIA DOS FUNCS DO BANCO DO BRASIL", "P"),
+    )
+    proc = _proc(partes_adversas=["PREVI"])
+    alertas = regra_11_partes_adversas_ausentes(pub, proc)
+    assert ALERTA_PARTE_ADVERSA_BB in alertas
+    assert ALERTA_PARTE_ADVERSA_PREVI not in alertas

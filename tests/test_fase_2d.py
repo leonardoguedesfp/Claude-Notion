@@ -99,13 +99,15 @@ def test_FASE2D_title_key_processos_is_numero_do_processo() -> None:
 
 
 def test_FASE2D_schemas_processos_returns_37_keys(reset_registry) -> None:
-    """37 propriedades reais (era 38 antes de Leonardo dropar 'Criado em 1').
-    Sem 'cnj', 'valor_causa', 'criado_em_1'."""
+    """36 propriedades reais (era 37 antes de Round 9 (2026-05-07)
+    remover 'Número STF', e 38 antes de Leonardo dropar 'Criado em 1').
+    Sem 'cnj', 'valor_causa', 'criado_em_1', 'numero_stf'."""
     _populate_processos_in_registry()
     proc = SCHEMAS["Processos"]
     keys = set(proc.keys())
-    assert len(keys) == 37
+    assert len(keys) == 36
     assert "numero_do_processo" in keys
+    assert "numero_stf" not in keys, "Número STF removido no Round 9"
     for obsolete in _OBSOLETE_KEYS:
         assert obsolete not in keys, f"slug obsoleto {obsolete!r} presente"
 

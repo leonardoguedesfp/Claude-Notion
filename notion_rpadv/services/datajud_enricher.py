@@ -22,7 +22,7 @@ Componente 2 da feat/datajud-fase-1):
 | Data do trânsito em julgado (cognitiva)| menor (fallback maior) | alta |
 | Status                                 | maior          | alta      |
 | Fase                                   | maior          | alta      |
-| Número STJ/TST                         | STJ ou TST     | alta      |
+| Número STJ                             | STJ ou TST     | alta      |
 | Turma no 2º grau                       | G2             | alta      |
 | Turma no STJ/TST                       | STJ ou TST     | alta      |
 | Relator no 2º grau                     | G2             | **baixa** |
@@ -244,7 +244,7 @@ REGRAS_ORIGEM: Final[tuple[RegraOrigem, ...]] = (
     RegraOrigem("Data do trânsito em julgado (cognitiva)",  "menor"),
     RegraOrigem("Status",                                   "maior"),
     RegraOrigem("Fase",                                     "maior"),
-    RegraOrigem("Número STJ/TST",                           "especifico", "STJ ou TST"),
+    RegraOrigem("Número STJ",                               "especifico", "STJ ou TST"),
     RegraOrigem("Turma no 2º grau",                         "especifico", "G2"),
     RegraOrigem("Turma no STJ/TST",                         "especifico", "STJ ou TST"),
     RegraOrigem("Relator no 2º grau",                       "especifico", "G2",         "baixa"),
@@ -971,11 +971,15 @@ def _aplicar_regras(
     # 9. Fase (grau alvo do cadastro; via classe + códigos)
     out["Fase"] = derivar_fase(maior_src[1] if maior_src else None)
 
-    # 10. Número STJ/TST (específico — só GS-stj/tst).
+    # 10. Número STJ (específico — só GS-stj/tst).
     # Aplica máscara CNJ pelo mesmo motivo do "Número do processo".
+    # Round 9 (2026-05-07): renomeado de "Número STJ/TST" para "Número
+    # STJ" — TST mantém o CNJ original do tribunal de origem (não atribui
+    # número novo), então o campo é específico do STJ. O slot continua
+    # atendendo ambos endpoints (stj_tst_src) por simetria de captura.
     if stj_tst_src is not None:
         np = stj_tst_src[1].get("numeroProcesso")
-        out["Número STJ/TST"] = formatar_cnj_com_mascara(str(np)) if np else None
+        out["Número STJ"] = formatar_cnj_com_mascara(str(np)) if np else None
 
     # 11. Turma 2º grau
     if g2_src is not None:

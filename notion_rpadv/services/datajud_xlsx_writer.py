@@ -437,7 +437,10 @@ def gerar_xlsx(
               Atualizado em (last_edited_time), Criado em (created_time).
             - 4 textos: Detalhamento da ação, Observações,
               Turma no STF, Relator no STF.
-            - 2 numerações: ID Legal One, Número STF.
+            - 1 numeração: ID Legal One.
+              (Round 9 (2026-05-07): "Número STF" removido do schema
+              de Processos no Notion — o STF reaproveita o CNJ do
+              tribunal de origem.)
             - 1 url: Link externo.
 
         Todas vão pra coluna ▸ atual ocultada. O operador pode desocultar

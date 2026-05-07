@@ -95,7 +95,7 @@ def _schema_processos_minimo() -> dict[str, _SpecMock]:
                 "Liquidação de sentença", "Executiva",
                 "TJ - sentença não será executada"),
     )
-    out["numero_stj_tst"]      = _spec("Número STJ/TST", "rich_text")
+    out["numero_stj"]          = _spec("Número STJ", "rich_text")
     out["turma_2g"]            = _spec("Turma no 2º grau", "rich_text")
     out["turma_stj_tst"]       = _spec("Turma no STJ/TST", "rich_text")
     out["relator_2g"]          = _spec("Relator no 2º grau", "rich_text")

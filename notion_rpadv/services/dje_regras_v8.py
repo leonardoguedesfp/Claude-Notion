@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from typing import Any
 
 from notion_rpadv.services.dje_notion_mappings import (
@@ -82,7 +83,15 @@ ALERTA_PARTE_ADVERSA_BRADESCO_SAUDE: str = "Bradesco Saúde ausente em partes ad
 ALERTA_PARTE_ADVERSA_BB_CONSORCIOS: str = "BB Adm. Consórcios ausente em partes adversas"
 
 # Regras 2-3 — capturar numerações de tribunais superiores
-ALERTA_CAPTURAR_NUMERACAO_STJ_TST: str = "Capturar numeração STJ/TST"
+# Round 9 (2026-05-07): renomeado "Número STJ/TST" → "Número STJ" no Notion
+# (TST mantém o CNJ original); o alerta perdeu o "/TST" em paralelo. A
+# constante mantém o nome ALERTA_CAPTURAR_NUMERACAO_STJ_TST para
+# retro-compat dos imports, mas o valor agora é "Capturar numeração STJ".
+ALERTA_CAPTURAR_NUMERACAO_STJ_TST: str = "Capturar numeração STJ"
+# Round 9: alerta de Capturar numeração STF mantido como constante para
+# preservar a numeração canônica do doc v8, mas a regra correspondente
+# (regra_3) virou stub — não emite mais. Pode ser removido do select
+# Alerta contadoria (app) no Notion.
 ALERTA_CAPTURAR_NUMERACAO_STF: str = "Capturar numeração STF"
 
 # Regras 12-13 — Tribunal de origem
@@ -693,33 +702,22 @@ def regra_32_conferir_tema_955(
     publicacao: dict[str, Any],
     processo_record: dict[str, Any] | None,
 ) -> str | None:
-    """Regra 32 — Sobrestamento Tema 955 não refletido.
+    """Regra 32 — Conferir Tema 955.
 
-    - Condições: ``Pub.Partes`` contém PREVI **e** ``Pub.Classe`` em
-      RESP/AgRESP **e** ``Pub.Tipo de documento = Decisão`` **e**
-      ``Proc.status ≠ Arquivado provisoriamente (tema 955)`` **e**
+    Round 9 (2026-05-07): **REMOVIDA** por decisão de produto. 41 dos
+    43 alertas eram FP (95% das pubs com a tag não mencionam "Tema
+    955" no texto). A heurística usa proxies fracos (PREVI, RESP) que
+    disparam demais. Função mantida no módulo retornando ``None``.
+
+    Histórico (mantido na docstring):
+
+    - Condições: ``Pub.Partes`` contém PREVI E ``Pub.Classe`` em
+      RESP/AgRESP E ``Pub.Tipo de documento = Decisão`` E
+      ``Proc.status ≠ Arquivado provisoriamente (tema 955)`` E
       ``Proc.tema_955_sobrestado=False``.
     - Alerta: ``Conferir Tema 955``.
-    - Explicação: heurística (não confirma). Suspensão por Tema 955
-      normalmente é declarada no texto, e detecção robusta exigiria
-      leitura do Texto. Disparar revisão manual.
     """
-    if processo_record is None:
-        return None
-    classe = (publicacao.get("nomeClasse") or "").strip().upper()
-    if classe not in _CLASSES_RECURSO_ESPECIAL:
-        return None
-    tipo_doc = mapear_tipo_documento(publicacao.get("tipoDocumento"))
-    if tipo_doc != "Decisão":
-        return None
-    if not _texto_partes_pub_contem_previ(publicacao):
-        return None
-    status = (processo_record.get("status") or "").strip()
-    if status == STATUS_ARQUIVADO_TEMA_955:
-        return None
-    if processo_record.get("tema_955_sobrestado"):
-        return None
-    return ALERTA_CONFERIR_TEMA_955
+    return None
 
 
 def regra_33_capturar_data_distribuicao(
@@ -1072,6 +1070,38 @@ def regra_21_22_vara_desatualizada(
     return None
 
 
+def _ordinal_de_turma(valor: str | None) -> int | None:
+    """Extrai o ordinal numérico (int) do conteúdo de Turma.
+
+    Aceita:
+    - ``"5ª Turma"``         → 5
+    - ``"5ª Turma Cível"``   → 5
+    - ``"5"``                → 5
+    - ``"5.0"``              → 5  (float-string de migração antiga)
+    - ``"5ª"``               → 5
+    - ``"Gabinete X"``       → None
+    - vazio / None           → None
+
+    Round 9 (2026-05-07): pra Regra 23 comparar ordinais ao invés de
+    strings, tolerando variações ortográficas e residuos de migração.
+
+    Implementação: ``(?<!\\d)(\\d+)(?!\\d)`` (lookbehind/lookahead por
+    não-dígito) ao invés de ``\\b\\d+\\b``, porque ``\\b`` em Unicode
+    NÃO casa entre ``2`` e ``ª`` (ambos são word chars), então o
+    pattern original falhava em ``"2ª Turma"``.
+    """
+    if not valor:
+        return None
+    s = str(valor).strip()
+    if not s:
+        return None
+    # Primeiro grupo de dígitos sem dígito ao redor (pra "5.0" pegar 5)
+    m = re.search(r"(?<!\d)(\d+)(?!\d)", s)
+    if m:
+        return int(m.group(1))
+    return None
+
+
 def regra_23_turma_desatualizada(
     publicacao: dict[str, Any],
     processo_record: dict[str, Any] | None,
@@ -1086,11 +1116,14 @@ def regra_23_turma_desatualizada(
       a Tabela auxiliar Desembargador→Turma não é alimentada por esta
       regra (X.9 do doc v8). Apenas turmas/câmaras explícitas disparam.
 
-    Round 8 (2026-05-06): normalização SIMÉTRICA. Mesmo bug e fix da
-    Regra 21/22: o cadastro hoje guarda nome completo ("5ª Turma
-    Cível"), o regex extrai exatamente isso da Pub, mas a comparação
-    cru com o lado Proc também aplica o regex agora. Cadastro com
-    ordinal nu ("5") sai como DISPARA — sinal de cadastro velho.
+    Round 9 (2026-05-07): comparação por ORDINAL ao invés de string
+    completa. Tolera:
+    - Pub ``"5ª Turma"`` vs Proc ``"5ª Turma Cível"`` → ambos ord=5
+    - Pub ``"5ª Turma Cível"`` vs Proc ``"5"`` → ambos ord=5
+    - Pub ``"5ª Turma"`` vs Proc ``"5.0"`` (float-string) → ambos ord=5
+
+    Resíduo do Round 8 (~23 alertas em ~5 processos com formato
+    "5.0" cadastrado) eliminado.
     """
     if processo_record is None:
         return None
@@ -1106,12 +1139,15 @@ def regra_23_turma_desatualizada(
     turma_proc_raw = (processo_record.get(campo) or "").strip()
     if not turma_proc_raw:
         return ALERTA_TURMA_DESATUALIZADA  # vazio
-    turma_proc_norm = _extrair_turma_camara(turma_proc_raw)
-    if not turma_proc_norm:
-        # Cadastro em formato não canônico (ex: ordinal nu "5", ou
-        # string atípica). Trata como desatualizado para revisão.
+    # Comparação por ORDINAL — mais permissiva que match de string,
+    # tolerante a "5", "5.0", "5ª Turma", "5ª Turma Cível".
+    ord_pub = _ordinal_de_turma(turma_pub)
+    ord_proc = _ordinal_de_turma(turma_proc_raw)
+    if ord_pub is None or ord_proc is None:
+        # Algum lado não tem número extraível — não dá pra comparar
+        # canonicamente. Trata como desatualizado pra revisão manual.
         return ALERTA_TURMA_DESATUALIZADA
-    if turma_pub.upper() != turma_proc_norm.upper():
+    if ord_pub != ord_proc:
         return ALERTA_TURMA_DESATUALIZADA
     return None
 
@@ -1215,30 +1251,103 @@ def _destinatarios_por_polo(
     return out
 
 
+def _normalizar_nome_pessoa(s: str) -> str:
+    """Normaliza nome de pessoa pra comparação tolerante.
+
+    Remove acentos/cedilha (NFKD + ASCII), uppercase, troca apóstrofos
+    por espaço, mantém só letras/espaços/pontos, colapsa espaços.
+
+    Round 9 (2026-05-07): a base de Clientes tem nomes sem acento por
+    importação histórica (``MENDONCA``, ``DEBORA``, ``JOAO``); o PJe
+    devolve com acento (``MENDONÇA``, ``DÉBORA``, ``JOÃO``). Sem essa
+    normalização, Regra 9 disparava FP eternamente em ~5 alertas só
+    de cedilha+acento. Mesma normalização cobre apóstrofo (``D'ARC``
+    vs ``D ARC``) — ~10 alertas.
+    """
+    s = unicodedata.normalize("NFKD", s)
+    s = s.encode("ascii", "ignore").decode("ascii")
+    s = s.upper()
+    s = re.sub(r"[''`´]", " ", s)
+    s = re.sub(r"[^A-Z\s.]", "", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
+def _tokens_significativos(s: str) -> set[str]:
+    """Set de tokens (palavras com ≥3 letras) de um nome normalizado.
+
+    Pulamos stopwords curtas (DA, DE, DO, DOS, DAS, E) implicitamente
+    — todas têm <3 letras. Tokens de 3+ letras são únicos o
+    suficiente para matching.
+    """
+    return {t for t in s.split() if len(t) >= 3 and "." not in t}
+
+
+def _eh_match_cliente(cadastro: str, parte_pub: str) -> bool:
+    """Match tolerante de cliente cadastrado contra parte da pub.
+
+    Aceita 4 formas de match:
+    1. **Direto**: nomes normalizados idênticos.
+    2. **Subset de tokens**: tokens significativos de um lado contidos
+       no outro (cobre nome composto incompleto, ex: cadastro "MARIA
+       SILVA SANTOS" vs pub "MARIA SILVA").
+    3. **Iniciais por sigilo de justiça**: cadastro normaliza pra
+       iniciais (ex: "MARIA SILVA" → "M.S.") e bate com a parte da
+       pub que está em formato de iniciais ("M.S.").
+    4. **Substring**: o cadastro inteiro normalizado aparece dentro da
+       parte normalizada (caso comum quando nomes simples).
+
+    Todos os 4 caminhos cobrem as 4 categorias de FP do Round 9:
+    apóstrofo, cedilha/acento, iniciais, sufixo faltando.
+    """
+    a = _normalizar_nome_pessoa(cadastro)
+    b = _normalizar_nome_pessoa(parte_pub)
+    if not a or not b:
+        return False
+    # 1. Match direto
+    if a == b:
+        return True
+    # 4. Substring (cadastro está contido na parte da pub)
+    if a in b:
+        return True
+    # 3. Iniciais (sigilo de justiça)
+    iniciais_a = ".".join(t[0] for t in a.split() if t) + "."
+    if iniciais_a == b.replace(" ", ""):
+        return True
+    # 2. Tokens significativos: subset
+    ta = _tokens_significativos(a)
+    tb = _tokens_significativos(b)
+    if ta and tb and (ta.issubset(tb) or tb.issubset(ta)):
+        return True
+    return False
+
+
 def _matching_clientes_em_pub(
     publicacao: dict[str, Any],
     indice_clientes: dict[str, str],
 ) -> dict[str, set[str]]:
     """Para cada polo da Pub, identifica quais clientes cadastrados
-    aparecem (matching por substring uppercase). Devolve
-    ``{polo: {page_id_cliente, ...}}``.
+    aparecem. Devolve ``{polo: {page_id_cliente, ...}}``.
+
+    Round 9 (2026-05-07): match tolerante via ``_eh_match_cliente``
+    (apóstrofo, cedilha/acento, iniciais, sufixo faltando).
     """
     if not indice_clientes:
         return {}
     polos = _destinatarios_por_polo(publicacao)
     out: dict[str, set[str]] = {}
     for polo, nomes_pub in polos.items():
-        # Concatena todos os nomes do polo em uma string só pra busca
-        texto_polo = " | ".join(nomes_pub)
-        if not texto_polo:
+        if not nomes_pub:
             continue
         encontrados: set[str] = set()
         for page_id, nome_cliente in indice_clientes.items():
             if not nome_cliente or len(nome_cliente) < 8:
                 # Nomes muito curtos podem dar match falso — pula
                 continue
-            if nome_cliente in texto_polo:
-                encontrados.add(page_id)
+            for nome_pub in nomes_pub:
+                if _eh_match_cliente(nome_cliente, nome_pub):
+                    encontrados.add(page_id)
+                    break
         if encontrados:
             out[polo] = encontrados
     return out
@@ -1344,35 +1453,22 @@ def regra_10_polo_inconsistente(
     *,
     indice_clientes: dict[str, str] | None = None,
 ) -> str | None:
-    """Regra 10 — Polo inconsistente em 1ª instância.
+    """Regra 10 — Conferir posição do cliente.
 
-    - Condições: ``Proc.instancia=1º grau`` **e** algum cliente do
-      escritório aparece em ``Pub.Partes`` no polo oposto ao
-      ``Proc.posicao_do_cliente``:
-      - Cliente em Polo Ativo + Posição=Réu → dispara
-      - Cliente em Polo Passivo + Posição=Autor → dispara
+    Round 9 (2026-05-07): **REMOVIDA** por decisão de produto. 60% dos
+    alertas viravam "Nada para fazer" — a regra não distinguia execução
+    invertida, embargos à execução e outros padrões processuais
+    legítimos onde o cliente aparece nos dois polos. Função mantida no
+    módulo retornando ``None`` para preservar a numeração canônica do
+    doc v8 e facilitar reativação futura com heurística melhor.
+
+    Histórico (mantido na docstring):
+
+    - Condições: ``Proc.instancia=1º grau`` **e** cliente do escritório
+      aparece em ``Pub.Partes`` no polo oposto ao
+      ``Proc.posicao_do_cliente``.
     - Alerta: ``Conferir posição do cliente``.
-    - Explicação: Em 2º grau ou superior, posição depende de quem
-      recorreu — não disparar alerta automático ali (Recorrente/
-      Recorrido).
     """
-    if processo_record is None or not indice_clientes:
-        return None
-    instancia = (processo_record.get("instancia") or "").strip()
-    if instancia != INSTANCIA_PRIMEIRO_GRAU:
-        return None
-    posicao = (processo_record.get("posicao_do_cliente") or "").strip()
-    polo_esperado = _POSICAO_PARA_POLO_ESPERADO.get(posicao)
-    if polo_esperado is None:
-        return None  # Recorrente/Recorrido/vazio — não dispara
-    matchings = _matching_clientes_em_pub(publicacao, indice_clientes)
-    if not matchings:
-        return None
-    # Cliente do escritório aparece em algum polo da Pub. Verifica se
-    # algum desses clientes está no polo OPOSTO ao esperado.
-    polo_oposto = "P" if polo_esperado == "A" else "A"
-    if polo_oposto in matchings and matchings[polo_oposto]:
-        return ALERTA_CONFERIR_POSICAO_DO_CLIENTE
     return None
 
 
@@ -1476,22 +1572,23 @@ def regra_2_capturar_numeracao_stj_tst(
     publicacao: dict[str, Any],
     processo_record: dict[str, Any] | None,
 ) -> str | None:
-    """Regra 2 — Numeração STJ/TST ausente.
+    """Regra 2 — Numeração STJ ausente.
 
-    - Condições: ``Pub.Tribunal IN (STJ, TST)`` e ``Proc.numero_stj_tst``
-      está vazio.
-    - Alerta: ``Capturar numeração STJ/TST``.
-    - Explicação: numeração autônoma do tribunal superior precisa ser
-      capturada do ``Pub.Identificação``. Pré-aprovação operacional —
-      não verifica TODAS as pubs do processo (faz match na Pub atual,
-      que dispara o alerta de qualquer pub STJ/TST nova).
+    - Condições: ``Pub.Tribunal == STJ`` e ``Proc.numero_stj`` vazio.
+    - Alerta: ``Capturar numeração STJ``.
+
+    Round 9 (2026-05-07): apenas STJ. TST mantém o CNJ original do
+    processo de origem (não atribui numeração nova), então pubs do TST
+    não dispararem mais a regra. O campo no schema do Notion também
+    foi renomeado de ``Número STJ/TST`` para ``Número STJ`` (chave
+    snake_case do cache: ``numero_stj``).
     """
     if processo_record is None:
         return None
     sigla = (publicacao.get("siglaTribunal") or "").strip().upper()
-    if sigla not in {"STJ", "TST"}:
+    if sigla != "STJ":
         return None
-    numero = (processo_record.get("numero_stj_tst") or "").strip()
+    numero = (processo_record.get("numero_stj") or "").strip()
     if not numero:
         return ALERTA_CAPTURAR_NUMERACAO_STJ_TST
     return None
@@ -1503,18 +1600,18 @@ def regra_3_capturar_numeracao_stf(
 ) -> str | None:
     """Regra 3 — Numeração STF ausente.
 
+    Round 9 (2026-05-07): **REMOVIDA** — o STF não atribui numeração
+    nova (o CNJ do recurso é reaproveitado do tribunal de origem). A
+    propriedade ``Número STF`` foi removida do schema de Processos no
+    Notion. Função mantida no módulo retornando ``None`` para preservar
+    a numeração canônica do doc v8 e facilitar reativação caso a
+    decisão mude.
+
+    Histórico (mantido na docstring):
+
     - Condições: ``Pub.Tribunal=STF`` e ``Proc.numero_stf`` está vazio.
     - Alerta: ``Capturar numeração STF``.
-    - Explicação: análoga à Regra 2.
     """
-    if processo_record is None:
-        return None
-    sigla = (publicacao.get("siglaTribunal") or "").strip().upper()
-    if sigla != "STF":
-        return None
-    numero = (processo_record.get("numero_stf") or "").strip()
-    if not numero:
-        return ALERTA_CAPTURAR_NUMERACAO_STF
     return None
 
 
@@ -1790,42 +1887,134 @@ def regra_35_transito_pendente(
 # Regra 11 — Partes adversas típicas ausentes
 # ---------------------------------------------------------------------------
 
-#: Tabela de mapeamento: substring em Pub.Partes → (item esperado em
-#: Proc.Partes adversas, alerta a disparar). Cada match em Pub.Partes
-#: que não tem entrada correspondente em Proc.Partes adversas dispara
-#: o alerta. 5 alertas distintos (decisão de design da v8 X.5).
-_PARTES_ADVERSAS_TIPICAS: tuple[tuple[tuple[str, ...], str, str], ...] = (
-    # (substrings em Pub.Partes; nome canônico em Proc.Partes adversas; alerta)
-    (
-        ("BANCO DO BRASIL S/A", "BANCO DO BRASIL S.A.", "BANCO DO BRASIL SA", "BANCO DO BRASIL"),
-        "Banco do Brasil",
-        ALERTA_PARTE_ADVERSA_BB,
+# Round 9 (2026-05-07): refactor da Regra 11 com regex (não substring)
+# + neutralização de razões sociais que contêm "BANCO DO BRASIL" como
+# componente. Antes, o detector de BB matchava em "CAIXA DE PREVIDÊNCIA
+# DOS FUNCS DO BANCO DO BRASIL" (razão social da PREVI) → 209 dos 214
+# alertas de BB eram FP. Idem o CASSI que matchava em nomes próprios
+# como "ALESSANDRO CASSIO" / "MARISA DE CASSIA" → 4 dos 6 eram FP.
+
+#: Razões sociais que contêm "BANCO DO BRASIL" como componente mas
+#: representam outras PJs (PREVI, CASSI). Substituídas por placeholder
+#: ANTES da busca por BB.
+_RAZOES_SOCIAIS_PARA_NEUTRALIZAR_BB: tuple[re.Pattern[str], ...] = (
+    re.compile(
+        r"(?:CAIXA\s+DE\s+PREVID[EÊ]NCIA\s+DOS\s+)?"
+        r"(?:FUNCS|FUNCIONARIOS|FUNCIONÁRIOS)\s+DO\s+BANCO\s+DO\s+BRASIL",
+        re.IGNORECASE,
     ),
+    re.compile(
+        r"CAIXA\s+DE\s+ASSIST[EÊ]NCIA\s+DOS\s+"
+        r"(?:FUNCS|FUNCIONARIOS|FUNCIONÁRIOS)\s+DO\s+BANCO\s+DO\s+BRASIL",
+        re.IGNORECASE,
+    ),
+)
+
+#: Regex de match em Pub.Partes para cada parte adversa típica.
+#: BB exige word-boundary E texto neutralizado (vide _neutralizar_razoes_sociais).
+#: CASSI exige word-boundary (\bCASSI\b) — sem isso match em "ALESSANDRO
+#: CASSIO" / "DE CASSIA" disparava falso-positivo.
+_RX_PARTE_BB: re.Pattern[str] = re.compile(
+    r"\bBANCO\s+DO\s+BRASIL\b", re.IGNORECASE,
+)
+_RX_PARTE_PREVI: re.Pattern[str] = re.compile(
+    r"\b(?:CAIXA\s+DE\s+PREVID[EÊ]NCIA\s+DOS\s+"
+    r"(?:FUNCS|FUNCIONARIOS|FUNCIONÁRIOS)\s+DO\s+BANCO\s+DO\s+BRASIL"
+    r"|PREVI)\b",
+    re.IGNORECASE,
+)
+_RX_PARTE_CASSI: re.Pattern[str] = re.compile(
+    r"\b(?:CAIXA\s+DE\s+ASSIST[EÊ]NCIA\s+DOS\s+"
+    r"(?:FUNCS|FUNCIONARIOS|FUNCIONÁRIOS)\s+DO\s+BANCO\s+DO\s+BRASIL"
+    r"|CASSI)\b",
+    re.IGNORECASE,
+)
+_RX_PARTE_BRADESCO: re.Pattern[str] = re.compile(
+    r"BRADESCO\s+(?:SA[ÚU]DE|SEGUROS)", re.IGNORECASE,
+)
+_RX_PARTE_BB_CONSORCIOS: re.Pattern[str] = re.compile(
+    r"BB\s+(?:ADM(?:INISTRADORA)?\.?)\s+(?:DE\s+)?CONS[ÓO]RCIOS",
+    re.IGNORECASE,
+)
+
+#: Tabela: (regex_pub, variantes_canonicas_proc, alerta).
+#: As variantes_canonicas são listadas em uppercase porque
+#: ``_normalizar_partes_adversas_proc`` já uppercase. Match flexível
+#: (substring em ambos os sentidos) feito dentro da função.
+#: Para BB Adm. Consórcios, ampliada para reconhecer "BB administradora
+#: de Consórcios S.A" e variantes de ortografia.
+_PARTES_ADVERSAS_TIPICAS_V2: tuple[
+    tuple[re.Pattern[str], tuple[str, ...], str], ...
+] = (
     (
-        (
-            "CAIXA DE PREVIDENCIA DOS FUNC",
-            "CAIXA DE PREVIDÊNCIA DOS FUNC",
-            "PREVI",
-        ),
-        "PREVI",
+        _RX_PARTE_PREVI,
+        ("PREVI",),
         ALERTA_PARTE_ADVERSA_PREVI,
     ),
     (
+        _RX_PARTE_CASSI,
         ("CASSI",),
-        "CASSI",
         ALERTA_PARTE_ADVERSA_CASSI,
     ),
     (
-        ("BRADESCO SAÚDE", "BRADESCO SAUDE", "BRADESCO SEGUROS"),
-        "Bradesco Saúde",
-        ALERTA_PARTE_ADVERSA_BRADESCO_SAUDE,
-    ),
-    (
-        ("BB ADMINISTRADORA DE CONSÓRCIOS", "BB ADMINISTRADORA DE CONSORCIOS"),
-        "BB Adm. Consórcios",
+        _RX_PARTE_BB_CONSORCIOS,
+        (
+            "BB ADM. CONSÓRCIOS", "BB ADM CONSORCIOS",
+            "BB ADMINISTRADORA DE CONSÓRCIOS",
+            "BB ADMINISTRADORA DE CONSORCIOS",
+            "BB ADMINISTRADORA DE CONSÓRCIOS S.A",
+            "BB ADMINISTRADORA DE CONSORCIOS S.A.",
+            "BB ADMINISTRADORA DE CONSORCIOS S.A",
+            "BB ADMINISTRADORA DE CONSÓRCIOS S/A",
+        ),
         ALERTA_PARTE_ADVERSA_BB_CONSORCIOS,
     ),
+    (
+        _RX_PARTE_BRADESCO,
+        ("BRADESCO SAÚDE", "BRADESCO SAUDE"),
+        ALERTA_PARTE_ADVERSA_BRADESCO_SAUDE,
+    ),
+    # BB SEMPRE por último — ele usa texto neutralizado pra não pegar
+    # PREVI/CASSI razão social. Ordem importa? Não — alertas vão pra
+    # set ao final. Mas comentário documenta dependência conceitual.
+    (
+        _RX_PARTE_BB,
+        ("BANCO DO BRASIL",),
+        ALERTA_PARTE_ADVERSA_BB,
+    ),
 )
+
+
+def _neutralizar_razoes_sociais_em(texto: str) -> str:
+    """Substitui razões sociais que contêm "BANCO DO BRASIL" como
+    componente (PREVI, CASSI) por um placeholder, evitando que o
+    detector de BB dispare indevidamente nessas substrings.
+
+    Round 9: fix do bug em que 209/214 alertas de BB eram FP.
+    """
+    out = texto
+    for rx in _RAZOES_SOCIAIS_PARA_NEUTRALIZAR_BB:
+        out = rx.sub("__NEUTRALIZADO__", out)
+    return out
+
+
+def _normalizar_canonico_parte(nome: str) -> str:
+    """Reduz variações ortográficas de razão social para comparação:
+    sem acento, uppercase, sem pontuação, ADMINISTRADORA→ADM, S.A./S/A
+    suprimidos, espaços colapsados.
+
+    Round 9: usado pra reconhecer "BB administradora de Consórcios S.A"
+    como equivalente a "BB Adm. Consórcios" (canônico).
+    """
+    s = unicodedata.normalize("NFKD", nome)
+    s = s.encode("ascii", "ignore").decode("ascii")
+    s = s.upper()
+    s = re.sub(r"\bS\.?\s*A\.?\b", "", s)
+    s = re.sub(r"\bS\s*/\s*A\b", "", s)
+    s = re.sub(r"\bADMINISTRADORA\b", "ADM", s)
+    s = re.sub(r"[.,;/]", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
 
 
 def _normalizar_partes_adversas_proc(
@@ -1868,6 +2057,18 @@ def regra_11_partes_adversas_ausentes(
     Bradesco Saúde, BB Adm. Consórcios) que aparece em ``Pub.Partes`` mas
     NÃO está em ``Proc.Partes adversas``, dispara o alerta correspondente.
     Pode disparar múltiplos alertas (até 5) em uma única publicação.
+
+    Round 9 (2026-05-07): fixes de match
+    - BB exige word-boundary E texto neutralizado (PREVI/CASSI razão
+      social que contém "BANCO DO BRASIL" não dispara BB falso).
+    - CASSI exige word-boundary (\\bCASSI\\b) — antes match em
+      "ALESSANDRO CASSIO" / "MARISA DE CASSIA" disparava FP.
+    - BB Adm. Consórcios reconhece variantes ortográficas
+      ("administradora", "Adm.", "S/A", "S.A.").
+    - Comparação contra Proc.Partes adversas usa normalização canônica
+      (sem acento, sem pontuação, ADMINISTRADORA→ADM) — antes
+      "BB administradora de Consórcios S.A" cadastrado não era
+      reconhecido como equivalente a "BB Adm. Consórcios".
     """
     if processo_record is None:
         return []
@@ -1875,20 +2076,25 @@ def regra_11_partes_adversas_ausentes(
     if not texto:
         return []
     proc_partes = _normalizar_partes_adversas_proc(processo_record)
+    proc_partes_canon = {_normalizar_canonico_parte(p) for p in proc_partes}
+
+    # Texto pra detectar BB precisa neutralizar PREVI/CASSI razão social
+    texto_para_bb = _neutralizar_razoes_sociais_em(texto)
 
     alertas: list[str] = []
-    for substrings, canonico, alerta in _PARTES_ADVERSAS_TIPICAS:
-        # Match em Pub.Partes
-        if not any(sub in texto for sub in substrings):
+    for rx, canonicos, alerta in _PARTES_ADVERSAS_TIPICAS_V2:
+        target = texto_para_bb if alerta == ALERTA_PARTE_ADVERSA_BB else texto
+        if not rx.search(target):
             continue
         # Já está em Proc.Partes adversas?
-        canon_upper = canonico.upper()
-        if canon_upper in proc_partes:
+        canonicos_canon = {_normalizar_canonico_parte(c) for c in canonicos}
+        if canonicos_canon & proc_partes_canon:
             continue
-        # Heurística adicional: alguns nomes em Proc.Partes podem usar
-        # variantes (ex: "BANCO DO BRASIL" sem S/A). Aceita se substring
-        # aparece em alguma das partes cadastradas.
-        if any(canon_upper in p or p in canon_upper for p in proc_partes if p):
+        # Heurística adicional: substring canônica em ambos os sentidos
+        if any(
+            any(c in p or p in c for c in canonicos_canon if c)
+            for p in proc_partes_canon if p
+        ):
             continue
         alertas.append(alerta)
     return alertas
@@ -1970,25 +2176,21 @@ def regra_28_fase_cognitiva_contradita_por_classe(
     publicacao: dict[str, Any],
     processo_record: dict[str, Any] | None,
 ) -> str | None:
-    """Regra 28 — Fase cognitiva contradita por classe avançada.
+    """Regra 28 — Fase desatualizada (cognitiva).
 
-    - Condições: Pub.Classe em classes cognitivas (AÇÃO TRABALHISTA -
-      RITO ORDINÁRIO/SUMARÍSSIMO, PROCEDIMENTO COMUM CÍVEL, JUIZADO
-      ESPECIAL CÍVEL/FAZENDA PÚBLICA, PETIÇÃO CÍVEL, INVENTÁRIO) **e**
-      Proc.Fase em {Executiva, Liquidação de sentença}.
+    Round 9 (2026-05-07): **REMOVIDA** por decisão de produto. A regra
+    usava ``Pub.Classe ∈ classes_cognitivas`` como sinal de fase
+    cognitiva, mas no PJe trabalhista a Classe ``AÇÃO TRABALHISTA -
+    RITO ORDINÁRIO`` é permanente do CNJ — não muda quando o processo
+    evolui pra executiva. Resultado: 240 dos 247 alertas eram FP.
+    Função mantida no módulo retornando ``None``.
+
+    Histórico (mantido na docstring):
+
+    - Condições: Pub.Classe em classes cognitivas E Proc.Fase em
+      {Executiva, Liquidação de sentença}.
     - Alerta: ``Fase desatualizada (cognitiva)``.
-    - Explicação: atos cognitivos em processo cadastrado como
-      executivo/liquidação indicam retrocesso de fase ou cadastro
-      errado.
     """
-    if processo_record is None:
-        return None
-    classe = (publicacao.get("nomeClasse") or "").strip().upper()
-    if classe not in _CLASSES_COGNITIVAS:
-        return None
-    fase_proc = (processo_record.get("fase") or "").strip()
-    if fase_proc in (FASE_EXECUTIVA, FASE_LIQUIDACAO):
-        return ALERTA_FASE_DESATUALIZADA_COGNITIVA
     return None
 
 

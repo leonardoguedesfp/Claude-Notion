@@ -67,9 +67,9 @@
       "type": "checkbox",
       "checkbox": {}
     },
-    "Número STJ/TST": {
+    "Número STJ": {
       "id": "%3FXCC",
-      "name": "Número STJ/TST",
+      "name": "Número STJ",
       "description": "Numeração autônoma do STJ quando o processo sobe",
       "type": "rich_text",
       "rich_text": {}
@@ -441,13 +441,6 @@
       "description": "Marca fim da execução / encerramento definitivo",
       "type": "date",
       "date": {}
-    },
-    "Número STF": {
-      "id": "fkQt",
-      "name": "Número STF",
-      "description": "Numeração autônoma do STF quando o processo sobe",
-      "type": "rich_text",
-      "rich_text": {}
     },
     "Sobrestado - TJ conexa": {
       "id": "hdDy",
