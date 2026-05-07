@@ -974,6 +974,28 @@ class LeitorDJEPage(QWidget):
         self._retry_notion_btn.clicked.connect(self._on_retry_notion_clicked)
         action_row.addWidget(self._retry_notion_btn)
 
+        # Round 8 (2026-05-06): botão "Recalcular alertas das publicações"
+        # — re-aplica as Regras v8 atuais em todas as pubs já enviadas
+        # ao Notion e atualiza só a propriedade "Alerta contadoria (app)".
+        # Idempotente (default não escreve quando o conjunto não muda).
+        # Útil depois de fix de regra ou mudança no cache de Processos.
+        self._recalc_alertas_btn = QPushButton(
+            "Recalcular alertas das publicações",
+        )
+        self._recalc_alertas_btn.setVisible(True)
+        self._recalc_alertas_btn.setStyleSheet(self._secondary_btn_css())
+        self._recalc_alertas_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._recalc_alertas_btn.setToolTip(
+            "Re-aplica as regras de Alerta contadoria nas publicações já "
+            "criadas no Notion e atualiza só essa propriedade. Use depois "
+            "de um fix de regra ou mudança no cadastro de Processos. "
+            "Idempotente: só escreve onde houver diferença.",
+        )
+        self._recalc_alertas_btn.clicked.connect(
+            self._on_recalc_alertas_clicked,
+        )
+        action_row.addWidget(self._recalc_alertas_btn)
+
         action_row.addStretch()
         root.addLayout(action_row)
 
@@ -2376,6 +2398,226 @@ class LeitorDJEPage(QWidget):
                 f"{sync_outcome.stuck_after} ainda presas.",
             )
         self._refresh_retry_notion_btn()
+
+    # ------------------------------------------------------------------
+    # Round 8 (2026-05-06) — Recalcular alertas das publicações
+    # ------------------------------------------------------------------
+
+    def _on_recalc_alertas_clicked(self) -> None:
+        """Click no botão 'Recalcular alertas das publicações'.
+
+        Mostra dialog de confirmação com 3 botões:
+        - 'Pré-visualizar (dry-run)'  → roda sem escrever no Notion
+        - 'Aplicar (escrever)'        → roda com escrita
+        - 'Cancelar'                  → fecha
+
+        Em ambos os modos lança um worker em thread secundária que
+        emite progress + finished/error. UI mostra progresso no
+        log e bloqueia o botão durante a execução.
+        """
+        from PySide6.QtCore import QThread
+        from PySide6.QtWidgets import QMessageBox
+
+        from notion_bulk_edit.config import get_cache_db_path
+        from notion_rpadv.services.dje_db import get_db_path as _dje_db_path
+        from notion_rpadv.services.dje_recalculo_worker import (
+            RecalculoAlertasWorker,
+        )
+
+        if self._thread is not None:
+            return  # outra operação em andamento — espera
+
+        # Confirmação: 3 opções (preview / aplicar / cancelar)
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle("Recalcular alertas das publicações")
+        box.setText(
+            "Re-aplica as regras de Alerta contadoria em todas as "
+            "publicações já criadas no Notion. Atualiza somente a "
+            "propriedade 'Alerta contadoria (app)' — Status, Tarefa "
+            "sugerida e demais campos não são tocados.\n\n"
+            "Idempotente: só escreve onde houver diferença real.\n\n"
+            "Tempo estimado: ~10–15 min para ~2 mil publicações."
+        )
+        btn_dry = box.addButton(
+            "Pré-visualizar (dry-run)", QMessageBox.ButtonRole.ActionRole,
+        )
+        btn_apply = box.addButton(
+            "Aplicar (escrever no Notion)", QMessageBox.ButtonRole.AcceptRole,
+        )
+        btn_cancel = box.addButton(
+            "Cancelar", QMessageBox.ButtonRole.RejectRole,
+        )
+        box.setDefaultButton(btn_dry)
+        box.setStyleSheet(self._dialog_stylesheet())
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is btn_cancel or clicked is None:
+            return
+        dry_run = clicked is btn_dry
+
+        token = self._token
+        if not token:
+            self._set_warning("Notion: token não encontrado. Faça login.")
+            return
+
+        # Worker
+        worker = RecalculoAlertasWorker(
+            token=token,
+            dje_path=str(_dje_db_path()),
+            cache_path=str(get_cache_db_path()),
+            dry_run=dry_run,
+            always_update=False,
+        )
+        thread = QThread(self)
+        worker.moveToThread(thread)
+        # Slots de UI (todos no main thread porque QObject.parent=self)
+        worker.loading.connect(self._on_recalc_loading)
+        worker.progress.connect(self._on_recalc_progress)
+        worker.finished.connect(self._on_recalc_finished)
+        worker.error.connect(self._on_recalc_error)
+        # Cleanup: thread.quit é chamado quando worker termina; depois
+        # delete worker e thread.
+        worker.finished.connect(thread.quit)
+        worker.error.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.started.connect(worker.run)
+
+        # Estado UI: reusa o "Execução em andamento" container do
+        # worker DJE pra dar feedback visível (progress bar +
+        # heading + log). Em range indeterminado (busy) até o
+        # 1º progress callback chegar — daí ajusta com o total real.
+        self._warning_lbl.setVisible(False)
+        self._log_area.clear()
+        self._progress.setRange(0, 0)  # indeterminado (busy spinner)
+        self._progress.setFormat("Carregando estado atual do Notion…")
+        sufixo = " (preview)" if dry_run else " (escrevendo)"
+        self._exec_heading.setText(f"Recalculando alertas{sufixo}")
+        self._exec_container.setVisible(True)
+        # O botão Cancelar fica escondido — o recálculo não é
+        # interrompível (a iteração local é rápida; só chamadas
+        # individuais ao Notion são lentas e não dá pra abortar
+        # de forma segura no meio).
+        self._cancel_btn.setVisible(False)
+
+        # Bloqueia botões de início (mesma lógica do worker DJE).
+        self._download_padrao_btn.setEnabled(False)
+        self._download_padrao_periodo_btn.setEnabled(False)
+        self._download_cnj_btn.setEnabled(False)
+        self._download_manual_btn.setEnabled(False)
+        self._recalc_alertas_btn.setEnabled(False)
+        self._recalc_alertas_btn.setText(
+            f"Recalculando alertas…{sufixo}",
+        )
+        self._append_log_line(
+            "Recalcular alertas: iniciando "
+            f"({'dry-run' if dry_run else 'aplicar'})…",
+        )
+
+        # Mantém referência pra evitar GC e pra reset em _on_recalc_finished
+        self._recalc_thread: Any = thread
+        self._recalc_worker: Any = worker
+
+        thread.start()
+
+    def _on_recalc_loading(self, n_paginas: int) -> None:
+        """Slot — atualiza UI durante a fase de carregamento do
+        estado atual do Notion (antes de começar a iterar). Mantém
+        a barra em busy mode mas anuncia páginas carregadas no log
+        e no formato do progress bar.
+        """
+        # Mantém range 0,0 (busy) — só muda a label
+        self._progress.setFormat(
+            f"Carregando Notion: {n_paginas} páginas…",
+        )
+        # Loga só nos múltiplos de 200 pra não inundar
+        if n_paginas % 200 == 0 and n_paginas > 0:
+            self._append_log_line(
+                f"Recalcular alertas: carregadas {n_paginas} páginas do Notion…",
+            )
+
+    def _on_recalc_progress(self, processadas: int, total: int) -> None:
+        """Slot — atualiza progress bar e log (a cada 10%).
+
+        Primeiro callback ajusta o range do progress (estava em busy
+        indeterminado) com o total real; chamadas seguintes só
+        atualizam o value.
+        """
+        if total <= 0:
+            return
+        # Sai do modo busy assim que o total for conhecido
+        if self._progress.maximum() != total:
+            self._progress.setRange(0, total)
+            self._progress.setFormat("%v / %m publicações")
+        self._progress.setValue(processadas)
+
+        pct = (processadas * 100) // total
+        # Loga só múltiplos de 10% pra evitar spam — a barra dá
+        # o feedback fino, o log marca os marcos
+        if pct != getattr(self, "_recalc_last_pct", -1) and pct % 10 == 0:
+            self._append_log_line(
+                f"Recalcular alertas: {processadas}/{total} ({pct}%)",
+            )
+            self._recalc_last_pct = pct
+
+    def _on_recalc_finished(self, resultado: Any) -> None:
+        """Slot — exibe resumo do resultado."""
+        modo = "preview" if "_recalc_dry_run" not in dir(self) else "aplicar"
+        # Como não passamos o flag pro slot, descobre pelo texto do botão.
+        was_dry = "preview" in self._recalc_alertas_btn.text()
+        verbo = "seriam atualizadas" if was_dry else "atualizadas"
+        msg = (
+            f"Recalcular alertas: {resultado.total_atualizadas} "
+            f"{verbo}, {resultado.total_inalteradas} inalteradas, "
+            f"{resultado.total_pulados_sem_notion} sem page no Notion, "
+            f"{resultado.total_pulados_payload_invalido} payload inválido, "
+            f"{resultado.total_erros} erros."
+        )
+        self._append_log_line(msg)
+        if resultado.diffs_amostra and was_dry:
+            self._append_log_line(
+                f"Amostra de diffs (até {len(resultado.diffs_amostra)}):",
+            )
+            for d in resultado.diffs_amostra[:5]:
+                if d["removidos"]:
+                    self._append_log_line(
+                        f"  {d['cnj']} - {d['removidos']}",
+                    )
+                if d["adicionados"]:
+                    self._append_log_line(
+                        f"  {d['cnj']} + {d['adicionados']}",
+                    )
+        if resultado.total_erros > 0:
+            self._set_warning(msg)
+        else:
+            self._set_info(msg)
+        self._reset_recalc_btn()
+
+    def _on_recalc_error(self, mensagem: str) -> None:
+        """Slot — exibe erro fatal."""
+        self._set_warning(f"Recalcular alertas: erro — {mensagem}")
+        self._append_log_line(f"Recalcular alertas: ERRO {mensagem}")
+        self._reset_recalc_btn()
+
+    def _reset_recalc_btn(self) -> None:
+        """Volta o botão ao estado normal e libera click. Também
+        marca o container 'Execução em andamento' como concluído
+        (heading muda pra 'Última execução') e reabilita os botões
+        de início do leitor DJE."""
+        self._recalc_alertas_btn.setEnabled(True)
+        self._recalc_alertas_btn.setText(
+            "Recalcular alertas das publicações",
+        )
+        self._download_padrao_btn.setEnabled(True)
+        self._download_padrao_periodo_btn.setEnabled(True)
+        self._download_cnj_btn.setEnabled(True)
+        self._download_manual_btn.setEnabled(True)
+        self._exec_heading.setText("Última execução")
+        # Trava o progress bar em 100% (mais informativo que sumir).
+        if self._progress.maximum() > 0:
+            self._progress.setValue(self._progress.maximum())
+        self._recalc_last_pct = -1
 
     def _refresh_open_buttons_visibility(self) -> None:
         """Verifica silenciosamente se os arquivos/pastas referenciados
