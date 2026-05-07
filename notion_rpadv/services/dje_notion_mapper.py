@@ -380,26 +380,24 @@ def _calcular_status_inicial(
 
 
 # ---------------------------------------------------------------------------
-# Round 6 (2026-05-04) — Camada base + Regras de monitoramento (v8)
+# Round 10 (2026-05-07) — 3 propriedades multi_select de tags do app
 # ---------------------------------------------------------------------------
 #
-# As 5 regras de Alerta contadoria e 6 regras de Tarefa sugerida do Round 4
-# foram REMOVIDAS por completo. A v8 do `anatomia-processos-vs-publicacoes-v8.md`
-# substitui o modelo:
+# A propriedade única ``Alerta contadoria (app)`` foi substituída por três
+# propriedades distintas no schema do Notion:
 #
-# - ``Tarefa sugerida (app)`` agora é multi-select com 3 valores:
-#   "Analisar acórdão", "Analisar sentença", "Nada para fazer".
-# - ``Alerta contadoria (app)`` é multi-select com 41 valores cobrindo
-#   identificação, classificação, partes, localização, estado processual.
-# - 4 regras de Camada base (Regras 40-43) atribuem o par (tarefa, alerta)
-#   default conforme a matriz Tipo de comunicação × Tipo de documento.
-# - 39 regras de monitoramento (Regras 1-39) ADICIONAM alertas quando
-#   cruzam Pub × Proc e detectam divergência.
+# - ``Tarefa advogado``    — analisar sentença / analisar acórdão
+# - ``Tarefa contadoria``  — distribuição / inclusão em pauta
+# - ``Alerta contadoria``  — desconformidades de cadastro detectadas pelo
+#                            cruzamento Pub × Proc (22 opções)
 #
-# Nesta etapa intermediária o mapper devolve listas vazias para Tarefa
-# sugerida (app) e Alerta contadoria (app) — a Camada base e as regras
-# de monitoramento serão re-introduzidas em commits subsequentes do
-# Round 6.
+# Toda tag emitida pelo app termina com " - App" (sufixo hardcoded em
+# ``TagApp``) pra distinguir das tags que um operador humano possa criar.
+#
+# A propriedade ``Tarefa sugerida (app)`` da v8 deixou de existir — foi
+# decomposta em ``Tarefa advogado`` (TA01, TA02) e ``Tarefa contadoria``
+# (TC01, TC02). Idem ``Alerta contadoria (app)`` → ``Alerta contadoria``
+# sem sufixo "(app)".
 
 # ---------------------------------------------------------------------------
 # Orquestrador público
@@ -580,14 +578,14 @@ def montar_payload_publicacao(
         publicacao, tipo_documento_canonico=tipo_documento_canonico,
     )
 
-    # Round 6 (2026-05-04): aplica Regras v8 (Camada base 40-43 +
-    # monitoramento 1-39). As regras de monitoramento são preenchidas
-    # incrementalmente por seção; a Camada base já está completa.
-    from notion_rpadv.services.dje_regras_v8 import aplicar_todas_regras
+    # Round 10 (2026-05-07): aplica as 30 regras (4 camada base + 26 AC)
+    # e devolve um VeredictoPub com tags separadas por propriedade.
+    from notion_rpadv.services.dje_regras import aplicar_todas_regras
 
-    tarefas_sugeridas, alertas_contadoria = aplicar_todas_regras(
+    veredicto = aplicar_todas_regras(
         publicacao, processo_record, cache_conn=cache_conn,
     )
+    tags_por_prop = veredicto.tags_por_propriedade()
     # Round 4.5 frente 1: Status inicial pode virar "Nada para fazer"
     # em casos óbvios (Listas TRT10/TST com Processo cadastrado).
     status_inicial = _calcular_status_inicial(
@@ -637,14 +635,14 @@ def montar_payload_publicacao(
         "Hash": _rich_text_prop(publicacao.get("hash")),
         "ID DJEN": _number_prop(publicacao.get("id")),
         # Round 4.6: checkbox "Processo não cadastrado" SAIU. A info passa
-        # a viver em "Alerta contadoria (app)" — quando o usuário dropar
-        # a coluna do Notion, payloads futuros ainda funcionam.
+        # a viver em "Alerta contadoria" — quando o usuário dropar a
+        # coluna do Notion, payloads futuros ainda funcionam.
         "Advogados não cadastrados": _checkbox_prop(advogados_nao_cadastrados),
-        # Round 4.3 + 4.4 — multi-selects. Pós Round 6 (2026-05-04) os
-        # nomes ganharam sufixo "(app)" no Notion para distinguir
-        # propriedades populadas automaticamente das editadas à mão.
-        "Tarefa sugerida (app)": _multi_select_prop(tarefas_sugeridas),
-        "Alerta contadoria (app)": _multi_select_prop(alertas_contadoria),
+        # Round 10 (2026-05-07) — 3 propriedades multi_select. As tags
+        # vêm com sufixo " - App" hardcoded em TagApp.tag.
+        "Tarefa advogado": _multi_select_prop(tags_por_prop["Tarefa advogado"]),
+        "Tarefa contadoria": _multi_select_prop(tags_por_prop["Tarefa contadoria"]),
+        "Alerta contadoria": _multi_select_prop(tags_por_prop["Alerta contadoria"]),
     }
 
     return {
@@ -664,8 +662,9 @@ def montar_payload_publicacao(
             "processo_nao_cadastrado": processo_nao_cadastrado,
             "advogados_nao_cadastrados": advogados_nao_cadastrados,
             "advogados_tags": advogados_tags,
-            "tarefas_sugeridas": tarefas_sugeridas,
-            "alertas_contadoria": alertas_contadoria,
+            "tarefa_advogado": tags_por_prop["Tarefa advogado"],
+            "tarefa_contadoria": tags_por_prop["Tarefa contadoria"],
+            "alerta_contadoria": tags_por_prop["Alerta contadoria"],
         },
     }
 

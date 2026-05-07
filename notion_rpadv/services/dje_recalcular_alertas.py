@@ -1,36 +1,36 @@
-"""Recálculo idempotente da propriedade ``Alerta contadoria (app)``
-nas publicações já criadas em 📬 Publicações no Notion.
+"""Recálculo idempotente das 3 propriedades de tags em 📬 Publicações.
 
-Por que existe (Round 8, 2026-05-06):
-    Os alertas de cada publicação ficam **congelados** no momento
-    da criação da página no Notion (gravados como multi_select).
-    Quando uma regra é corrigida (Round 8: bug de normalização
-    assimétrica em Vara/Turma/Cidade/Relator) ou quando o estado do
-    cache de Processos muda, as publicações antigas continuam com o
-    valor calculado na criação.
+Round 10 (2026-05-07) generalizou o serviço — antes recalculava só
+``Alerta contadoria (app)``; agora recalcula simultaneamente
+``Tarefa advogado``, ``Tarefa contadoria`` e ``Alerta contadoria``,
+porque as três passaram a ser populadas automaticamente pelas regras
+do app.
 
-    Este serviço re-aplica ``aplicar_todas_regras`` em todas as
-    publicações armazenadas localmente em ``leitor_dje.db`` (que têm
-    ``notion_page_id`` populado, indicando que foram enviadas) e
-    sincroniza só a propriedade ``Alerta contadoria (app)`` — sem
-    mexer em Status, Tarefa sugerida, ou qualquer outra coluna.
+Por que existe:
+    Os alertas/tarefas de cada publicação ficam **congelados** no
+    momento da criação da página no Notion (gravados como
+    multi_select). Quando uma regra é corrigida ou quando o estado
+    do cache de Processos muda, as publicações antigas continuam com
+    o valor calculado na criação. Este serviço re-aplica
+    ``aplicar_todas_regras`` em todas as publicações armazenadas
+    localmente em ``leitor_dje.db`` (que têm ``notion_page_id``
+    populado) e sincroniza as 3 propriedades — sem mexer em Status,
+    Fase, Instância, ou qualquer outra coluna.
 
 Fluxo:
     1. ``query_all`` na data source 📬 Publicações → mapa
-       ``page_id → set(alertas_atuais)``. Custa ~17 chamadas pra 1.681
-       publicações (page_size=100).
+       ``page_id → {prop: set(tags_atuais)}``.
     2. Itera ``publicacoes`` no ``leitor_dje.db`` que têm
        ``notion_page_id IS NOT NULL AND ≠ 'SKIPPED'``.
     3. Para cada uma: decodifica ``payload_json``, faz
        ``lookup_processo_record(cache_conn, cnj)``, aplica as regras
-       v8 (com a ortografia atual do código), produz set de alertas
-       novos.
-    4. Compara com os atuais. Se diferente, faz
-       ``client.update_page(page_id, {"Alerta contadoria (app)":
-       multi_select(...)})``. Se igual, nada — idempotente.
+       Round 10, produz veredicto.
+    4. Compara as 3 propriedades com o estado atual. Se alguma
+       diverge, faz ``update_page`` escrevendo as 3 propriedades.
+       Se as 3 batem, nada — idempotente.
 
 Mantém ``--dry-run`` pra preview e ``--always-update`` pra forçar
-escrita mesmo quando nada mudou (útil pra rebuild histórico).
+escrita mesmo quando nada mudou.
 """
 from __future__ import annotations
 
@@ -44,48 +44,49 @@ from typing import Any
 from notion_bulk_edit.notion_api import NotionClient
 
 from notion_rpadv.services.dje_notion_mapper import lookup_processo_record
-from notion_rpadv.services.dje_regras_v8 import aplicar_todas_regras
-
+from notion_rpadv.services.dje_regras import (
+    PropriedadeNotion,
+    VeredictoPub,
+    aplicar_todas_regras,
+)
 
 logger = logging.getLogger("dje.recalcular_alertas")
 
-#: Data source UUID da database 📬 Publicações no Notion. Mesmo valor
-#: usado por ``dje_notion_worker`` para criar páginas.
+#: Data source UUID da database 📬 Publicações no Notion.
 DS_PUBLICACOES_DEFAULT: str = "78070780-8ff2-4532-8f78-9e078967f191"
 
-#: Nome da propriedade no Notion (case-sensitive). Espelha
-#: ``dje_notion_mapper._multi_select_prop`` no payload de criação.
-PROP_ALERTA_CONTADORIA: str = "Alerta contadoria (app)"
+#: As 3 propriedades multi_select que o recálculo sincroniza. Os nomes
+#: aqui têm que bater **exatamente** com os do schema do Notion.
+PROPS_DAS_TAGS: tuple[PropriedadeNotion, ...] = (
+    "Tarefa advogado",
+    "Tarefa contadoria",
+    "Alerta contadoria",
+)
 
 #: Sentinela usada em ``publicacoes.notion_page_id`` para marcar pubs
-#: que foram intencionalmente puladas no envio (não têm página real
-#: no Notion). Espelha ``dje_db.NOTION_SKIPPED_SENTINEL``.
+#: que foram intencionalmente puladas no envio.
 NOTION_SKIPPED_SENTINEL: str = "SKIPPED"
 
 
 @dataclass
 class ResultadoRecalculo:
-    """Saída da função ``recalcular_alertas_publicacoes``.
+    """Saída de :func:`recalcular_alertas_publicacoes`.
 
     Atributos:
         total_no_banco: total de pubs em ``publicacoes`` com
             ``notion_page_id`` populado e ≠ SKIPPED.
-        total_processadas: quantas tiveram alertas computados (pulou
-            as que falharam o decode do payload, etc.).
-        total_atualizadas: quantas tiveram a propriedade Notion
-            sobrescrita. Quando ``always_update=False``, esse número
-            corresponde só às que realmente mudaram.
-        total_inalteradas: alertas calculados batem com os atuais —
-            update pulado.
+        total_processadas: quantas tiveram tags computadas.
+        total_atualizadas: quantas tiveram alguma das 3 propriedades
+            sobrescrita. Em ``always_update=False``, só conta as que
+            realmente mudaram.
+        total_inalteradas: tags calculadas batem com as atuais nas 3
+            propriedades — update pulado.
         total_pulados_sem_notion: pubs com ``notion_page_id`` no banco
-            mas que não foram encontradas no query da data source
-            (page deletada/arquivada externamente).
-        total_pulados_payload_invalido: pubs com ``payload_json``
-            corrompido (não decodificável).
-        total_erros: chamadas a ``update_page`` que levantaram exceção.
-        erros: detalhes (até 50) das chamadas que falharam.
-        diffs_amostra: amostra (até 20) dos diffs calculados — útil
-            para auditoria e dry-run.
+            mas que não foram encontradas no query da data source.
+        total_pulados_payload_invalido: payload_json corrompido.
+        total_erros: chamadas a ``update_page`` que falharam.
+        erros: detalhes (até 50) das falhas.
+        diffs_amostra: amostra (até 20) dos diffs por propriedade.
     """
 
     total_no_banco: int = 0
@@ -104,25 +105,31 @@ class ResultadoRecalculo:
 # ---------------------------------------------------------------------------
 
 
-def _multi_select_payload(alertas: list[str]) -> dict[str, Any]:
-    """Constrói o payload Notion ``multi_select`` para a propriedade
-    ``Alerta contadoria (app)``.
+def _multi_select_payload(tags: list[str]) -> dict[str, Any]:
+    """Constrói o payload Notion ``multi_select`` para uma propriedade
+    do app. Lista vazia limpa a propriedade.
     """
-    return {"multi_select": [{"name": a} for a in alertas]}
+    return {"multi_select": [{"name": t} for t in tags]}
 
 
-def _alertas_atuais_de_page(page: dict[str, Any]) -> list[str]:
-    """Extrai a lista atual de alertas (multi-select) de uma página
-    do Notion. Devolve lista preservando ordem; ``[]`` quando vazia.
+def _tags_atuais_de_page(
+    page: dict[str, Any],
+) -> dict[PropriedadeNotion, list[str]]:
+    """Extrai as 3 listas de multi_select de uma página do Notion.
+    Devolve mapa ``{prop: [tag_completa, ...]}``; ``[]`` quando vazia
+    ou ausente.
     """
     props = page.get("properties") or {}
-    bloco = props.get(PROP_ALERTA_CONTADORIA) or {}
-    items = bloco.get("multi_select") or []
-    return [
-        str(it.get("name") or "")
-        for it in items
-        if isinstance(it, dict) and it.get("name")
-    ]
+    out: dict[PropriedadeNotion, list[str]] = {}
+    for prop in PROPS_DAS_TAGS:
+        bloco = props.get(prop) or {}
+        items = bloco.get("multi_select") or []
+        out[prop] = [
+            str(it.get("name") or "")
+            for it in items
+            if isinstance(it, dict) and it.get("name")
+        ]
+    return out
 
 
 def _carregar_estado_atual_notion(
@@ -130,34 +137,26 @@ def _carregar_estado_atual_notion(
     *,
     data_source_id: str = DS_PUBLICACOES_DEFAULT,
     on_progress: Callable[[int], None] | None = None,
-) -> dict[str, list[str]]:
+) -> dict[str, dict[PropriedadeNotion, list[str]]]:
     """Faz ``query_all`` na data source de Publicações e devolve mapa
-    ``page_id → alertas_atuais``.
-
-    Usa o callback ``on_progress`` (se fornecido) com o total acumulado
-    a cada batch — útil pra UI mostrar barra de progresso da fase de
-    leitura.
+    ``page_id → {prop: tags_atuais}``.
     """
     pages = client.query_all(
         data_source_id, on_progress=on_progress,
     )
-    out: dict[str, list[str]] = {}
+    out: dict[str, dict[PropriedadeNotion, list[str]]] = {}
     for page in pages:
         page_id = page.get("id") or ""
         if not page_id:
             continue
-        out[page_id] = _alertas_atuais_de_page(page)
+        out[page_id] = _tags_atuais_de_page(page)
     return out
 
 
 def _iter_publicacoes_enviadas(
     dje_conn: sqlite3.Connection,
 ) -> list[dict[str, Any]]:
-    """Lê todas as publicações em ``publicacoes`` que estão no Notion
-    (``notion_page_id`` não-NULL e ≠ ``SKIPPED``) e devolve lista de
-    dicts com payload mesclado a ``advogados_consultados_escritorio``
-    (mesmo shape do ``fetch_pending_for_notion``).
-    """
+    """Lê todas as publicações em ``publicacoes`` que estão no Notion."""
     rows = dje_conn.execute(
         """
         SELECT djen_id, hash, oabs_escritorio, oabs_externas,
@@ -172,6 +171,14 @@ def _iter_publicacoes_enviadas(
         (NOTION_SKIPPED_SENTINEL,),
     ).fetchall()
     return list(rows)
+
+
+def _veredicto_para_dict(
+    v: VeredictoPub,
+) -> dict[PropriedadeNotion, list[str]]:
+    """Atalho — adapta ``VeredictoPub.tags_por_propriedade()`` para o
+    shape interno desta função (idêntico, só fixa o tipo)."""
+    return v.tags_por_propriedade()
 
 
 # ---------------------------------------------------------------------------
@@ -191,36 +198,32 @@ def recalcular_alertas_publicacoes(
     on_progress: Callable[[int, int], None] | None = None,
     on_loading: Callable[[int], None] | None = None,
 ) -> ResultadoRecalculo:
-    """Recalcula e sincroniza ``Alerta contadoria (app)`` para todas
-    as publicações já enviadas ao Notion.
+    """Recalcula e sincroniza as 3 propriedades de tags
+    (``Tarefa advogado``, ``Tarefa contadoria``, ``Alerta contadoria``)
+    em todas as publicações já enviadas ao Notion.
 
     Args:
         notion_client: cliente Notion autenticado.
-        dje_conn: conexão para ``leitor_dje.db`` (lê ``publicacoes``).
-        cache_conn: conexão para ``cache.db`` (lê base ``Processos``).
-        data_source_id: UUID da data source 📬 Publicações no Notion.
-        dry_run: se ``True``, calcula tudo mas NÃO chama
-            ``update_page``. Use para preview.
-        always_update: se ``True``, escreve sempre (mesmo quando os
-            alertas calculados são iguais aos atuais). Default
-            ``False`` mantém idempotência ao bumpar ``Atualizado em``
-            apenas quando há mudança real.
-        limite: opcional — processa só as N primeiras publicações.
-            Útil para testes e rollouts faseados.
-        on_progress: callback ``(processadas, total)`` chamado a cada
-            iteração — para UI ou CLI.
-        on_loading: callback ``(n_paginas_acumuladas)`` chamado durante
-            a fase 1 (query do Notion para obter estado atual). Útil
-            pra UI mostrar spinner com contador.
+        dje_conn: conexão para ``leitor_dje.db``.
+        cache_conn: conexão para ``cache.db``.
+        data_source_id: UUID da data source 📬 Publicações.
+        dry_run: calcula tudo mas não chama ``update_page``.
+        always_update: força escrita mesmo sem diff (rebuild histórico).
+        limite: processa só as N primeiras pubs.
+        on_progress: callback ``(processadas, total)``.
+        on_loading: callback ``(n_paginas_acumuladas)`` durante o
+            carregamento do estado atual.
 
     Returns:
-        ``ResultadoRecalculo`` com contadores e amostra de diffs.
+        :class:`ResultadoRecalculo` com contadores e amostra de diffs.
     """
     resultado = ResultadoRecalculo()
 
-    # Fase 1: estado atual no Notion (1 query batched)
-    logger.info("Carregando estado atual do Notion (data source %s)…",
-                data_source_id)
+    # Fase 1: estado atual no Notion
+    logger.info(
+        "Carregando estado atual do Notion (data source %s)…",
+        data_source_id,
+    )
     estado_atual = _carregar_estado_atual_notion(
         notion_client, data_source_id=data_source_id,
         on_progress=on_loading,
@@ -232,8 +235,10 @@ def recalcular_alertas_publicacoes(
     if limite is not None:
         rows = rows[:limite]
     resultado.total_no_banco = len(rows)
-    logger.info("  %d publicações em %s para processar",
-                len(rows), "publicacoes")
+    logger.info(
+        "  %d publicações em %s para processar",
+        len(rows), "publicacoes",
+    )
 
     for i, row in enumerate(rows, start=1):
         if on_progress:
@@ -253,9 +258,8 @@ def recalcular_alertas_publicacoes(
             resultado.total_pulados_payload_invalido += 1
             continue
 
-        # Mescla campos extras esperados pelas regras (mesmo shape
-        # de fetch_pending_for_notion, pra reuso de regras 7-10
-        # que dependem de oabs/advogados).
+        # Mescla campos extras esperados pelas regras (mesmo shape de
+        # fetch_pending_for_notion).
         payload["advogados_consultados_escritorio"] = (
             row["oabs_escritorio"] or ""
         )
@@ -268,9 +272,9 @@ def recalcular_alertas_publicacoes(
         # Lookup do processo no cache
         processo_record = lookup_processo_record(cache_conn, cnj)
 
-        # Aplica regras v8 (versão atual = pós-fix Round 8)
+        # Aplica regras Round 10
         try:
-            _, alertas_novos = aplicar_todas_regras(
+            veredicto = aplicar_todas_regras(
                 payload, processo_record, cache_conn=cache_conn,
             )
         except Exception as exc:  # noqa: BLE001
@@ -286,27 +290,34 @@ def recalcular_alertas_publicacoes(
             continue
 
         resultado.total_processadas += 1
+        tags_novas = _veredicto_para_dict(veredicto)
 
-        # Estado atual no Notion (pode não existir se a página foi
-        # apagada/arquivada externamente)
         if notion_page_id not in estado_atual:
             resultado.total_pulados_sem_notion += 1
             continue
 
-        alertas_atuais = estado_atual[notion_page_id]
-        alertas_novos_set = set(alertas_novos)
-        alertas_atuais_set = set(alertas_atuais)
-        mudou = alertas_atuais_set != alertas_novos_set
+        tags_atuais = estado_atual[notion_page_id]
 
-        # Coleta amostra de diffs (até 20)
+        # Detecta diff em qualquer das 3 propriedades
+        mudou = False
+        diffs_por_prop: dict[str, dict[str, list[str]]] = {}
+        for prop in PROPS_DAS_TAGS:
+            atuais_set = set(tags_atuais.get(prop, []))
+            novas_set = set(tags_novas.get(prop, []))
+            if atuais_set != novas_set:
+                mudou = True
+                diffs_por_prop[prop] = {
+                    "antes": sorted(atuais_set),
+                    "depois": sorted(novas_set),
+                    "removidos": sorted(atuais_set - novas_set),
+                    "adicionados": sorted(novas_set - atuais_set),
+                }
+
         if mudou and len(resultado.diffs_amostra) < 20:
             resultado.diffs_amostra.append({
                 "cnj": cnj,
                 "page_id": notion_page_id,
-                "antes": sorted(alertas_atuais_set),
-                "depois": sorted(alertas_novos_set),
-                "removidos": sorted(alertas_atuais_set - alertas_novos_set),
-                "adicionados": sorted(alertas_novos_set - alertas_atuais_set),
+                "diffs": diffs_por_prop,
             })
 
         if not mudou and not always_update:
@@ -314,15 +325,17 @@ def recalcular_alertas_publicacoes(
             continue
 
         if dry_run:
-            # Em dry-run conta como atualização "que seria feita"
             resultado.total_atualizadas += 1
             continue
 
-        # Update real
+        # Update real — escreve as 3 propriedades juntas
         try:
             notion_client.update_page(
                 notion_page_id,
-                {PROP_ALERTA_CONTADORIA: _multi_select_payload(alertas_novos)},
+                {
+                    prop: _multi_select_payload(tags_novas.get(prop, []))
+                    for prop in PROPS_DAS_TAGS
+                },
             )
             resultado.total_atualizadas += 1
         except Exception as exc:  # noqa: BLE001

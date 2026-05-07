@@ -974,9 +974,10 @@ class LeitorDJEPage(QWidget):
         self._retry_notion_btn.clicked.connect(self._on_retry_notion_clicked)
         action_row.addWidget(self._retry_notion_btn)
 
-        # Round 8 (2026-05-06): botão "Recalcular alertas das publicações"
-        # — re-aplica as Regras v8 atuais em todas as pubs já enviadas
-        # ao Notion e atualiza só a propriedade "Alerta contadoria (app)".
+        # Round 10 (2026-05-07): botão "Recalcular alertas das publicações"
+        # — re-aplica as 30 regras (TA, TC, AC) em todas as pubs já
+        # enviadas ao Notion e atualiza as 3 propriedades de tags
+        # ("Tarefa advogado", "Tarefa contadoria", "Alerta contadoria").
         # Idempotente (default não escreve quando o conjunto não muda).
         # Útil depois de fix de regra ou mudança no cache de Processos.
         self._recalc_alertas_btn = QPushButton(
@@ -2432,10 +2433,10 @@ class LeitorDJEPage(QWidget):
         box.setIcon(QMessageBox.Icon.Question)
         box.setWindowTitle("Recalcular alertas das publicações")
         box.setText(
-            "Re-aplica as regras de Alerta contadoria em todas as "
-            "publicações já criadas no Notion. Atualiza somente a "
-            "propriedade 'Alerta contadoria (app)' — Status, Tarefa "
-            "sugerida e demais campos não são tocados.\n\n"
+            "Re-aplica as 30 regras (Tarefa advogado / Tarefa contadoria "
+            "/ Alerta contadoria) em todas as publicações já criadas no "
+            "Notion. Atualiza apenas as 3 propriedades de tags do app — "
+            "Status, Fase, Instância e demais campos não são tocados.\n\n"
             "Idempotente: só escreve onde houver diferença real.\n\n"
             "Tempo estimado: ~10–15 min para ~2 mil publicações."
         )

@@ -1,14 +1,16 @@
-"""CLI: recalcula a propriedade ``Alerta contadoria (app)`` em todas
-as publicações já enviadas ao Notion.
+"""CLI: recalcula as 3 propriedades de tags do app (Round 10) em
+todas as publicações já enviadas ao Notion.
+
+As 3 propriedades sincronizadas:
+- ``Tarefa advogado``    (TA01, TA02)
+- ``Tarefa contadoria``  (TC01, TC02)
+- ``Alerta contadoria``  (AC01-AC26)
 
 Útil quando:
-- Uma regra do ``dje_regras_v8`` é corrigida (Round 8: bug de
-  normalização assimétrica em Vara/Turma/Cidade/Relator).
-- O cache local de Processos é atualizado (campos como ``vara``,
-  ``fase``, ``status`` mudam) e os alertas das publicações antigas
-  ficam desalinhados.
-- Uma regra é desativada (Round 8: Capturar link externo) e queremos
-  remover o alerta histórico das pubs.
+- Uma regra do ``dje_regras`` é corrigida.
+- O cache local de Processos é atualizado e as tags antigas ficam
+  desalinhadas.
+- Uma regra é desativada/removida e queremos limpar o histórico.
 
 Uso:
     # Preview — mostra quantas pubs mudariam, sem escrever no Notion
@@ -64,7 +66,10 @@ def main() -> int:
     sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
 
     parser = argparse.ArgumentParser(
-        description="Recalcula Alerta contadoria das publicações Notion.",
+        description=(
+            "Recalcula Tarefa advogado / Tarefa contadoria / Alerta "
+            "contadoria das publicações no Notion (Round 10)."
+        ),
     )
     parser.add_argument(
         "--dry-run", action="store_true",
@@ -121,7 +126,7 @@ def main() -> int:
 
     print()
     print("=" * 60)
-    print("Recálculo Alerta contadoria")
+    print("Recálculo Round 10 — 3 propriedades de tags do app")
     print("=" * 60)
     print(f"  dry_run={args.dry_run}")
     print(f"  always_update={args.always_update}")
@@ -157,10 +162,11 @@ def main() -> int:
         print(f"AMOSTRA DE DIFFS (até {len(res.diffs_amostra)}):")
         for d in res.diffs_amostra[:10]:
             print(f"  {d['cnj']} ({d['page_id']})")
-            if d["removidos"]:
-                print(f"    - removidos:    {d['removidos']}")
-            if d["adicionados"]:
-                print(f"    + adicionados:  {d['adicionados']}")
+            for prop, diff in d.get("diffs", {}).items():
+                if diff.get("removidos"):
+                    print(f"    [{prop}] - removidos:   {diff['removidos']}")
+                if diff.get("adicionados"):
+                    print(f"    [{prop}] + adicionados: {diff['adicionados']}")
 
     if res.erros:
         print()
