@@ -272,9 +272,8 @@ def test_payload_happy_path_18_propriedades(dje_conn, cache_conn) -> None:
         "Classe", "Texto", "Link", "Status", "Advogados intimados",
         "Observações", "Partes", "Hash", "ID DJEN",
         "Advogados não cadastrados",
-        # Round 4.3 + 4.4 — multi-selects auto-preenchidos.
-        # Round 6 (2026-05-04) — nomes ganharam sufixo (app).
-        "Tarefa sugerida (app)", "Alerta contadoria (app)",
+        # Round 10 (2026-05-07) — 3 propriedades multi_select.
+        "Tarefa advogado", "Tarefa contadoria", "Alerta contadoria",
         # Round 9 (2026-05-07) — snapshot histórico de fase/instância.
         "Fase", "Instância",
     }
@@ -292,22 +291,12 @@ def test_payload_happy_path_18_propriedades(dje_conn, cache_conn) -> None:
     assert len(payload["children"]) > 0
 
 
-def test_payload_processo_nao_cadastrado_marca_checkbox(
+def test_payload_processo_nao_cadastrado_marca_alerta(
     dje_conn, cache_conn,
 ) -> None:
-    """Round 4.6: o sinalizador 'Processo não cadastrado' migrou de
-    checkbox próprio para o multi-select 'Alerta contadoria (app)'.
-
-    Round 6 (estado intermediário, 2026-05-04): as regras antigas
-    foram removidas e o multi-select sai vazio neste momento. As
-    regras de monitoramento da v8 (Regra 7-9 e refinamento da Regra
-    40 para casos sem cadastro fora de distribuição) re-introduzem
-    o alerta em commits subsequentes. Por ora o teste valida apenas:
-
-    - O checkbox antigo NÃO está mais no payload (Round 4.6).
-    - A propriedade ``Alerta contadoria (app)`` está presente (mesmo
-      vazia neste momento intermediário).
-    - A relation Processo continua vazia (sem cadastro).
+    """Round 10 (2026-05-07): o sinalizador 'Processo não cadastrado'
+    vive em ``Alerta contadoria`` como AC26. Não dispara em pubs de
+    distribuição (TC01 já cobre).
     """
     pub = _publicacao_basica(numeroprocessocommascara="9999999-99.9999.9.99.9999")
     payload = montar_payload_publicacao(
@@ -316,8 +305,10 @@ def test_payload_processo_nao_cadastrado_marca_checkbox(
     props = payload["properties"]
     # Checkbox antigo NÃO está mais no payload.
     assert "Processo não cadastrado" not in props
-    # Multi-select existe (vazio nesta etapa intermediária).
-    assert "Alerta contadoria (app)" in props
+    # As 3 propriedades novas estão presentes.
+    assert "Tarefa advogado" in props
+    assert "Tarefa contadoria" in props
+    assert "Alerta contadoria" in props
     # Relation continua vazia (sem cadastro).
     assert props["Processo"]["relation"] == []
 

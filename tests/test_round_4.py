@@ -265,17 +265,16 @@ def test_R4_5_preprocessador_limpa_br_variantes_xhtml() -> None:
 
 
 # ===========================================================================
-# 4.6 — Mapper deixou de gravar checkbox 'Processo não cadastrado'
-# (Round 6: o multi-select Alerta contadoria (app) será populado pela
-# Regra 40 — `Processo/recurso distribuído` — para distribuições, e por
-# uma regra de monitoramento futura para outros casos. Por ora, o teste
-# valida apenas a ausência do checkbox no payload.)
+# 4.6 — Mapper deixou de gravar checkbox 'Processo não cadastrado'.
+# Round 10 (2026-05-07): o sinal vive em ``Alerta contadoria`` (sem
+# sufixo "(app)" — agora são 3 propriedades multi_select).
 # ===========================================================================
 
 
 def test_R4_6_mapper_nao_grava_checkbox_processo_nao_cadastrado() -> None:
     """Verifica explicitamente que o checkbox foi removido do payload
-    em ambos os cenários (cadastrado / não-cadastrado)."""
+    em ambos os cenários (cadastrado / não-cadastrado), e que as 3
+    propriedades de tags do Round 10 estão presentes."""
     import sqlite3
     from pathlib import Path
     import tempfile
@@ -302,17 +301,18 @@ def test_R4_6_mapper_nao_grava_checkbox_processo_nao_cadastrado() -> None:
             "tipoDocumento": "Notificação", "tipoComunicacao": "Intimação",
             "texto": "Texto.", "destinatarios": [], "destinatarioadvogados": [],
         }
-        # Sem cadastro
         payload = montar_payload_publicacao(
             pub, dje_conn=dje_conn, cache_conn=cache_conn,
         )
-        # Checkbox antigo NÃO está no payload (Round 4.6 manteve, Round 6
-        # mantém também — schema do Notion sequer tem mais essa coluna).
+        # Checkbox antigo NÃO está no payload.
         assert "Processo não cadastrado" not in payload["properties"]
-        # E o multi-select Alerta contadoria (app) está presente (vazio
-        # neste estado intermediário do Round 6 — vai ser populado pela
-        # Camada base + monitoramento em commits subsequentes).
-        assert "Alerta contadoria (app)" in payload["properties"]
+        # Round 10 — as 3 propriedades estão presentes no payload.
+        assert "Tarefa advogado" in payload["properties"]
+        assert "Tarefa contadoria" in payload["properties"]
+        assert "Alerta contadoria" in payload["properties"]
+        # E a propriedade legada NÃO existe mais.
+        assert "Alerta contadoria (app)" not in payload["properties"]
+        assert "Tarefa sugerida (app)" not in payload["properties"]
 
         dje_conn.close()
         cache_conn.close()
