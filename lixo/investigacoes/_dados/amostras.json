@@ -1,0 +1,177 @@
+{
+  "trt10_g2": [
+    {
+      "cnj": "0001202-18.2018.5.10.0021",
+      "tribunal": "TRT/10",
+      "instancia": "2º grau",
+      "turma_2g_notion": "1",
+      "turma_st_notion": null,
+      "relator_2g_notion": "Dorival Borges de Souza Neto",
+      "relator_st_notion": null,
+      "diagnostico": "OK",
+      "fontes_meta": "{\"ts_consulta\":\"2026-05-05T18:57:32+00:00\",\"fontes_tribunal\":[\"trt10\"],\"hash_payload\":\"94b117798d3548f4\"}"
+    },
+    {
+      "cnj": "0000328-06.2017.5.10.0009",
+      "tribunal": "TRT/10",
+      "instancia": "2º grau",
+      "turma_2g_notion": "3",
+      "turma_st_notion": null,
+      "relator_2g_notion": "Augusto César Alves de Souza Barreto",
+      "relator_st_notion": null,
+      "diagnostico": "OK",
+      "fontes_meta": "{\"ts_consulta\":\"2026-05-05T18:57:32+00:00\",\"fontes_tribunal\":[\"trt10\"],\"hash_payload\":\"60944309715735b4\"}"
+    },
+    {
+      "cnj": "0001134-31.2018.5.10.0001",
+      "tribunal": "TRT/10",
+      "instancia": "2º grau",
+      "turma_2g_notion": "3",
+      "turma_st_notion": null,
+      "relator_2g_notion": "Pedro Luís Vicentin Foltran",
+      "relator_st_notion": null,
+      "diagnostico": "OK",
+      "fontes_meta": "{\"ts_consulta\":\"2026-05-05T18:57:32+00:00\",\"fontes_tribunal\":[\"trt10\"],\"hash_payload\":\"f34572af5f0b49e4\"}"
+    },
+    {
+      "cnj": "0000086-07.2023.5.10.0019",
+      "tribunal": "TRT/10",
+      "instancia": "2º grau",
+      "turma_2g_notion": "1",
+      "turma_st_notion": null,
+      "relator_2g_notion": "Grijalbo Fernandes Coutinho",
+      "relator_st_notion": null,
+      "diagnostico": "OK",
+      "fontes_meta": "{\"ts_consulta\":\"2026-05-05T18:57:32+00:00\",\"fontes_tribunal\":[\"trt10\"],\"hash_payload\":\"ca48a28909c700b2\"}"
+    },
+    {
+      "cnj": "0001325-23.2025.5.10.0004",
+      "tribunal": "TRT/10",
+      "instancia": "2º grau",
+      "turma_2g_notion": "2",
+      "turma_st_notion": null,
+      "relator_2g_notion": "Elke Doris Just",
+      "relator_st_notion": null,
+      "diagnostico": "OK",
+      "fontes_meta": "{\"ts_consulta\":\"2026-05-05T18:57:32+00:00\",\"fontes_tribunal\":[\"trt10\"],\"hash_payload\":\"286e8f4b9db61cd8\"}"
+    }
+  ],
+  "tst": [
+    {
+      "cnj": "0000645-05.2020.5.10.0007",
+      "tribunal": "TRT/10",
+      "instancia": "TST",
+      "turma_2g_notion": null,
+      "turma_st_notion": "5ª Turma",
+      "relator_2g_notion": null,
+      "relator_st_notion": "MINISTRA MORGANA DE ALMEIDA RICHA",
+      "diagnostico": "OK",
+      "fontes_meta": "{\"ts_consulta\":\"2026-05-05T18:57:32+00:00\",\"fontes_tribunal\":[\"trt10\",\"tst\"],\"hash_payload\":\"5190bb5a63e044f3\"}"
+    },
+    {
+      "cnj": "0000603-78.2019.5.10.0010",
+      "tribunal": "TRT/10",
+      "instancia": "TST",
+      "turma_2g_notion": null,
+      "turma_st_notion": "2ª Turma",
+      "relator_2g_notion": null,
+      "relator_st_notion": "MINISTRA LIANA CHAIB",
+      "diagnostico": "OK",
+      "fontes_meta": "{\"ts_consulta\":\"2026-05-05T18:57:32+00:00\",\"fontes_tribunal\":[\"trt10\",\"tst\"],\"hash_payload\":\"9c0d0d33ffda7873\"}"
+    },
+    {
+      "cnj": "0000515-73.2020.5.10.0020",
+      "tribunal": "TRT/10",
+      "instancia": "TST",
+      "turma_2g_notion": null,
+      "turma_st_notion": "3ª Turma",
+      "relator_2g_notion": null,
+      "relator_st_notion": "MINISTRO ALBERTO BASTOS BALAZEIRO",
+      "diagnostico": "OK",
+      "fontes_meta": "{\"ts_consulta\":\"2026-05-05T18:57:32+00:00\",\"fontes_tribunal\":[\"trt10\",\"tst\"],\"hash_payload\":\"98ade32ffe0a16f0\"}"
+    }
+  ],
+  "stj": [
+    {
+      "cnj": "0722477-74.2018.8.07.0001",
+      "tribunal": "TJDFT",
+      "instancia": "STJ",
+      "turma_2g_notion": "1",
+      "turma_st_notion": "3ª Turma",
+      "relator_2g_notion": "Teófilo Caetano",
+      "relator_st_notion": "Marco Aurélio Bellizze",
+      "diagnostico": "OK",
+      "fontes_meta": "{\"ts_consulta\":\"2026-05-05T18:57:32+00:00\",\"fontes_tribunal\":[\"tjdft\",\"stj\"],\"hash_payload\":\"df515419055dfe2b\"}"
+    },
+    {
+      "cnj": "0016545-54.2015.8.07.0001",
+      "tribunal": "TJDFT",
+      "instancia": "STJ",
+      "turma_2g_notion": "4",
+      "turma_st_notion": "3ª Turma",
+      "relator_2g_notion": "James Eduardo (prevento)",
+      "relator_st_notion": "Moura Ribeiro",
+      "diagnostico": "OK",
+      "fontes_meta": "{\"ts_consulta\":\"2026-05-05T18:57:32+00:00\",\"fontes_tribunal\":[\"tjdft\",\"stj\"],\"hash_payload\":\"ebc8e25ec7294ecf\"}"
+    }
+  ],
+  "tjdft_g2": [
+    {
+      "cnj": "0019229-49.2015.8.07.0001",
+      "tribunal": "TJDFT",
+      "instancia": "2º grau",
+      "turma_2g_notion": "1",
+      "turma_st_notion": null,
+      "relator_2g_notion": "Teófilo Caetano",
+      "relator_st_notion": "Maria Isabel Gallotti",
+      "diagnostico": "OK",
+      "fontes_meta": "{\"ts_consulta\":\"2026-05-05T18:57:32+00:00\",\"fontes_tribunal\":[\"tjdft\"],\"hash_payload\":\"d2ccccf410d50967\"}"
+    },
+    {
+      "cnj": "0728046-90.2017.8.07.0001",
+      "tribunal": "TJDFT",
+      "instancia": "2º grau",
+      "turma_2g_notion": "3",
+      "turma_st_notion": null,
+      "relator_2g_notion": "Ana Maria Ferreira da Silva",
+      "relator_st_notion": "Marco Aurélio Bellizze",
+      "diagnostico": "OK",
+      "fontes_meta": "{\"ts_consulta\":\"2026-05-05T18:57:32+00:00\",\"fontes_tribunal\":[\"tjdft\"],\"hash_payload\":\"ed0b930c23d5e89d\"}"
+    },
+    {
+      "cnj": "0026861-29.2015.8.07.0001",
+      "tribunal": "TJDFT",
+      "instancia": "2º grau",
+      "turma_2g_notion": "4",
+      "turma_st_notion": null,
+      "relator_2g_notion": "Arnoldo Camanho de Assis",
+      "relator_st_notion": null,
+      "diagnostico": "OK",
+      "fontes_meta": "{\"ts_consulta\":\"2026-05-05T18:57:32+00:00\",\"fontes_tribunal\":[\"tjdft\"],\"hash_payload\":\"064b1845a9e458d4\"}"
+    }
+  ],
+  "pista_positiva": [
+    {
+      "cnj": "2275121-45.2025.8.26.0000",
+      "tribunal": "TJSP",
+      "instancia": "2º grau",
+      "turma_2g_notion": null,
+      "turma_st_notion": null,
+      "relator_2g_notion": null,
+      "relator_st_notion": null,
+      "diagnostico": "OK",
+      "fontes_meta": "{\"ts_consulta\":\"2026-05-05T18:57:32+00:00\",\"fontes_tribunal\":[\"tjsp\"],\"hash_payload\":\"1166cfb78c5a0830\"}"
+    },
+    {
+      "cnj": "5003942-75.2025.8.24.0020",
+      "tribunal": "TJSC",
+      "instancia": "2º grau",
+      "turma_2g_notion": null,
+      "turma_st_notion": null,
+      "relator_2g_notion": null,
+      "relator_st_notion": null,
+      "diagnostico": "OK",
+      "fontes_meta": "{\"ts_consulta\":\"2026-05-05T18:57:32+00:00\",\"fontes_tribunal\":[\"tjsc\"],\"hash_payload\":\"134ecbcf01609480\"}"
+    }
+  ]
+}

@@ -1,0 +1,137 @@
+[
+  {
+    "grupo": "trt10_g2",
+    "cnj": "0001202-18.2018.5.10.0021",
+    "tribunal": "TRT/10",
+    "instancia": "2º grau",
+    "endpoint": "trt10",
+    "n_sources": 0,
+    "erro": "HTTP 502: {\"ok\":false,\"message\":\"The instance rejected the connection.\"}\n"
+  },
+  {
+    "grupo": "trt10_g2",
+    "cnj": "0000328-06.2017.5.10.0009",
+    "tribunal": "TRT/10",
+    "instancia": "2º grau",
+    "endpoint": "trt10",
+    "n_sources": 0,
+    "erro": "HTTP 502: {\"ok\":false,\"message\":\"The instance rejected the connection.\"}\n"
+  },
+  {
+    "grupo": "trt10_g2",
+    "cnj": "0001134-31.2018.5.10.0001",
+    "tribunal": "TRT/10",
+    "instancia": "2º grau",
+    "endpoint": "trt10",
+    "n_sources": 0,
+    "erro": "HTTP 502: {\"ok\":false,\"message\":\"The instance rejected the connection.\"}\n"
+  },
+  {
+    "grupo": "trt10_g2",
+    "cnj": "0000086-07.2023.5.10.0019",
+    "tribunal": "TRT/10",
+    "instancia": "2º grau",
+    "endpoint": "trt10",
+    "n_sources": 0,
+    "erro": "HTTP 502: {\"ok\":false,\"message\":\"The instance rejected the connection.\"}\n"
+  },
+  {
+    "grupo": "trt10_g2",
+    "cnj": "0001325-23.2025.5.10.0004",
+    "tribunal": "TRT/10",
+    "instancia": "2º grau",
+    "endpoint": "trt10",
+    "n_sources": 0,
+    "erro": "HTTP 502: {\"ok\":false,\"message\":\"The instance rejected the connection.\"}\n"
+  },
+  {
+    "grupo": "tst",
+    "cnj": "0000645-05.2020.5.10.0007",
+    "tribunal": "TRT/10",
+    "instancia": "TST",
+    "endpoint": "tst",
+    "n_sources": 0,
+    "erro": "HTTP 502: {\"ok\":false,\"message\":\"The instance rejected the connection.\"}\n"
+  },
+  {
+    "grupo": "tst",
+    "cnj": "0000603-78.2019.5.10.0010",
+    "tribunal": "TRT/10",
+    "instancia": "TST",
+    "endpoint": "tst",
+    "n_sources": 0,
+    "erro": "HTTP 502: {\"ok\":false,\"message\":\"The instance rejected the connection.\"}\n"
+  },
+  {
+    "grupo": "tst",
+    "cnj": "0000515-73.2020.5.10.0020",
+    "tribunal": "TRT/10",
+    "instancia": "TST",
+    "endpoint": "tst",
+    "n_sources": 0,
+    "erro": "HTTP 502: {\"ok\":false,\"message\":\"The instance rejected the connection.\"}\n"
+  },
+  {
+    "grupo": "stj",
+    "cnj": "0722477-74.2018.8.07.0001",
+    "tribunal": "TJDFT",
+    "instancia": "STJ",
+    "endpoint": "stj",
+    "n_sources": 0,
+    "erro": "HTTP 502: {\"ok\":false,\"message\":\"The instance rejected the connection.\"}\n"
+  },
+  {
+    "grupo": "stj",
+    "cnj": "0016545-54.2015.8.07.0001",
+    "tribunal": "TJDFT",
+    "instancia": "STJ",
+    "endpoint": "stj",
+    "n_sources": 0,
+    "erro": "HTTP 502: {\"ok\":false,\"message\":\"The instance rejected the connection.\"}\n"
+  },
+  {
+    "grupo": "tjdft_g2",
+    "cnj": "0019229-49.2015.8.07.0001",
+    "tribunal": "TJDFT",
+    "instancia": "2º grau",
+    "endpoint": "tjdft",
+    "n_sources": 0,
+    "erro": "HTTP 502: {\"ok\":false,\"message\":\"The instance rejected the connection.\"}\n"
+  },
+  {
+    "grupo": "tjdft_g2",
+    "cnj": "0728046-90.2017.8.07.0001",
+    "tribunal": "TJDFT",
+    "instancia": "2º grau",
+    "endpoint": "tjdft",
+    "n_sources": 0,
+    "erro": "HTTP 502: {\"ok\":false,\"message\":\"The instance rejected the connection.\"}\n"
+  },
+  {
+    "grupo": "tjdft_g2",
+    "cnj": "0026861-29.2015.8.07.0001",
+    "tribunal": "TJDFT",
+    "instancia": "2º grau",
+    "endpoint": "tjdft",
+    "n_sources": 0,
+    "erro": "HTTP 502: {\"ok\":false,\"message\":\"The instance rejected the connection.\"}\n"
+  },
+  {
+    "grupo": "pista_positiva",
+    "cnj": "2275121-45.2025.8.26.0000",
+    "tribunal": "TJSP",
+    "instancia": "2º grau",
+    "endpoint": "tjsp",
+    "n_sources": 0,
+    "erro": "HTTP 502: {\"ok\":false,\"message\":\"The instance rejected the connection.\"}\n"
+  },
+  {
+    "grupo": "pista_positiva",
+    "cnj": "5003942-75.2025.8.24.0020",
+    "tribunal": "TJSC",
+    "instancia": "2º grau",
+    "endpoint": "tjsc",
+    "n_sources": 0,
+    "erro": "HTTP 502: {\"ok\":false,\"message\":\"The instance rejected the connection.\"}\n"
+  }
+]
