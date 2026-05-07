@@ -257,8 +257,9 @@ def test_build_corpo_texto_vazio_emite_placeholder() -> None:
 def test_payload_happy_path_18_propriedades(dje_conn, cache_conn) -> None:
     """Caso típico: processo cadastrado + 1 advogado do escritório.
     Round 4.6 removeu o checkbox 'Processo não cadastrado' e Round 4.3+4.4
-    adicionou os multi-selects 'Tarefa sugerida' e 'Alerta contadoria' —
-    agora são 19 propriedades enviáveis."""
+    adicionou os multi-selects 'Tarefa sugerida' e 'Alerta contadoria'.
+    Round 9 (2026-05-07) adicionou snapshot 'Fase' e 'Instância' — agora
+    são 21 propriedades enviáveis."""
     _seed_processo(cache_conn, "page-proc-1", "0001234-56.2025.5.10.0001")
     pub = _publicacao_basica()
     payload = montar_payload_publicacao(
@@ -274,6 +275,8 @@ def test_payload_happy_path_18_propriedades(dje_conn, cache_conn) -> None:
         # Round 4.3 + 4.4 — multi-selects auto-preenchidos.
         # Round 6 (2026-05-04) — nomes ganharam sufixo (app).
         "Tarefa sugerida (app)", "Alerta contadoria (app)",
+        # Round 9 (2026-05-07) — snapshot histórico de fase/instância.
+        "Fase", "Instância",
     }
     assert set(props.keys()) == expected_keys
     # Round 4.6: checkbox 'Processo não cadastrado' não existe mais.
@@ -417,3 +420,140 @@ def test_payload_meta_inclui_titulo_e_djen_id(dje_conn, cache_conn) -> None:
     assert meta["djen_id"] == 42
     assert meta["sigla_tribunal"] == "TRT10"
     assert "TRT10___2026-04-30___" in meta["titulo"]
+
+
+# ---------------------------------------------------------------------------
+# Round 9 (2026-05-07) — Snapshot Fase + Instância nas Publicações
+# ---------------------------------------------------------------------------
+
+
+def _seed_processo_completo(
+    cache_conn, page_id: str, numero: str,
+    fase: str | None = None, instancia: str | None = None,
+) -> None:
+    data = {"numero_do_processo": numero}
+    if fase is not None:
+        data["fase"] = fase
+    if instancia is not None:
+        data["instancia"] = instancia
+    cache_conn.execute(
+        "INSERT INTO records (base, page_id, data_json, updated_at) "
+        "VALUES (?, ?, ?, ?)",
+        ("Processos", page_id, json.dumps(data), 0.0),
+    )
+    cache_conn.commit()
+
+
+def test_R9_payload_inclui_fase_e_instancia_do_cache(
+    dje_conn, cache_conn,
+) -> None:
+    """Sem notion_client: usa Fase e Instância direto do cache."""
+    _seed_processo_completo(
+        cache_conn, "page-proc-1", "0001234-56.2025.5.10.0001",
+        fase="Executiva", instancia="1º grau",
+    )
+    pub = _publicacao_basica()
+    payload = montar_payload_publicacao(
+        pub, dje_conn=dje_conn, cache_conn=cache_conn,
+    )
+    props = payload["properties"]
+    assert props["Fase"]["select"] == {"name": "Executiva"}
+    assert props["Instância"]["select"] == {"name": "1º grau"}
+
+
+def test_R9_payload_fase_instancia_vazias_quando_processo_nao_cadastrado(
+    dje_conn, cache_conn,
+) -> None:
+    """Pub.Processo não cadastrado → Fase e Instância vazias."""
+    pub = _publicacao_basica()
+    payload = montar_payload_publicacao(
+        pub, dje_conn=dje_conn, cache_conn=cache_conn,
+    )
+    props = payload["properties"]
+    assert props["Fase"]["select"] is None
+    assert props["Instância"]["select"] is None
+
+
+def test_R9_payload_fase_invalida_fica_vazia(
+    dje_conn, cache_conn,
+) -> None:
+    """Fase fora do vocabulário não é gravada (vai vazia)."""
+    _seed_processo_completo(
+        cache_conn, "page-proc-1", "0001234-56.2025.5.10.0001",
+        fase="VALOR_FORA_DO_SELECT", instancia="1º grau",
+    )
+    pub = _publicacao_basica()
+    payload = montar_payload_publicacao(
+        pub, dje_conn=dje_conn, cache_conn=cache_conn,
+    )
+    props = payload["properties"]
+    assert props["Fase"]["select"] is None
+    assert props["Instância"]["select"] == {"name": "1º grau"}
+
+
+def test_R9_payload_pull_live_atualiza_cache_e_payload(
+    dje_conn, cache_conn,
+) -> None:
+    """Quando notion_client é fornecido, pull live atualiza cache E
+    payload com o estado mais recente do Notion."""
+    from unittest.mock import MagicMock
+
+    # Cache tem fase="Cognitiva", mas Notion live mudou pra "Executiva"
+    _seed_processo_completo(
+        cache_conn, "page-proc-1", "0001234-56.2025.5.10.0001",
+        fase="Cognitiva", instancia="1º grau",
+    )
+
+    fake_client = MagicMock()
+    fake_client.get_page.return_value = {
+        "id": "page-proc-1",
+        "properties": {
+            "Fase": {"type": "select", "select": {"name": "Executiva"}},
+            "Instância": {
+                "type": "select", "select": {"name": "2º grau"},
+            },
+        },
+    }
+
+    pub = _publicacao_basica()
+    payload = montar_payload_publicacao(
+        pub, dje_conn=dje_conn, cache_conn=cache_conn,
+        notion_client=fake_client,
+    )
+
+    # Payload reflete o live (não o stale do cache)
+    assert payload["properties"]["Fase"]["select"] == {"name": "Executiva"}
+    assert payload["properties"]["Instância"]["select"] == {"name": "2º grau"}
+
+    # Cache também foi atualizado
+    row = cache_conn.execute(
+        "SELECT data_json FROM records WHERE base='Processos' AND page_id=?",
+        ("page-proc-1",),
+    ).fetchone()
+    cache_data = json.loads(row["data_json"])
+    assert cache_data["fase"] == "Executiva"
+    assert cache_data["instancia"] == "2º grau"
+
+
+def test_R9_payload_pull_live_falha_silenciosa_mantem_cache(
+    dje_conn, cache_conn,
+) -> None:
+    """Se get_page levantar exceção, mantém valor do cache (não bloqueia)."""
+    from unittest.mock import MagicMock
+
+    _seed_processo_completo(
+        cache_conn, "page-proc-1", "0001234-56.2025.5.10.0001",
+        fase="Cognitiva", instancia="1º grau",
+    )
+
+    fake_client = MagicMock()
+    fake_client.get_page.side_effect = ConnectionError("rede caiu")
+
+    pub = _publicacao_basica()
+    payload = montar_payload_publicacao(
+        pub, dje_conn=dje_conn, cache_conn=cache_conn,
+        notion_client=fake_client,
+    )
+    # Fallback: usa o que tinha no cache
+    assert payload["properties"]["Fase"]["select"] == {"name": "Cognitiva"}
+    assert payload["properties"]["Instância"]["select"] == {"name": "1º grau"}

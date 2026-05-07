@@ -269,6 +269,7 @@ def sincronizar_pendentes(
         try:
             payload = montar_payload_publicacao(
                 pub, dje_conn=dje_conn, cache_conn=cache_conn,
+                notion_client=client,
             )
             page_id = _create_page_with_retry(
                 client, payload, sleep=sleep,

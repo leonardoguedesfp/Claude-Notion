@@ -406,11 +406,108 @@ def _calcular_status_inicial(
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Round 9 (2026-05-07) — snapshot Fase + Instância nas Publicações
+# ---------------------------------------------------------------------------
+
+#: Vocabulário canônico de Proc.fase (espelha schema do Notion).
+#: Aceito também na propriedade Fase de Publicações (mesmo select).
+_FASE_VOCABULARIO: frozenset[str] = frozenset({
+    "Cognitiva",
+    "Executiva",
+    "Liquidação pendente",
+    "Liquidação de sentença",
+    "TJ - sentença não será executada",
+})
+
+#: Vocabulário canônico de Proc.instancia.
+_INSTANCIA_VOCABULARIO: frozenset[str] = frozenset({
+    "1º grau",
+    "2º grau",
+    "TST",
+    "STJ",
+    "STF",
+})
+
+
+def _refresh_fase_instancia_do_notion(
+    notion_client: Any,
+    cache_conn: sqlite3.Connection,
+    processo_record: dict[str, Any],
+) -> None:
+    """Pull live de ``Fase`` e ``Instância`` do processo no Notion e
+    atualiza o cache.db. Mutates ``processo_record`` in-place.
+
+    Não levanta exceção — se a chamada falhar (rede, etc.), mantém os
+    valores do cache (que podem estar staleness). Trade-off explicitado
+    na decisão de produto: lentidão extra é aceitável em troca de
+    snapshot atualizado, mas indisponibilidade temporária do Notion não
+    deve bloquear a fila de envio das publicações.
+
+    Round 9 (2026-05-07).
+    """
+    page_id = processo_record.get("page_id")
+    if not page_id:
+        return
+    try:
+        page = notion_client.get_page(str(page_id))
+    except Exception:  # noqa: BLE001
+        # Falha de rede / 4xx — mantém cache. Sem log pra não inundar
+        # (worker já loga erros que disparam outros caminhos).
+        return
+    if not isinstance(page, dict):
+        return
+    props = page.get("properties") or {}
+    # Decodifica os 2 selects e atualiza o record + cache.
+    from notion_bulk_edit.encoders import decode_value as _decode_value
+
+    bloco_fase = props.get("Fase")
+    bloco_inst = props.get("Instância")
+    fase_val: Any = None
+    inst_val: Any = None
+    if isinstance(bloco_fase, dict):
+        try:
+            fase_val = _decode_value(bloco_fase, "select")
+        except Exception:  # noqa: BLE001
+            fase_val = None
+    if isinstance(bloco_inst, dict):
+        try:
+            inst_val = _decode_value(bloco_inst, "select")
+        except Exception:  # noqa: BLE001
+            inst_val = None
+
+    # Atualiza in-memory record
+    processo_record["fase"] = fase_val
+    processo_record["instancia"] = inst_val
+
+    # Persiste no cache.db pra próximo envio aproveitar.
+    # Estratégia: load → update 2 keys → save (mesma chave).
+    try:
+        from notion_rpadv.cache import db as _cache_db
+        existing = cache_conn.execute(
+            "SELECT data_json FROM records WHERE base = 'Processos' AND page_id = ?",
+            (str(page_id),),
+        ).fetchone()
+        if existing is None:
+            return
+        existing_data = json.loads(existing["data_json"])
+        existing_data["fase"] = fase_val
+        existing_data["instancia"] = inst_val
+        _cache_db.upsert_record(
+            cache_conn, "Processos", str(page_id), existing_data,
+        )
+    except Exception:  # noqa: BLE001
+        # Cache update best-effort. O processo_record em memória já
+        # foi atualizado, então a regra+payload usa o valor live.
+        return
+
+
 def montar_payload_publicacao(
     publicacao: dict[str, Any],
     *,
     dje_conn: sqlite3.Connection,
     cache_conn: sqlite3.Connection,
+    notion_client: Any = None,
 ) -> dict[str, Any]:
     """Constrói o payload completo (``properties`` + ``children``) pra
     chamada ``POST /v1/pages`` na database 📬 Publicações.
@@ -443,6 +540,17 @@ def montar_payload_publicacao(
         processo_record["page_id"] if processo_record else None
     )
     processo_nao_cadastrado = processo_record is None
+
+    # Round 9 (2026-05-07): snapshot Fase + Instância. Antes do payload
+    # ser montado e das regras serem aplicadas, força pull live dessas
+    # 2 propriedades do processo no Notion (se ``notion_client``
+    # disponível). Garante que o snapshot na pub e o cálculo das regras
+    # usam o estado mais recente do processo, não o cache (que pode
+    # estar atrasado em relação à última edição manual).
+    if notion_client is not None and processo_record is not None:
+        _refresh_fase_instancia_do_notion(
+            notion_client, cache_conn, processo_record,
+        )
 
     advogados_tags = formatar_advogados_intimados(
         publicacao.get("destinatarioadvogados"),
@@ -488,6 +596,20 @@ def montar_payload_publicacao(
         processo_record=processo_record,
     )
 
+    # Round 9 (2026-05-07): Fase + Instância como snapshot do Processo
+    # no momento da captura. Validados contra o vocabulário do select.
+    # Vazio quando processo não cadastrado, fase/instância vazias, ou
+    # valor fora do vocabulário.
+    fase_snapshot: str | None = None
+    instancia_snapshot: str | None = None
+    if processo_record is not None:
+        fase_raw = processo_record.get("fase")
+        if isinstance(fase_raw, str) and fase_raw.strip() in _FASE_VOCABULARIO:
+            fase_snapshot = fase_raw.strip()
+        inst_raw = processo_record.get("instancia")
+        if isinstance(inst_raw, str) and inst_raw.strip() in _INSTANCIA_VOCABULARIO:
+            instancia_snapshot = inst_raw.strip()
+
     properties: dict[str, Any] = {
         "Identificação": _title_prop(titulo),
         "Data de disponibilização": _date_prop(data_disp),
@@ -495,6 +617,11 @@ def montar_payload_publicacao(
         "Processo": _relation_prop(
             [processo_page_id] if processo_page_id else [],
         ),
+        # Round 9: snapshot histórico de Fase e Instância do processo
+        # no momento da captura. Congelados — não atualizam quando o
+        # processo muda depois.
+        "Fase": _select_prop(fase_snapshot),
+        "Instância": _select_prop(instancia_snapshot),
         "Órgão": _rich_text_prop(publicacao.get("nomeOrgao")),
         "Tipo de comunicação": _select_prop(tipo_comunicacao_canonico),
         "Tipo de documento": _select_prop(tipo_documento_canonico),
