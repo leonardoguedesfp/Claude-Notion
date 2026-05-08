@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import sqlite3
 import time
+from collections.abc import Callable
 from typing import Any
 
 from PySide6.QtCore import QObject, QThread, Signal
@@ -12,6 +13,109 @@ from notion_bulk_edit.encoders import decode_value
 from notion_bulk_edit.notion_api import NotionAPIError, NotionAuthError, NotionClient
 from notion_bulk_edit.schemas import SCHEMAS
 from notion_rpadv.cache import db as cache_db
+
+
+# ---------------------------------------------------------------------------
+# Função pura — extraída de SyncWorker._sync no Round 10 (2026-05-07)
+# ---------------------------------------------------------------------------
+
+
+def sync_base_to_cache(
+    client: NotionClient,
+    conn: sqlite3.Connection,
+    base: str,
+    *,
+    on_total: Callable[[int], None] | None = None,
+    on_progress: Callable[[int], None] | None = None,
+) -> tuple[int, int, int]:
+    """Sincroniza uma base do Notion (Catalogo / Clientes / Processos /
+    Tarefas) para o ``cache.db`` local. Devolve ``(added, existing,
+    removed)`` — mesma semântica que o ``SyncWorker.finished``.
+
+    Função pura (sem PySide signals), reusável fora da UI Qt — usada
+    pelo ``RecalculoAlertasWorker`` no Round 10 pra disparar sync
+    Processos + Clientes antes do recálculo, garantindo que o cache
+    reflita edições manuais feitas no Notion.
+
+    Args:
+        client: ``NotionClient`` autenticado.
+        conn: conexão SQLite aberta para ``cache.db``.
+        base: nome da base — chave em ``DATA_SOURCES``.
+        on_total: callback opcional ``(int)`` invocado uma vez logo
+            depois do ``query_all`` com o total de páginas (útil pra
+            UI ajustar a barra de progresso).
+        on_progress: callback opcional ``(int)`` invocado a cada 50
+            páginas decodificadas + uma vez no fim.
+
+    Returns:
+        ``(added, existing, removed)``.
+
+    Levanta:
+        Exceptions do ``NotionClient`` (NotionAuthError, NotionAPIError)
+        — caller decide o que fazer.
+    """
+    db_id = DATA_SOURCES[base]
+    raw_pages: list[dict[str, Any]] = client.query_all(db_id)
+    if on_total is not None:
+        on_total(len(raw_pages))
+
+    schema = SCHEMAS.get(base, {})
+
+    existing_records = cache_db.get_all_records(conn, base)
+    existing_ids: set[str] = {
+        r["page_id"] for r in existing_records if "page_id" in r
+    }
+
+    added = 0
+    existing = 0
+    notion_ids: set[str] = set()
+
+    with cache_db.transaction(conn):
+        for idx, page in enumerate(raw_pages, start=1):
+            page_id: str = page.get("id", "")
+            if not page_id:
+                continue
+            if page.get("in_trash") or page.get("archived"):
+                continue
+            if page.get("is_template", False):
+                continue
+
+            notion_ids.add(page_id)
+
+            decoded: dict[str, Any] = {"page_id": page_id}
+            notion_props: dict[str, Any] = page.get("properties", {})
+
+            for prop_key, spec in schema.items():
+                notion_prop = notion_props.get(spec.notion_name)
+                if notion_prop is not None:
+                    try:
+                        decoded[prop_key] = decode_value(notion_prop, spec.tipo)
+                    except Exception:  # noqa: BLE001
+                        decoded[prop_key] = None
+                else:
+                    decoded[prop_key] = None
+
+            if page_id in existing_ids:
+                existing += 1
+            else:
+                added += 1
+
+            cache_db.upsert_record(conn, base, page_id, decoded)
+
+            if on_progress is not None and idx % 50 == 0:
+                on_progress(idx)
+
+    removed_ids = existing_ids - notion_ids
+    removed = len(removed_ids)
+    if removed_ids:
+        with cache_db.transaction(conn):
+            for pid in removed_ids:
+                cache_db.delete_record(conn, base, pid)
+
+    cache_db.set_last_sync(conn, base, time.time())
+    if on_progress is not None:
+        on_progress(len(raw_pages))
+    return (added, existing, removed)
 
 
 class SyncWorker(QObject):
@@ -67,69 +171,11 @@ class SyncWorker(QObject):
 
     def _sync(self, base: str) -> None:
         client = NotionClient(self._token)
-        db_id = DATA_SOURCES[base]
-        raw_pages: list[dict[str, Any]] = client.query_all(db_id)
-        # §2.3: announce the total now so the dashboard's progress bar has
-        # a determinate maximum from the very first paint.
-        self.total.emit(base, len(raw_pages))
-
-        schema = SCHEMAS.get(base, {})
-
-        existing_records = cache_db.get_all_records(self._conn, base)
-        existing_ids: set[str] = {r["page_id"] for r in existing_records if "page_id" in r}
-
-        added = 0
-        # BUG-N2: renamed from 'updated' — counts pages already in cache, not "changed"
-        existing = 0
-        notion_ids: set[str] = set()
-
-        with cache_db.transaction(self._conn):
-            for idx, page in enumerate(raw_pages, start=1):
-                page_id: str = page.get("id", "")
-                if not page_id:
-                    continue
-
-                # BUG-V5: skip template and archived/trashed pages
-                if page.get("in_trash") or page.get("archived"):
-                    continue
-                if page.get("is_template", False):
-                    continue
-
-                notion_ids.add(page_id)
-
-                decoded: dict[str, Any] = {"page_id": page_id}
-                notion_props: dict[str, Any] = page.get("properties", {})
-
-                for prop_key, spec in schema.items():
-                    notion_prop = notion_props.get(spec.notion_name)
-                    if notion_prop is not None:
-                        try:
-                            decoded[prop_key] = decode_value(notion_prop, spec.tipo)
-                        except Exception:  # noqa: BLE001
-                            decoded[prop_key] = None
-                    else:
-                        decoded[prop_key] = None
-
-                if page_id in existing_ids:
-                    existing += 1
-                else:
-                    added += 1
-
-                cache_db.upsert_record(self._conn, base, page_id, decoded)
-
-                if idx % 50 == 0:
-                    self.progress.emit(base, idx)
-
-        removed_ids = existing_ids - notion_ids
-        removed = len(removed_ids)
-        if removed_ids:
-            with cache_db.transaction(self._conn):
-                for pid in removed_ids:
-                    cache_db.delete_record(self._conn, base, pid)
-
-        cache_db.set_last_sync(self._conn, base, time.time())
-        self.progress.emit(base, len(raw_pages))
-        # BUG-N2: emit (added, existing, removed) — semantics are clear, no arithmetic
+        added, existing, removed = sync_base_to_cache(
+            client, self._conn, base,
+            on_total=lambda n: self.total.emit(base, n),
+            on_progress=lambda n: self.progress.emit(base, n),
+        )
         self.finished.emit(base, added, existing, removed)
 
 

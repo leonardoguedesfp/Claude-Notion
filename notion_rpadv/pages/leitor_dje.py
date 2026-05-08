@@ -2437,8 +2437,11 @@ class LeitorDJEPage(QWidget):
             "/ Alerta contadoria) em todas as publicações já criadas no "
             "Notion. Atualiza apenas as 3 propriedades de tags do app — "
             "Status, Fase, Instância e demais campos não são tocados.\n\n"
+            "Antes do recálculo, sincroniza Processos e Clientes do "
+            "Notion para o cache local (~30s) — assim mudanças manuais "
+            "feitas no Notion são refletidas nos novos alertas.\n\n"
             "Idempotente: só escreve onde houver diferença real.\n\n"
-            "Tempo estimado: ~10–15 min para ~2 mil publicações."
+            "Tempo estimado: ~12–16 min para ~2 mil publicações."
         )
         btn_dry = box.addButton(
             "Pré-visualizar (dry-run)", QMessageBox.ButtonRole.ActionRole,
@@ -2473,6 +2476,12 @@ class LeitorDJEPage(QWidget):
         thread = QThread(self)
         worker.moveToThread(thread)
         # Slots de UI (todos no main thread porque QObject.parent=self)
+        # Round 10 — fase de sync prévio (Processos + Clientes)
+        worker.sync_started.connect(self._on_recalc_sync_started)
+        worker.sync_total.connect(self._on_recalc_sync_total)
+        worker.sync_progress.connect(self._on_recalc_sync_progress)
+        worker.sync_finished.connect(self._on_recalc_sync_finished)
+        # Fase de recálculo
         worker.loading.connect(self._on_recalc_loading)
         worker.progress.connect(self._on_recalc_progress)
         worker.finished.connect(self._on_recalc_finished)
@@ -2492,7 +2501,7 @@ class LeitorDJEPage(QWidget):
         self._warning_lbl.setVisible(False)
         self._log_area.clear()
         self._progress.setRange(0, 0)  # indeterminado (busy spinner)
-        self._progress.setFormat("Carregando estado atual do Notion…")
+        self._progress.setFormat("Sincronizando bases do Notion…")
         sufixo = " (preview)" if dry_run else " (escrevendo)"
         self._exec_heading.setText(f"Recalculando alertas{sufixo}")
         self._exec_container.setVisible(True)
@@ -2521,6 +2530,45 @@ class LeitorDJEPage(QWidget):
         self._recalc_worker: Any = worker
 
         thread.start()
+
+    # ------------------------------------------------------------------
+    # Round 10 (2026-05-07) — slots da fase de sync prévio
+    # ------------------------------------------------------------------
+
+    def _on_recalc_sync_started(self, base: str) -> None:
+        """Slot — começou a sync de uma base (Processos / Clientes)."""
+        self._progress.setRange(0, 0)  # busy até saber o total
+        self._progress.setFormat(f"Sincronizando {base}…")
+        self._append_log_line(f"Sync prévio: baixando {base} do Notion…")
+
+    def _on_recalc_sync_total(self, base: str, total: int) -> None:
+        """Slot — total de páginas conhecido; sai do modo busy."""
+        if total > 0:
+            self._progress.setRange(0, total)
+            self._progress.setFormat(f"Sincronizando {base}: %v / %m")
+
+    def _on_recalc_sync_progress(
+        self, base: str, processado: int, total: int,
+    ) -> None:
+        """Slot — progresso de download de uma base."""
+        if total > 0:
+            self._progress.setValue(processado)
+
+    def _on_recalc_sync_finished(
+        self, base: str, added: int, existing: int, removed: int,
+    ) -> None:
+        """Slot — uma base terminou."""
+        self._append_log_line(
+            f"Sync prévio: {base} OK ({added} novos, {existing} existentes, "
+            f"{removed} removidos).",
+        )
+        # Volta a barra para busy enquanto a próxima fase não emite
+        # progresso ainda (próxima base ou query Publicações).
+        self._progress.setRange(0, 0)
+
+    # ------------------------------------------------------------------
+    # Fase de recálculo (Round 8 + ajustes Round 10)
+    # ------------------------------------------------------------------
 
     def _on_recalc_loading(self, n_paginas: int) -> None:
         """Slot — atualiza UI durante a fase de carregamento do
