@@ -214,13 +214,19 @@ def test_listar_processos_lookup_dict(cache_conn) -> None:
 
 
 def test_build_corpo_tem_2_secoes() -> None:
+    """Com observações: heading 'Texto da publicação' + paragraph(s) +
+    heading 'Observações' + paragraph(s)."""
     blocks = _build_corpo_blocks("Texto curto.", "Obs A")
     types = [b["type"] for b in blocks]
-    # Heading "Texto da publicação" + 1 paragraph + Heading "Observações" + 1 paragraph
     assert types[0] == "heading_2"
     assert types[1] == "paragraph"
-    assert "heading_2" in types[2:]
-    assert any(t in ("paragraph", "quote") for t in types[2:])
+    # Round 11.2 — heading "Observações" só aparece se obs_pre não vazio.
+    headings = [b for b in blocks if b["type"] == "heading_2"]
+    assert len(headings) == 2
+    assert any(
+        "Observações" in h["heading_2"]["rich_text"][0]["text"]["content"]
+        for h in headings
+    )
 
 
 def test_build_corpo_texto_grande_quebra_em_paragrafos_multiplos() -> None:
@@ -232,21 +238,37 @@ def test_build_corpo_texto_grande_quebra_em_paragrafos_multiplos() -> None:
     assert len(paragraphs) >= 4
 
 
-def test_build_corpo_observacoes_vazia_usa_quote_placeholder() -> None:
+def test_build_corpo_observacoes_vazia_omite_secao() -> None:
+    """Round 11.2 — quando não há observações automáticas, o builder
+    NÃO emite o heading 'Observações' nem o quote placeholder
+    'Sem observações automáticas pra esta publicação.'.
+    """
     blocks = _build_corpo_blocks("Texto.", None)
+    # Nenhum quote/placeholder
     quotes = [b for b in blocks if b["type"] == "quote"]
-    assert len(quotes) >= 1
-    assert "Sem observações" in quotes[-1]["quote"]["rich_text"][0]["text"]["content"]
+    assert quotes == []
+    # Único heading_2 é o da seção "Texto da publicação"
+    headings = [b for b in blocks if b["type"] == "heading_2"]
+    assert len(headings) == 1
+    assert (
+        "Texto da publicação"
+        in headings[0]["heading_2"]["rich_text"][0]["text"]["content"]
+    )
 
 
-def test_build_corpo_texto_vazio_emite_placeholder() -> None:
+def test_build_corpo_texto_vazio_emite_placeholder_de_texto() -> None:
+    """Round 11.2 — quando texto e observações são vazios: emite só o
+    heading 'Texto da publicação' + paragraph '(texto vazio)'. Sem
+    seção 'Observações'.
+    """
     blocks = _build_corpo_blocks("", "")
     paragraphs = [b for b in blocks if b["type"] == "paragraph"]
-    # 1 paragraph "(texto vazio)" + 0 paragraphs em obs (que vira quote)
     assert any(
         "(texto vazio)" in p["paragraph"]["rich_text"][0]["text"]["content"]
         for p in paragraphs
     )
+    quotes = [b for b in blocks if b["type"] == "quote"]
+    assert quotes == []
 
 
 # ---------------------------------------------------------------------------

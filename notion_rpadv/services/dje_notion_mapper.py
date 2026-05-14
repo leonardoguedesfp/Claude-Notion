@@ -143,16 +143,6 @@ def _paragraph_block(text: str) -> dict[str, Any]:
     }
 
 
-def _quote_block(text: str) -> dict[str, Any]:
-    return {
-        "object": "block",
-        "type": "quote",
-        "quote": {
-            "rich_text": [{"type": "text", "text": {"content": text}}],
-        },
-    }
-
-
 def _split_paragraph_at_limit(text: str, limit: int) -> list[str]:
     """Quebra um parágrafo em chunks ≤ ``limit`` chars cada. Tenta quebrar
     em separadores naturais (espaço, ponto) próximo ao limite — se não,
@@ -195,14 +185,10 @@ def _build_corpo_blocks(
         blocos_texto = [_paragraph_block("(texto vazio)")]
     blocks.extend(blocos_texto)
 
-    blocks.append(_heading2_block("Observações"))
     obs_pre = preprocessar_texto_djen(observacoes) if observacoes else ""
     if obs_pre:
+        blocks.append(_heading2_block("Observações"))
         blocks.extend(quebrar_em_blocos(obs_pre))
-    else:
-        blocks.append(
-            _quote_block("Sem observações automáticas pra esta publicação."),
-        )
     return blocks
 
 
@@ -253,14 +239,10 @@ def _build_corpo_blocks_full(
     children.extend(blocos_texto)
     children.extend(callouts)
 
-    children.append(_heading2_block("Observações"))
     obs_pre = preprocessar_texto_djen(publicacao.get("observacoes"))
     if obs_pre:
+        children.append(_heading2_block("Observações"))
         children.extend(quebrar_em_blocos(obs_pre))
-    else:
-        children.append(
-            _quote_block("Sem observações automáticas pra esta publicação."),
-        )
 
     return children, texto_pre, callouts
 

@@ -21,10 +21,14 @@ from unittest.mock import MagicMock
 
 from notion_rpadv.services.dje_recalcular_alertas import (
     NOTION_SKIPPED_SENTINEL,
+    PLACEHOLDER_OBSERVACOES,
     PROPS_DAS_TAGS,
     ResultadoRecalculo,
     _multi_select_payload,
+    _reescrever_corpo_pagina,
     _tags_atuais_de_page,
+    _tem_placeholder_observacoes,
+    _texto_paragraphs,
     recalcular_alertas_publicacoes,
 )
 
@@ -132,9 +136,14 @@ def _make_notion_page(
     tarefa_advogado: list[str] | None = None,
     tarefa_contadoria: list[str] | None = None,
     alerta_contadoria: list[str] | None = None,
+    texto: str | None = None,
 ) -> dict[str, Any]:
-    """Mock no formato Page Notion com as 3 propriedades multi_select."""
-    return {
+    """Mock no formato Page Notion com as 3 propriedades multi_select.
+
+    Round 11 — opcional ``texto`` simula a propriedade ``Texto`` (rich_text)
+    pra testes de backfill da limpeza/corpo.
+    """
+    page: dict[str, Any] = {
         "id": page_id,
         "properties": {
             "Tarefa advogado": {
@@ -152,6 +161,67 @@ def _make_notion_page(
                     {"name": t} for t in (alerta_contadoria or [])
                 ],
             },
+        },
+    }
+    if texto is not None:
+        page["properties"]["Texto"] = {
+            "rich_text": [
+                {"plain_text": texto, "text": {"content": texto}},
+            ] if texto else [],
+        }
+    return page
+
+
+# ---------------------------------------------------------------------------
+# Round 11.2 — helpers de blocos do corpo
+# ---------------------------------------------------------------------------
+
+
+def _bloco_paragraph(content: str) -> dict[str, Any]:
+    """Constrói um block paragraph no formato que a API Notion devolve."""
+    return {
+        "object": "block",
+        "id": f"blk-{abs(hash(content)) % 1_000_000}",
+        "type": "paragraph",
+        "paragraph": {
+            "rich_text": [
+                {
+                    "plain_text": content,
+                    "text": {"content": content},
+                },
+            ],
+        },
+    }
+
+
+def _bloco_heading2(content: str) -> dict[str, Any]:
+    return {
+        "object": "block",
+        "id": f"hd-{abs(hash(content)) % 1_000_000}",
+        "type": "heading_2",
+        "heading_2": {
+            "rich_text": [
+                {
+                    "plain_text": content,
+                    "text": {"content": content},
+                },
+            ],
+        },
+    }
+
+
+def _bloco_quote(content: str) -> dict[str, Any]:
+    return {
+        "object": "block",
+        "id": f"qt-{abs(hash(content)) % 1_000_000}",
+        "type": "quote",
+        "quote": {
+            "rich_text": [
+                {
+                    "plain_text": content,
+                    "text": {"content": content},
+                },
+            ],
         },
     }
 
@@ -240,6 +310,7 @@ def test_recalculo_idempotente_quando_3_props_iguais() -> None:
 
     res = recalcular_alertas_publicacoes(
         notion_client=client, dje_conn=dje, cache_conn=cache,
+        skip_corpo=True,
     )
 
     assert res.total_no_banco == 1
@@ -284,6 +355,7 @@ def test_recalculo_atualiza_quando_diff_em_qualquer_prop() -> None:
 
     res = recalcular_alertas_publicacoes(
         notion_client=client, dje_conn=dje, cache_conn=cache,
+        skip_corpo=True,
     )
 
     assert res.total_atualizadas == 1
@@ -382,6 +454,7 @@ def test_recalculo_pula_pubs_skipped() -> None:
 
     res = recalcular_alertas_publicacoes(
         notion_client=client, dje_conn=dje, cache_conn=cache,
+        skip_corpo=True,
     )
     assert res.total_no_banco == 0
     assert res.total_processadas == 0
@@ -408,6 +481,7 @@ def test_recalculo_pula_payload_invalido() -> None:
     client.query_all.return_value = [_make_notion_page("page-1")]
     res = recalcular_alertas_publicacoes(
         notion_client=client, dje_conn=dje, cache_conn=cache,
+        skip_corpo=True,
     )
     assert res.total_pulados_payload_invalido == 1
     assert res.total_processadas == 0
@@ -430,6 +504,7 @@ def test_recalculo_pula_pub_sem_correspondencia_no_notion() -> None:
     client.query_all.return_value = []
     res = recalcular_alertas_publicacoes(
         notion_client=client, dje_conn=dje, cache_conn=cache,
+        skip_corpo=True,
     )
     assert res.total_pulados_sem_notion == 1
     client.update_page.assert_not_called()
@@ -467,6 +542,7 @@ def test_recalculo_diff_amostrado_inclui_diffs_por_propriedade() -> None:
     ]
     res = recalcular_alertas_publicacoes(
         notion_client=client, dje_conn=dje, cache_conn=cache,
+        skip_corpo=True,
     )
     assert res.total_atualizadas == 1
     assert len(res.diffs_amostra) == 1
@@ -536,5 +612,357 @@ def test_resultado_dataclass_default() -> None:
     assert r.total_pulados_sem_notion == 0
     assert r.total_pulados_payload_invalido == 0
     assert r.total_erros == 0
+    assert r.total_corpo_reescrito == 0
+    assert r.total_corpo_falhou == 0
     assert r.erros == []
     assert r.diffs_amostra == []
+
+
+# ---------------------------------------------------------------------------
+# Round 11.2 — Helpers do backfill de corpo
+# ---------------------------------------------------------------------------
+
+
+def test_texto_paragraphs_concatena_paragraphs_em_ordem() -> None:
+    blocos = [
+        _bloco_heading2("Texto da publicação"),
+        _bloco_paragraph("Primeiro paragrafo."),
+        _bloco_paragraph("Segundo paragrafo."),
+    ]
+    out = _texto_paragraphs(blocos)
+    assert out == "Primeiro paragrafo.\n\nSegundo paragrafo."
+
+
+def test_texto_paragraphs_ignora_heading_e_quote() -> None:
+    blocos = [
+        _bloco_heading2("Texto da publicação"),
+        _bloco_paragraph("Útil."),
+        _bloco_heading2("Observações"),
+        _bloco_quote("Sem observações automáticas pra esta publicação."),
+    ]
+    assert _texto_paragraphs(blocos) == "Útil."
+
+
+def test_texto_paragraphs_lida_com_lista_vazia() -> None:
+    assert _texto_paragraphs([]) == ""
+
+
+def test_tem_placeholder_observacoes_detecta_quote_exato() -> None:
+    blocos = [
+        _bloco_heading2("Observações"),
+        _bloco_quote(PLACEHOLDER_OBSERVACOES),
+    ]
+    assert _tem_placeholder_observacoes(blocos) is True
+
+
+def test_tem_placeholder_observacoes_falso_para_quote_diferente() -> None:
+    blocos = [_bloco_quote("Outra anotação qualquer.")]
+    assert _tem_placeholder_observacoes(blocos) is False
+
+
+def test_tem_placeholder_observacoes_falso_quando_nao_ha_quote() -> None:
+    blocos = [
+        _bloco_heading2("Texto da publicação"),
+        _bloco_paragraph("Conteúdo."),
+    ]
+    assert _tem_placeholder_observacoes(blocos) is False
+
+
+# ---------------------------------------------------------------------------
+# Round 11.2 — _reescrever_corpo_pagina
+# ---------------------------------------------------------------------------
+
+
+def test_reescrever_corpo_apaga_e_anexa_em_chunks() -> None:
+    """Apaga 1× por bloco existente; anexa em chunks de até 90."""
+    client = MagicMock()
+    blocos_atuais = [
+        _bloco_heading2("Texto da publicação"),
+        _bloco_paragraph("Velho 1."),
+        _bloco_paragraph("Velho 2."),
+    ]
+    novos_blocos = [
+        _bloco_heading2("Texto da publicação"),
+        _bloco_paragraph("Novo 1."),
+    ]
+    _reescrever_corpo_pagina(
+        client, "page-X",
+        blocos_atuais=blocos_atuais,
+        novos_blocos=novos_blocos,
+    )
+    assert client.delete_block.call_count == 3
+    deleted_ids = [c[0][0] for c in client.delete_block.call_args_list]
+    assert deleted_ids == [b["id"] for b in blocos_atuais]
+    client.append_block_children.assert_called_once_with(
+        "page-X", novos_blocos,
+    )
+
+
+def test_reescrever_corpo_chunking_com_mais_de_90_blocos() -> None:
+    client = MagicMock()
+    novos_blocos = [_bloco_paragraph(f"L{i}") for i in range(95)]
+    _reescrever_corpo_pagina(
+        client, "page-X", blocos_atuais=[], novos_blocos=novos_blocos,
+    )
+    assert client.append_block_children.call_count == 2
+    chunk1 = client.append_block_children.call_args_list[0][0][1]
+    chunk2 = client.append_block_children.call_args_list[1][0][1]
+    assert len(chunk1) == 90
+    assert len(chunk2) == 5
+
+
+# ---------------------------------------------------------------------------
+# Round 11.2 — recálculo end-to-end com backfill de corpo
+# ---------------------------------------------------------------------------
+
+
+def _payload_intimacao_curta(texto: str) -> dict[str, Any]:
+    """Payload alinhado com ``test_recalculo_idempotente_quando_3_props_iguais``
+    (provadamente sem alertas quando o processo cadastrado bate). Texto
+    começa com ``INTIMAÇÃO Fica`` (pos 0 < ``CABECALHO_MIN_CHARS``) →
+    ``limpar_cabecalho_trailer`` cai em fallback e devolve o texto cru,
+    deixando a comparação previsível.
+    """
+    return {
+        "tipoComunicacao": "Intimação",
+        "tipoDocumento": "Decisão",
+        "siglaTribunal": "TRT10",
+        "nomeOrgao": "14ª Vara do Trabalho de Brasília - DF",
+        "numeroprocessocommascara": "0001736-51.2016.5.10.0014",
+        "nomeClasse": "AÇÃO TRABALHISTA - RITO ORDINÁRIO",
+        "texto": texto,
+    }
+
+
+def _seed_processo_consistente(
+    cache_conn: sqlite3.Connection,
+    *,
+    page_id: str = "proc-1",
+    cnj: str = "0001736-51.2016.5.10.0014",
+) -> None:
+    """Cadastra um Processo cujo schema bate com ``_payload_intimacao_curta``
+    — sem disparar alertas de Cidade/Vara/Tribunal/Instância/Fase. Mesmo
+    layout usado em ``test_recalculo_idempotente_quando_3_props_iguais``.
+    """
+    _inserir_processo(
+        cache_conn,
+        page_id=page_id,
+        cnj=cnj,
+        extras={
+            "tribunal": "TRT/10",
+            "instancia": "1º grau",
+            "vara": "14ª Vara do Trabalho de Brasília - DF",
+            "cidade": "Brasília - DF",
+            "fase": "Cognitiva",
+            "natureza": "Trabalhista",
+            "tipo_de_processo": "Principal",
+        },
+    )
+
+
+def _setup_pub_e_processo_consistentes(
+    texto: str = "INTIMAÇÃO Fica V. Sa. intimado do despacho.",
+    *,
+    djen_id: int = 1,
+    notion_page_id: str = "page-1",
+    cnj: str = "0001736-51.2016.5.10.0014",
+    proc_page_id: str = "proc-1",
+) -> tuple[sqlite3.Connection, sqlite3.Connection]:
+    """Cria DBs em memória + insere uma pub + processo cadastrado
+    consistente (sem disparar nenhum alerta). Atalho para os testes do
+    backfill de corpo focarem no que importa.
+    """
+    dje = _abrir_dje_db_em_memoria()
+    cache = _abrir_cache_db_em_memoria()
+    _inserir_pub(
+        dje, djen_id=djen_id, cnj=cnj,
+        notion_page_id=notion_page_id,
+        payload=_payload_intimacao_curta(texto),
+    )
+    _seed_processo_consistente(cache, page_id=proc_page_id, cnj=cnj)
+    return dje, cache
+
+
+def test_corpo_idempotente_quando_paragraphs_e_propriedades_batem() -> None:
+    """Sem placeholder, paragraphs idênticos ao esperado, tags+texto
+    sem diff → nem ``delete_block`` nem ``append_block_children`` é
+    chamado e ``total_inalteradas`` incrementa.
+    """
+    texto = "INTIMAÇÃO Fica V. Sa. intimado do despacho."
+    dje, cache = _setup_pub_e_processo_consistentes(texto)
+
+    client = MagicMock()
+    client.query_all.return_value = [
+        _make_notion_page("page-1", texto=texto),
+    ]
+    client.list_all_block_children.return_value = [
+        _bloco_heading2("Texto da publicação"),
+        _bloco_paragraph(texto),
+    ]
+
+    res = recalcular_alertas_publicacoes(
+        notion_client=client, dje_conn=dje, cache_conn=cache,
+    )
+
+    assert res.total_processadas == 1
+    assert res.total_atualizadas == 0
+    assert res.total_inalteradas == 1
+    assert res.total_corpo_reescrito == 0
+    client.update_page.assert_not_called()
+    client.delete_block.assert_not_called()
+    client.append_block_children.assert_not_called()
+
+
+def test_corpo_reescreve_quando_placeholder_observacoes_presente() -> None:
+    """Texto da propriedade e dos paragraphs já está limpo, mas o corpo
+    ainda termina com heading 'Observações' + quote placeholder
+    legacy → reescreve só o corpo, sem chamar ``update_page``.
+    """
+    texto = "INTIMAÇÃO Fica V. Sa. intimado do despacho."
+    dje, cache = _setup_pub_e_processo_consistentes(texto)
+
+    client = MagicMock()
+    client.query_all.return_value = [
+        _make_notion_page("page-1", texto=texto),
+    ]
+    client.list_all_block_children.return_value = [
+        _bloco_heading2("Texto da publicação"),
+        _bloco_paragraph(texto),
+        _bloco_heading2("Observações"),
+        _bloco_quote(PLACEHOLDER_OBSERVACOES),
+    ]
+
+    res = recalcular_alertas_publicacoes(
+        notion_client=client, dje_conn=dje, cache_conn=cache,
+    )
+
+    assert res.total_atualizadas == 1
+    assert res.total_corpo_reescrito == 1
+    assert res.total_corpo_falhou == 0
+    # Tags + texto não mudaram → nada de update_page.
+    client.update_page.assert_not_called()
+    # Apaga os 4 blocos atuais.
+    assert client.delete_block.call_count == 4
+    # Anexa os novos (heading + paragraph, sem heading "Observações").
+    client.append_block_children.assert_called_once()
+    page_arg, novos = client.append_block_children.call_args[0]
+    assert page_arg == "page-1"
+    types = [b["type"] for b in novos]
+    assert types == ["heading_2", "paragraph"]
+    assert all(b["type"] != "quote" for b in novos)
+
+
+def test_corpo_reescreve_quando_paragraphs_diferem_do_esperado() -> None:
+    """Corpo antigo tem texto cru pré-limpeza; novos blocos refletem
+    texto limpo → reescreve.
+    """
+    texto_limpo = "INTIMAÇÃO Fica V. Sa. intimado do despacho."
+    dje, cache = _setup_pub_e_processo_consistentes(texto_limpo)
+
+    client = MagicMock()
+    client.query_all.return_value = [
+        _make_notion_page("page-1", texto=texto_limpo),
+    ]
+    client.list_all_block_children.return_value = [
+        _bloco_heading2("Texto da publicação"),
+        _bloco_paragraph(
+            "PODER JUDICIÁRIO sujo... "
+            "INTIMAÇÃO Fica V. Sa. intimado do despacho.",
+        ),
+    ]
+
+    res = recalcular_alertas_publicacoes(
+        notion_client=client, dje_conn=dje, cache_conn=cache,
+    )
+
+    assert res.total_corpo_reescrito == 1
+    assert client.delete_block.call_count == 2
+    client.append_block_children.assert_called_once()
+
+
+def test_corpo_dry_run_nao_chama_delete_nem_append() -> None:
+    texto = "INTIMAÇÃO Fica V. Sa. intimado do despacho."
+    dje, cache = _setup_pub_e_processo_consistentes(texto)
+
+    client = MagicMock()
+    client.query_all.return_value = [
+        _make_notion_page("page-1", texto=texto),
+    ]
+    client.list_all_block_children.return_value = [
+        _bloco_heading2("Texto da publicação"),
+        _bloco_paragraph(texto),
+        _bloco_heading2("Observações"),
+        _bloco_quote(PLACEHOLDER_OBSERVACOES),
+    ]
+
+    res = recalcular_alertas_publicacoes(
+        notion_client=client, dje_conn=dje, cache_conn=cache,
+        dry_run=True,
+    )
+
+    assert res.total_corpo_reescrito == 1  # contado mesmo em dry-run
+    client.delete_block.assert_not_called()
+    client.append_block_children.assert_not_called()
+
+
+def test_corpo_skip_corpo_pula_etapa_inteira() -> None:
+    dje, cache = _setup_pub_e_processo_consistentes("Texto qualquer.")
+
+    client = MagicMock()
+    client.query_all.return_value = [_make_notion_page("page-1")]
+
+    res = recalcular_alertas_publicacoes(
+        notion_client=client, dje_conn=dje, cache_conn=cache,
+        skip_corpo=True,
+    )
+
+    assert res.total_corpo_reescrito == 0
+    client.list_all_block_children.assert_not_called()
+    client.delete_block.assert_not_called()
+    client.append_block_children.assert_not_called()
+
+
+def test_corpo_falha_em_delete_loga_e_segue_pipeline() -> None:
+    """Quando ``delete_block`` falha, conta em ``total_corpo_falhou`` e
+    insere em ``erros``. As demais pubs do batch continuam sendo
+    processadas.
+    """
+    texto = "INTIMAÇÃO Fica V. Sa. intimado do despacho."
+    dje, cache = _setup_pub_e_processo_consistentes(texto)
+    # Segunda pub do batch, processo próprio para evitar AC26.
+    _inserir_pub(
+        dje, djen_id=2, cnj="0001737-51.2016.5.10.0015",
+        notion_page_id="page-2",
+        payload={
+            **_payload_intimacao_curta(texto),
+            "numeroprocessocommascara": "0001737-51.2016.5.10.0015",
+        },
+    )
+    _seed_processo_consistente(
+        cache, page_id="proc-2", cnj="0001737-51.2016.5.10.0015",
+    )
+
+    client = MagicMock()
+    client.query_all.return_value = [
+        _make_notion_page("page-1", texto=texto),
+        _make_notion_page("page-2", texto=texto),
+    ]
+    client.list_all_block_children.return_value = [
+        _bloco_heading2("Texto da publicação"),
+        _bloco_paragraph("texto antigo sujo"),
+    ]
+    client.delete_block.side_effect = [
+        RuntimeError("boom"),  # falha no primeiro delete da page-1
+        None, None,            # deletes da page-2
+    ]
+
+    res = recalcular_alertas_publicacoes(
+        notion_client=client, dje_conn=dje, cache_conn=cache,
+    )
+
+    assert res.total_processadas == 2
+    assert res.total_corpo_falhou == 1
+    assert res.total_corpo_reescrito == 1
+    assert any(
+        "reescrever_corpo" in e["error"] for e in res.erros
+    )

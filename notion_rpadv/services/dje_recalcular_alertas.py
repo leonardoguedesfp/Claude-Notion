@@ -43,7 +43,10 @@ from typing import Any
 
 from notion_bulk_edit.notion_api import NotionClient
 
-from notion_rpadv.services.dje_notion_mapper import lookup_processo_record
+from notion_rpadv.services.dje_notion_mapper import (
+    _build_corpo_blocks_full,
+    lookup_processo_record,
+)
 from notion_rpadv.services.dje_notion_mappings import (
     mapear_tipo_comunicacao,
     mapear_tipo_documento,
@@ -58,6 +61,18 @@ from notion_rpadv.services.dje_text_pipeline import (
     preprocessar_texto_djen,
     truncar_texto_inline,
 )
+
+#: Texto exato do placeholder "Observações" emitido pelo app antes do
+#: Round 11.2. Usado pelo backfill para detectar pubs antigas que ainda
+#: têm o heading "Observações" + o quote vazio no corpo da página.
+PLACEHOLDER_OBSERVACOES: str = (
+    "Sem observações automáticas pra esta publicação."
+)
+
+#: Limite de blocos por chamada `append_block_children` — o Notion
+#: aceita até 100; usamos 90 para alinhar com
+#: ``LIMITE_BLOCOS_INICIAIS`` em ``dje_text_pipeline``.
+APPEND_CHUNK: int = 90
 
 logger = logging.getLogger("dje.recalcular_alertas")
 
@@ -97,6 +112,13 @@ class ResultadoRecalculo:
         total_texto_limpo: Round 11. Quantas pubs tiveram o ``Texto``
             sobrescrito pela limpeza (subconjunto de
             ``total_atualizadas``).
+        total_corpo_reescrito: Round 11.2. Quantas pubs tiveram os
+            blocos do corpo da página reescritos (limpeza dos blocos
+            + remoção do placeholder "Sem observações…"). Conta também
+            em ``dry_run``.
+        total_corpo_falhou: Round 11.2. Pubs em que a reescrita do
+            corpo falhou (list/delete/append). A propriedade ``Texto``
+            e as tags podem ter sido atualizadas mesmo assim.
         erros: detalhes (até 50) das falhas.
         diffs_amostra: amostra (até 20) dos diffs por propriedade.
     """
@@ -109,6 +131,8 @@ class ResultadoRecalculo:
     total_pulados_payload_invalido: int = 0
     total_erros: int = 0
     total_texto_limpo: int = 0
+    total_corpo_reescrito: int = 0
+    total_corpo_falhou: int = 0
     erros: list[dict[str, str]] = field(default_factory=list)
     diffs_amostra: list[dict[str, Any]] = field(default_factory=list)
 
@@ -218,6 +242,82 @@ def _veredicto_para_dict(
 
 
 # ---------------------------------------------------------------------------
+# Round 11.2 — backfill do corpo da página
+# ---------------------------------------------------------------------------
+
+
+def _texto_de_rich_text(rich_text: list[Any]) -> str:
+    """Concatena o texto plano de uma lista ``rich_text`` da API Notion
+    (cobre os 2 shapes: ``plain_text`` retornado pela API e
+    ``text.content`` que escrevemos)."""
+    out: list[str] = []
+    for it in rich_text:
+        if not isinstance(it, dict):
+            continue
+        plain = it.get("plain_text")
+        if plain:
+            out.append(str(plain))
+            continue
+        content = (it.get("text") or {}).get("content")
+        if content:
+            out.append(str(content))
+    return "".join(out)
+
+
+def _texto_paragraphs(blocos: list[dict[str, Any]]) -> str:
+    """Concatena o texto plano de todos os blocos ``paragraph`` na ordem
+    em que aparecem, separados por ``\\n\\n``. Ignora demais tipos
+    (heading, callout, quote)."""
+    pedacos: list[str] = []
+    for b in blocos:
+        if not isinstance(b, dict) or b.get("type") != "paragraph":
+            continue
+        rt = (b.get("paragraph") or {}).get("rich_text") or []
+        texto = _texto_de_rich_text(rt)
+        if texto:
+            pedacos.append(texto)
+    return "\n\n".join(pedacos)
+
+
+def _tem_placeholder_observacoes(blocos: list[dict[str, Any]]) -> bool:
+    """``True`` se algum bloco ``quote`` no corpo contém o texto exato
+    do placeholder antigo "Sem observações automáticas…"."""
+    for b in blocos:
+        if not isinstance(b, dict) or b.get("type") != "quote":
+            continue
+        rt = (b.get("quote") or {}).get("rich_text") or []
+        if _texto_de_rich_text(rt).strip() == PLACEHOLDER_OBSERVACOES:
+            return True
+    return False
+
+
+def _reescrever_corpo_pagina(
+    client: NotionClient,
+    page_id: str,
+    *,
+    blocos_atuais: list[dict[str, Any]],
+    novos_blocos: list[dict[str, Any]],
+) -> None:
+    """Apaga todos os blocos atuais do corpo e anexa os novos.
+
+    Operação destrutiva — qualquer edição manual feita nos blocos do
+    corpo da página é perdida. Comentários do Notion (que ficam fora dos
+    blocos) e propriedades da página são preservados.
+
+    Levanta a exceção da chamada Notion que falhar — caller decide o
+    que fazer (logar, abortar a pub, seguir).
+    """
+    for bloco in blocos_atuais:
+        bid = bloco.get("id") if isinstance(bloco, dict) else None
+        if bid:
+            client.delete_block(str(bid))
+    for i in range(0, len(novos_blocos), APPEND_CHUNK):
+        chunk = novos_blocos[i:i + APPEND_CHUNK]
+        if chunk:
+            client.append_block_children(page_id, chunk)
+
+
+# ---------------------------------------------------------------------------
 # Função pública
 # ---------------------------------------------------------------------------
 
@@ -231,21 +331,28 @@ def recalcular_alertas_publicacoes(
     dry_run: bool = False,
     always_update: bool = False,
     limite: int | None = None,
+    skip_corpo: bool = False,
     on_progress: Callable[[int, int], None] | None = None,
     on_loading: Callable[[int], None] | None = None,
 ) -> ResultadoRecalculo:
     """Recalcula e sincroniza as 3 propriedades de tags
     (``Tarefa advogado``, ``Tarefa contadoria``, ``Alerta contadoria``)
-    em todas as publicações já enviadas ao Notion.
+    + a propriedade ``Texto`` (Round 11) + os blocos do corpo da
+    página (Round 11.2) em todas as publicações já enviadas ao Notion.
 
     Args:
         notion_client: cliente Notion autenticado.
         dje_conn: conexão para ``leitor_dje.db``.
         cache_conn: conexão para ``cache.db``.
         data_source_id: UUID da data source 📬 Publicações.
-        dry_run: calcula tudo mas não chama ``update_page``.
+        dry_run: calcula tudo mas não chama ``update_page``,
+            ``delete_block`` ou ``append_block_children``.
         always_update: força escrita mesmo sem diff (rebuild histórico).
+            Reescreve corpo + propriedades de toda pub processada.
         limite: processa só as N primeiras pubs.
+        skip_corpo: pula a etapa de reescrita dos blocos do corpo da
+            página (Round 11.2). Útil pra re-rodar só as tags + Texto
+            quando houver problema com o backfill de blocos.
         on_progress: callback ``(processadas, total)``.
         on_loading: callback ``(n_paginas_acumuladas)`` durante o
             carregamento do estado atual.
@@ -354,7 +461,58 @@ def recalcular_alertas_publicacoes(
         # trunca em 2000 chars com word-boundary.
         texto_limpo_inline = truncar_texto_inline(texto_limpo_full)
 
-        # Detecta diff em qualquer das 3 propriedades + Texto
+        # Round 11.2 — calcula blocos esperados do corpo (mesma pipeline
+        # do mapper de criação) e lista os blocos atuais para detectar
+        # se vale a pena reescrever. ``skip_corpo=True`` desliga toda
+        # essa etapa (útil pra re-rodar só tags + Texto se o backfill
+        # de blocos der problema).
+        corpo_precisa_reescrever = False
+        novos_blocos: list[dict[str, Any]] = []
+        blocos_atuais: list[dict[str, Any]] = []
+        chars_paragraphs_antes = 0
+        chars_paragraphs_depois = 0
+        tem_placeholder_atual = False
+        if not skip_corpo:
+            publicacao_para_corpo = dict(payload)
+            publicacao_para_corpo["texto"] = texto_limpo_full
+            try:
+                novos_blocos, _texto_pre_corpo, _callouts_corpo = (
+                    _build_corpo_blocks_full(
+                        publicacao_para_corpo,
+                        tipo_documento_canonico=tipo_doc_canonico,
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "djen_id=%s falha ao montar novos blocos: %s",
+                    djen_id, exc,
+                )
+                novos_blocos = []
+            try:
+                blocos_atuais = notion_client.list_all_block_children(
+                    notion_page_id,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "djen_id=%s falha list_block_children: %s", djen_id, exc,
+                )
+                blocos_atuais = []
+            else:
+                texto_atual_paragraphs = _texto_paragraphs(blocos_atuais)
+                texto_esperado_paragraphs = _texto_paragraphs(novos_blocos)
+                chars_paragraphs_antes = len(texto_atual_paragraphs)
+                chars_paragraphs_depois = len(texto_esperado_paragraphs)
+                tem_placeholder_atual = _tem_placeholder_observacoes(
+                    blocos_atuais,
+                )
+                if (
+                    texto_atual_paragraphs.strip()
+                    != texto_esperado_paragraphs.strip()
+                    or tem_placeholder_atual
+                ):
+                    corpo_precisa_reescrever = True
+
+        # Detecta diff em qualquer das 3 propriedades + Texto + Corpo
         mudou = False
         diffs_por_prop: dict[str, dict[str, list[str]]] = {}
         for prop in PROPS_DAS_TAGS:
@@ -377,6 +535,15 @@ def recalcular_alertas_publicacoes(
                 "removidos": [],
                 "adicionados": [],
             }
+        if corpo_precisa_reescrever:
+            mudou = True
+            diffs_por_prop["Corpo"] = {
+                "chars_paragraphs_antes": [str(chars_paragraphs_antes)],
+                "chars_paragraphs_depois": [str(chars_paragraphs_depois)],
+                "tem_placeholder_observacoes": [str(tem_placeholder_atual)],
+                "removidos": [],
+                "adicionados": [],
+            }
 
         if mudou and len(resultado.diffs_amostra) < 20:
             resultado.diffs_amostra.append({
@@ -384,6 +551,12 @@ def recalcular_alertas_publicacoes(
                 "page_id": notion_page_id,
                 "diffs": diffs_por_prop,
             })
+
+        # ``always_update`` força reescrita também do corpo (quando
+        # disponível) — útil pra rebuild histórico após mudança em
+        # ``_build_corpo_blocks_full``.
+        if always_update and not skip_corpo and novos_blocos:
+            corpo_precisa_reescrever = True
 
         if not mudou and not always_update:
             resultado.total_inalteradas += 1
@@ -393,36 +566,69 @@ def recalcular_alertas_publicacoes(
             resultado.total_atualizadas += 1
             if texto_mudou:
                 resultado.total_texto_limpo += 1
+            if corpo_precisa_reescrever:
+                resultado.total_corpo_reescrito += 1
             continue
 
         # Update real — escreve as 3 propriedades de tags + Texto (se mudou).
-        # Note: blocos do corpo da página NÃO são reescritos aqui — só a
-        # propriedade inline ``Texto`` (≤2000 chars). Pubs criadas pelo
-        # app pós-Round 11 já têm corpo e Texto limpos desde a criação.
-        update_props: dict[str, Any] = {
-            prop: _multi_select_payload(tags_novas.get(prop, []))
-            for prop in PROPS_DAS_TAGS
-        }
-        if texto_mudou:
-            update_props["Texto"] = {
-                "rich_text": [
-                    {"type": "text", "text": {"content": texto_limpo_inline}}
-                ] if texto_limpo_inline else [],
+        # Round 11.2: reescrita dos blocos do corpo é uma chamada
+        # separada (delete em loop + append em chunks). Falha em uma das
+        # duas etapas não desfaz a outra — ambas são best-effort.
+        props_mudou = (
+            any(prop in diffs_por_prop for prop in PROPS_DAS_TAGS)
+            or texto_mudou
+            or always_update
+        )
+        houve_alguma_escrita = False
+
+        if props_mudou:
+            update_props: dict[str, Any] = {
+                prop: _multi_select_payload(tags_novas.get(prop, []))
+                for prop in PROPS_DAS_TAGS
             }
-        try:
-            notion_client.update_page(notion_page_id, update_props)
+            if texto_mudou or always_update:
+                update_props["Texto"] = {
+                    "rich_text": [
+                        {"type": "text", "text": {"content": texto_limpo_inline}}
+                    ] if texto_limpo_inline else [],
+                }
+            try:
+                notion_client.update_page(notion_page_id, update_props)
+                houve_alguma_escrita = True
+                if texto_mudou:
+                    resultado.total_texto_limpo += 1
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "djen_id=%s falha update_page: %s", djen_id, exc,
+                )
+                resultado.total_erros += 1
+                if len(resultado.erros) < 50:
+                    resultado.erros.append({
+                        "djen_id": str(djen_id), "page_id": notion_page_id,
+                        "cnj": cnj, "error": f"update_page: {exc}",
+                    })
+
+        if corpo_precisa_reescrever and novos_blocos:
+            try:
+                _reescrever_corpo_pagina(
+                    notion_client, notion_page_id,
+                    blocos_atuais=blocos_atuais,
+                    novos_blocos=novos_blocos,
+                )
+                resultado.total_corpo_reescrito += 1
+                houve_alguma_escrita = True
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "djen_id=%s falha reescrita do corpo: %s", djen_id, exc,
+                )
+                resultado.total_corpo_falhou += 1
+                if len(resultado.erros) < 50:
+                    resultado.erros.append({
+                        "djen_id": str(djen_id), "page_id": notion_page_id,
+                        "cnj": cnj, "error": f"reescrever_corpo: {exc}",
+                    })
+
+        if houve_alguma_escrita:
             resultado.total_atualizadas += 1
-            if texto_mudou:
-                resultado.total_texto_limpo += 1
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "djen_id=%s falha update_page: %s", djen_id, exc,
-            )
-            resultado.total_erros += 1
-            if len(resultado.erros) < 50:
-                resultado.erros.append({
-                    "djen_id": str(djen_id), "page_id": notion_page_id,
-                    "cnj": cnj, "error": f"update_page: {exc}",
-                })
 
     return resultado

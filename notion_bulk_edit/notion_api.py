@@ -362,6 +362,70 @@ class NotionClient:
             json={"children": children},
         )
 
+    def list_block_children(
+        self,
+        block_id: str,
+        *,
+        start_cursor: str | None = None,
+        page_size: int = 100,
+    ) -> dict:
+        """Lista uma página de blocos filhos de um bloco/page.
+
+        Endpoint: ``GET /v1/blocks/{block_id}/children``
+
+        Args:
+            block_id: ID do bloco-pai (page_id quando lista o corpo
+                inteiro de uma página).
+            start_cursor: Cursor de paginação (devolvido em
+                ``next_cursor`` da resposta anterior).
+            page_size: Resultados por página (máx. 100 pela API).
+
+        Returns:
+            Objeto da API com ``results``, ``has_more``, ``next_cursor``.
+        """
+        params: dict = {"page_size": min(page_size, 100)}
+        if start_cursor:
+            params["start_cursor"] = start_cursor
+        return self._request(
+            "GET",
+            f"/blocks/{block_id}/children",
+            params=params,
+        )
+
+    def list_all_block_children(self, block_id: str) -> list[dict]:
+        """Pagina automaticamente todos os blocos filhos.
+
+        Args:
+            block_id: ID do bloco-pai.
+
+        Returns:
+            Lista completa de objetos Block.
+        """
+        results: list[dict] = []
+        cursor: str | None = None
+        while True:
+            page = self.list_block_children(block_id, start_cursor=cursor)
+            results.extend(page.get("results", []))
+            if not page.get("has_more"):
+                break
+            cursor = page.get("next_cursor")
+        return results
+
+    def delete_block(self, block_id: str) -> dict:
+        """Apaga (archive) um bloco. Operação destrutiva — preserva
+        descendentes apenas se o bloco for um bloco-pai (eles ficam
+        órfãos do ponto de vista do corpo da página).
+
+        Endpoint: ``DELETE /v1/blocks/{block_id}``
+
+        Args:
+            block_id: ID do bloco a remover.
+
+        Returns:
+            Objeto Block arquivado.
+        """
+        return self._request("DELETE", f"/blocks/{block_id}")
+
     def list_users(self) -> list[dict]:
         """Lista todos os usuários do workspace.
 
