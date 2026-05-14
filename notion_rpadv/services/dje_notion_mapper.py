@@ -332,51 +332,12 @@ _tem_advogados_no_payload = tinha_destinatarios_advogados
 # Round 4.5 frente 1 — Auto-Status na criação da página
 # ---------------------------------------------------------------------------
 
-#: Status default na criação. Round 1 sempre gravou "Nova"; Round 4.5
-#: introduz exceções específicas (vide ``_calcular_status_inicial``).
+#: Status default na criação. Round 11 (2026-05-13): único valor possível
+#: na criação. O valor ``Nada para fazer`` foi removido do select do
+#: Notion — a semântica "publicação sem providência" passou para
+#: ``Conclusão automática = "Nada para fazer"`` (propriedade do
+#: classificador, separada de ``Status``).
 STATUS_DEFAULT_CRIACAO: str = "Nova"
-
-#: Status auto pra publicações que não exigem ação (Listas de
-#: Distribuição em tribunais trabalhistas com Processo cadastrado).
-#: Opção EXISTENTE no select do Notion — não criar nova.
-STATUS_NADA_PARA_FAZER: str = "Nada para fazer"
-
-#: Tribunais que recebem auto-Status "Nada para fazer" para Listas de
-#: Distribuição com Processo cadastrado. Trabalhistas (TRT10, TST)
-#: porque a Lista é só comunicação burocrática de distribuição —
-#: a ação substantiva virá em pubs subsequentes (Despacho, Acórdão).
-_TRIBUNAIS_LISTA_AUTO_TRIADA: frozenset[str] = frozenset({"TRT10", "TST"})
-
-
-def _calcular_status_inicial(
-    *,
-    tipo_comunicacao_canonico: str,
-    sigla_tribunal: str,
-    processo_record: dict[str, Any] | None,
-) -> str:
-    """Decide o Status inicial da página recém-criada.
-
-    Round 4.5 frente 1 (P1-1 da auditoria):
-    Auto-``Nada para fazer`` quando todas as condições batem:
-    - tipo de comunicação canônico = ``Lista de Distribuição``
-    - tribunal IN (TRT10, TST) — trabalhistas
-    - processo cadastrado em ⚖️ Processos
-
-    Caso contrário: ``Nova`` (default) — operador trata manualmente.
-
-    Esta função roda APENAS na criação da página (nunca em update),
-    portanto não há risco de sobrescrever Status já modificado pelo
-    operador. Defesa em profundidade: caller só chama daqui no
-    ``montar_payload_publicacao`` (criação), nunca em fluxos de update.
-    """
-    sigla = (sigla_tribunal or "").strip().upper()
-    if (
-        tipo_comunicacao_canonico == "Lista de Distribuição"
-        and sigla in _TRIBUNAIS_LISTA_AUTO_TRIADA
-        and processo_record is not None
-    ):
-        return STATUS_NADA_PARA_FAZER
-    return STATUS_DEFAULT_CRIACAO
 
 
 # ---------------------------------------------------------------------------
@@ -574,8 +535,30 @@ def montar_payload_publicacao(
         publicacao.get("tipoComunicacao"),
     )
 
+    # Round 11 (2026-05-13): limpeza de cabeçalho/trailer ANTES do
+    # pipeline de blocos. Roda em cima do texto pré-HTML
+    # (preprocessar_texto_djen) e devolve texto limpo + diagnóstico.
+    # O bypass por tipo (Distribuição/Pauta/Edital/Certidão/Lista) e por
+    # padrão (Notifico eproc, ARQUIVOS DIGITAIS INDISPONÍVEIS) é tratado
+    # dentro da função — caller só passa o texto + metadados.
+    from notion_rpadv.services.dje_text_limpeza import limpar_cabecalho_trailer
+
+    _texto_bruto = publicacao.get("texto") or ""
+    _texto_pre_html = preprocessar_texto_djen(_texto_bruto)
+    _texto_limpo, _limpeza_diag = limpar_cabecalho_trailer(
+        _texto_pre_html,
+        tribunal=sigla,
+        tipo_documento=tipo_documento_canonico,
+        tipo_comunicacao=tipo_comunicacao_canonico,
+    )
+    # Substitui o texto da pub pra que o pipeline subsequente
+    # (build_corpo_blocks_full) opere no texto limpo. preprocessar_texto_djen
+    # é idempotente em texto sem HTML residual.
+    publicacao_limpa: dict[str, Any] = dict(publicacao)
+    publicacao_limpa["texto"] = _texto_limpo
+
     children, texto_pre, callouts = _build_corpo_blocks_full(
-        publicacao, tipo_documento_canonico=tipo_documento_canonico,
+        publicacao_limpa, tipo_documento_canonico=tipo_documento_canonico,
     )
 
     # Round 10 (2026-05-07): aplica as 30 regras (4 camada base + 26 AC)
@@ -586,13 +569,10 @@ def montar_payload_publicacao(
         publicacao, processo_record, cache_conn=cache_conn,
     )
     tags_por_prop = veredicto.tags_por_propriedade()
-    # Round 4.5 frente 1: Status inicial pode virar "Nada para fazer"
-    # em casos óbvios (Listas TRT10/TST com Processo cadastrado).
-    status_inicial = _calcular_status_inicial(
-        tipo_comunicacao_canonico=tipo_comunicacao_canonico,
-        sigla_tribunal=sigla,
-        processo_record=processo_record,
-    )
+    # Round 11 (2026-05-13): Status inicial sempre "Nova". O valor
+    # "Nada para fazer" foi removido do select do Notion — a semântica
+    # passou para Conclusão automática (propriedade do classificador).
+    status_inicial = STATUS_DEFAULT_CRIACAO
 
     # Round 9 (2026-05-07): Fase + Instância como snapshot do Processo
     # no momento da captura. Validados contra o vocabulário do select.
@@ -665,6 +645,10 @@ def montar_payload_publicacao(
             "tarefa_advogado": tags_por_prop["Tarefa advogado"],
             "tarefa_contadoria": tags_por_prop["Tarefa contadoria"],
             "alerta_contadoria": tags_por_prop["Alerta contadoria"],
+            # Round 11: diagnóstico da limpeza de Texto. Permite
+            # auditoria SQL no leitor_dje.db.publicacoes.payload_json
+            # (caller injeta esse dict em payload_json se quiser).
+            "limpeza_diag": _limpeza_diag.to_dict(),
         },
     }
 

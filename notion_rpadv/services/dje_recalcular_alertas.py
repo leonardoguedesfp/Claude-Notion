@@ -44,10 +44,19 @@ from typing import Any
 from notion_bulk_edit.notion_api import NotionClient
 
 from notion_rpadv.services.dje_notion_mapper import lookup_processo_record
+from notion_rpadv.services.dje_notion_mappings import (
+    mapear_tipo_comunicacao,
+    mapear_tipo_documento,
+)
 from notion_rpadv.services.dje_regras import (
     PropriedadeNotion,
     VeredictoPub,
     aplicar_todas_regras,
+)
+from notion_rpadv.services.dje_text_limpeza import limpar_cabecalho_trailer
+from notion_rpadv.services.dje_text_pipeline import (
+    preprocessar_texto_djen,
+    truncar_texto_inline,
 )
 
 logger = logging.getLogger("dje.recalcular_alertas")
@@ -77,14 +86,17 @@ class ResultadoRecalculo:
             ``notion_page_id`` populado e ≠ SKIPPED.
         total_processadas: quantas tiveram tags computadas.
         total_atualizadas: quantas tiveram alguma das 3 propriedades
-            sobrescrita. Em ``always_update=False``, só conta as que
-            realmente mudaram.
-        total_inalteradas: tags calculadas batem com as atuais nas 3
-            propriedades — update pulado.
+            (ou ``Texto``, Round 11) sobrescrita. Em
+            ``always_update=False``, só conta as que realmente mudaram.
+        total_inalteradas: tags + Texto calculados batem com os atuais —
+            update pulado.
         total_pulados_sem_notion: pubs com ``notion_page_id`` no banco
             mas que não foram encontradas no query da data source.
         total_pulados_payload_invalido: payload_json corrompido.
         total_erros: chamadas a ``update_page`` que falharam.
+        total_texto_limpo: Round 11. Quantas pubs tiveram o ``Texto``
+            sobrescrito pela limpeza (subconjunto de
+            ``total_atualizadas``).
         erros: detalhes (até 50) das falhas.
         diffs_amostra: amostra (até 20) dos diffs por propriedade.
     """
@@ -96,6 +108,7 @@ class ResultadoRecalculo:
     total_pulados_sem_notion: int = 0
     total_pulados_payload_invalido: int = 0
     total_erros: int = 0
+    total_texto_limpo: int = 0
     erros: list[dict[str, str]] = field(default_factory=list)
     diffs_amostra: list[dict[str, Any]] = field(default_factory=list)
 
@@ -132,24 +145,47 @@ def _tags_atuais_de_page(
     return out
 
 
+def _texto_atual_de_page(page: dict[str, Any]) -> str:
+    """Extrai o texto da propriedade ``Texto`` (rich_text) de uma page
+    do Notion. Vazio quando ausente.
+
+    Round 11 — usado pelo backfill de limpeza para comparar com o texto
+    recém-limpo e decidir se vale chamar ``update_page``.
+    """
+    props = page.get("properties") or {}
+    bloco = props.get("Texto") or {}
+    rt = bloco.get("rich_text") or []
+    return "".join(
+        str(it.get("plain_text") or it.get("text", {}).get("content", ""))
+        for it in rt if isinstance(it, dict)
+    )
+
+
 def _carregar_estado_atual_notion(
     client: NotionClient,
     *,
     data_source_id: str = DS_PUBLICACOES_DEFAULT,
     on_progress: Callable[[int], None] | None = None,
-) -> dict[str, dict[PropriedadeNotion, list[str]]]:
+) -> dict[str, dict[str, Any]]:
     """Faz ``query_all`` na data source de Publicações e devolve mapa
-    ``page_id → {prop: tags_atuais}``.
+    ``page_id → {"tags": {prop: [..]}, "texto": str}``.
+
+    Round 11 — adicionado ``texto`` ao estado pra comparar com o texto
+    limpo durante o backfill de limpeza. Custo de memória ~3-4 MB
+    (2.000 chars × ~1.800 pubs).
     """
     pages = client.query_all(
         data_source_id, on_progress=on_progress,
     )
-    out: dict[str, dict[PropriedadeNotion, list[str]]] = {}
+    out: dict[str, dict[str, Any]] = {}
     for page in pages:
         page_id = page.get("id") or ""
         if not page_id:
             continue
-        out[page_id] = _tags_atuais_de_page(page)
+        out[page_id] = {
+            "tags": _tags_atuais_de_page(page),
+            "texto": _texto_atual_de_page(page),
+        }
     return out
 
 
@@ -296,9 +332,29 @@ def recalcular_alertas_publicacoes(
             resultado.total_pulados_sem_notion += 1
             continue
 
-        tags_atuais = estado_atual[notion_page_id]
+        estado_pub = estado_atual[notion_page_id]
+        tags_atuais = estado_pub["tags"]
+        texto_atual_notion = estado_pub["texto"]
 
-        # Detecta diff em qualquer das 3 propriedades
+        # Round 11 — calcula texto limpo a partir do payload original.
+        # A função aplica bypass por tipo (Distribuição, Pauta, Edital,
+        # Certidão, Lista) e por padrão (notifico_eproc, texto_imprestavel)
+        # e devolve texto cru nos fallbacks.
+        sigla = payload.get("siglaTribunal") or row["sigla_tribunal"] or ""
+        tipo_doc_canonico = mapear_tipo_documento(payload.get("tipoDocumento"))
+        tipo_com_canonico = mapear_tipo_comunicacao(payload.get("tipoComunicacao"))
+        texto_pre_html = preprocessar_texto_djen(payload.get("texto"))
+        texto_limpo_full, _limpeza_diag = limpar_cabecalho_trailer(
+            texto_pre_html,
+            tribunal=sigla,
+            tipo_documento=tipo_doc_canonico,
+            tipo_comunicacao=tipo_com_canonico,
+        )
+        # Mesma transformação que o mapper aplica antes de gravar:
+        # trunca em 2000 chars com word-boundary.
+        texto_limpo_inline = truncar_texto_inline(texto_limpo_full)
+
+        # Detecta diff em qualquer das 3 propriedades + Texto
         mudou = False
         diffs_por_prop: dict[str, dict[str, list[str]]] = {}
         for prop in PROPS_DAS_TAGS:
@@ -312,6 +368,15 @@ def recalcular_alertas_publicacoes(
                     "removidos": sorted(atuais_set - novas_set),
                     "adicionados": sorted(novas_set - atuais_set),
                 }
+        texto_mudou = texto_limpo_inline.strip() != texto_atual_notion.strip()
+        if texto_mudou:
+            mudou = True
+            diffs_por_prop["Texto"] = {
+                "chars_antes": [str(len(texto_atual_notion))],
+                "chars_depois": [str(len(texto_limpo_inline))],
+                "removidos": [],
+                "adicionados": [],
+            }
 
         if mudou and len(resultado.diffs_amostra) < 20:
             resultado.diffs_amostra.append({
@@ -326,18 +391,29 @@ def recalcular_alertas_publicacoes(
 
         if dry_run:
             resultado.total_atualizadas += 1
+            if texto_mudou:
+                resultado.total_texto_limpo += 1
             continue
 
-        # Update real — escreve as 3 propriedades juntas
+        # Update real — escreve as 3 propriedades de tags + Texto (se mudou).
+        # Note: blocos do corpo da página NÃO são reescritos aqui — só a
+        # propriedade inline ``Texto`` (≤2000 chars). Pubs criadas pelo
+        # app pós-Round 11 já têm corpo e Texto limpos desde a criação.
+        update_props: dict[str, Any] = {
+            prop: _multi_select_payload(tags_novas.get(prop, []))
+            for prop in PROPS_DAS_TAGS
+        }
+        if texto_mudou:
+            update_props["Texto"] = {
+                "rich_text": [
+                    {"type": "text", "text": {"content": texto_limpo_inline}}
+                ] if texto_limpo_inline else [],
+            }
         try:
-            notion_client.update_page(
-                notion_page_id,
-                {
-                    prop: _multi_select_payload(tags_novas.get(prop, []))
-                    for prop in PROPS_DAS_TAGS
-                },
-            )
+            notion_client.update_page(notion_page_id, update_props)
             resultado.total_atualizadas += 1
+            if texto_mudou:
+                resultado.total_texto_limpo += 1
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "djen_id=%s falha update_page: %s", djen_id, exc,
