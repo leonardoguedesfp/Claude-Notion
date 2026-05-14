@@ -393,3 +393,90 @@ def test_real_trt10_intimacao_ato_ordinatorio() -> None:
     assert diag.cabecalho_removido is True
     # Marcador específico casa antes do genérico
     assert "INTIMAÇÃO - ATO ORDINATÓRIO" in (diag.marcador_inicio_casado or "")
+
+
+# ---------------------------------------------------------------------------
+# Regressões Round 11.1 — hotfix case-sensitive
+# ---------------------------------------------------------------------------
+
+
+def test_regressao_decisao_minuscula_no_meio_nao_corta() -> None:
+    """Pub TJDFT___2026-02-09___3: começava direto com dispositivo,
+    sem cabeçalho. Antes do hotfix, regex `\\bDECISÃO\\b` case-insensitive
+    casava em `decisão.` minúsculo no meio, cortando o dispositivo.
+
+    Após o fix (uppercase only), nada deve casar — texto preservado
+    via fallback.
+    """
+    txt = (
+        "Sendo assim, CONHEÇO e DOU PARCIAL PROVIMENTO aos embargos de "
+        "declaração opostos, a fim de que passe a constar: Faculto à parte "
+        "autora o prazo de 15 (quinze) dias para informar se possui "
+        "interesse na produção da prova pericial. No mais, permanecerá "
+        "intacta a decisão. Decisão registrada e assinada eletronicamente "
+        "pelo Juiz de Direito abaixo identificado, na data da certificação "
+        "digital. Publique-se. Intime-se."
+    )
+    saida, diag = limpar_cabecalho_trailer(
+        txt, tribunal="TJDFT", tipo_documento="Decisão",
+        tipo_comunicacao="Intimação",
+    )
+    # Hotfix Round 11.1: regex `\bDECISÃO\b` é case-sensitive — `decisão.`
+    # minúsculo NÃO casa, então cai em fallback.
+    assert diag.fallback_aplicado is True
+    assert diag.cabecalho_removido is False
+    # Conteúdo decisório preservado integralmente
+    assert "Sendo assim, CONHEÇO" in saida
+    assert "DOU PARCIAL PROVIMENTO" in saida
+
+
+def test_regressao_acordao_minusculo_no_meio_nao_corta() -> None:
+    """Ementa TJDFT: começa direto com texto da ementa
+    (`EMBARGOS DE DECLARAÇÃO. OMISSÃO...`), depois cita `acórdão
+    recorrido` minúsculo. Antes do hotfix, regex `\\bACÓRDÃO\\b` casava
+    no minúsculo. Após, cai em fallback.
+    """
+    txt = (
+        "EMBARGOS DE DECLARAÇÃO. OMISSÃO. NÃO OCORRÊNCIA. INTERESSE "
+        "DE REEXAME. PREQUESTIONAMENTO. RECURSO DESPROVIDO. "
+        "1. De acordo com o disposto no art. 1022 do Código de Processo "
+        "Civil, os embargos de declaração não se prestam a "
+        "rediscutir o acórdão recorrido."
+    )
+    saida, diag = limpar_cabecalho_trailer(
+        txt, tribunal="TJDFT", tipo_documento="Ementa",
+        tipo_comunicacao="Intimação",
+    )
+    # `EMBARGOS DE DECLARAÇÃO` no início NÃO é marcador, mas `EMENTA`
+    # genérico não casa porque é uppercase puro e essa palavra não aparece.
+    # `acórdão recorrido` minúsculo também não casa após o hotfix.
+    # Defesa adicional: se algo casasse antes de CABECALHO_MIN_CHARS=80,
+    # ainda assim cairia em fallback.
+    if diag.cabecalho_removido:
+        # Se o algoritmo escolheu cortar, garantir que pelo menos preserva
+        # o início (texto da ementa).
+        assert "EMBARGOS DE DECLARAÇÃO" in saida
+    else:
+        # Esperado: fallback total
+        assert diag.fallback_aplicado is True
+        assert "EMBARGOS DE DECLARAÇÃO" in saida
+
+
+def test_regressao_despacho_uppercase_real_funciona() -> None:
+    """Sanity check: o hotfix uppercase-only NÃO quebrou o caso comum.
+    Pubs reais usam `DESPACHO` em maiúsculas no marcador de cabeçalho —
+    devem continuar sendo cortadas corretamente.
+    """
+    txt = (
+        "PODER JUDICIÁRIO JUSTIÇA DO TRABALHO TRIBUNAL REGIONAL DO TRABALHO "
+        "DA 10ª REGIÃO 5ª Vara do Trabalho de Brasília - DF "
+        "ATOrd 0001234-56.2024.5.10.0005 RECLAMANTE: X RECLAMADO: Y "
+        "DESPACHO Vistos, etc. Defiro o pedido inicial."
+    )
+    saida, diag = limpar_cabecalho_trailer(
+        txt, tribunal="TRT10", tipo_documento="Despacho",
+        tipo_comunicacao="Intimação",
+    )
+    assert diag.cabecalho_removido is True
+    assert "DESPACHO" in (diag.marcador_inicio_casado or "")
+    assert saida.startswith("DESPACHO")

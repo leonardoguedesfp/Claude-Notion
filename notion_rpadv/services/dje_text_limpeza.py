@@ -124,8 +124,20 @@ RX_CONTROLE_UNICODE: re.Pattern[str] = re.compile(r"[␀-␿]")
 #: Marcadores em "linha própria" (`\nMARCADOR\n`) vêm antes dos genéricos
 #: porque, em pubs longas (STJ, TJDFT), são mais específicos e menos
 #: propensos a falso positivo.
+#:
+#: **Round 11.1 (hotfix 13/05/2026):** os marcadores genéricos
+#: ``DESPACHO/DECISÃO/SENTENÇA/ACÓRDÃO/EMENTA/RELATÓRIO`` são
+#: **case-sensitive** (uppercase puro). O DJEN sempre traz esses
+#: marcadores em maiúsculas; ocorrências minúsculas (``decisão.``,
+#: ``acórdão recorrido``) são sempre referências internas no corpo —
+#: aceitá-las gerava corte indevido em pubs que começavam direto pelo
+#: dispositivo (e.g., ``"Sendo assim, CONHEÇO..."`` cortado em
+#: ``"decisão."`` no meio do parágrafo). Antes da v11.1, ~3 pubs em
+#: 1.833 (0,16%) ficaram com o dispositivo cortado. Após o fix essas
+#: pubs caem em fallback (preservam o texto cru).
 MARCADORES_INICIO: tuple[tuple[re.Pattern[str], str], ...] = (
-    # Específicos — combinações de palavras conhecidas no início do corpo
+    # Específicos — combinações de palavras conhecidas no início do corpo.
+    # Mantêm re.I porque a frase composta inteira é específica o bastante.
     (re.compile(r"\bINTIMA[ÇC][ÃA]O\s*-\s*ATO\s+ORDINAT[ÓO]RIO\b", re.I),
      "INTIMAÇÃO - ATO ORDINATÓRIO"),
     (re.compile(r"\bATO\s+ORDINAT[ÓO]RIO\b", re.I),
@@ -134,22 +146,24 @@ MARCADORES_INICIO: tuple[tuple[re.Pattern[str], str], ...] = (
      "INTIMAÇÃO Fica"),
     (re.compile(r"\bCERTID[ÃA]O\s+E\s+CONCLUS[ÃA]O\b", re.I),
      "CERTIDÃO E CONCLUSÃO"),
-    # Marcadores em linha própria (STJ + TJDFT em pubs longas)
-    (re.compile(r"(?:^|\n)\s*AC[ÓO]RD[ÃA]O\s*\n", re.I),
+    # Marcadores em linha própria — uppercase puro (DJEN sempre maiúsculo)
+    (re.compile(r"(?:^|\n)\s*ACÓRDÃO\s*\n"),
      "ACÓRDÃO (linha)"),
-    (re.compile(r"(?:^|\n)\s*DECIS[ÃA]O\s*\n", re.I),
+    (re.compile(r"(?:^|\n)\s*DECISÃO\s*\n"),
      "DECISÃO (linha)"),
-    (re.compile(r"(?:^|\n)\s*SENTEN[ÇC]A\s*\n", re.I),
+    (re.compile(r"(?:^|\n)\s*SENTENÇA\s*\n"),
      "SENTENÇA (linha)"),
-    (re.compile(r"(?:^|\n)\s*EMENTA\s*\n", re.I),
+    (re.compile(r"(?:^|\n)\s*EMENTA\s*\n"),
      "EMENTA (linha)"),
-    # Genéricos — fallback
-    (re.compile(r"\bDESPACHO\b", re.I), "DESPACHO"),
-    (re.compile(r"\bDECIS[ÃA]O\b", re.I), "DECISÃO"),
-    (re.compile(r"\bSENTEN[ÇC]A\b", re.I), "SENTENÇA"),
-    (re.compile(r"\bAC[ÓO]RD[ÃA]O\b", re.I), "ACÓRDÃO"),
-    (re.compile(r"\bEMENTA\b", re.I), "EMENTA"),
-    (re.compile(r"\bRELAT[ÓO]RIO\b", re.I), "RELATÓRIO"),
+    # Genéricos — uppercase puro (re.I removido no Round 11.1)
+    (re.compile(r"\bDESPACHO\b"), "DESPACHO"),
+    (re.compile(r"\bDECISÃO\b"), "DECISÃO"),
+    (re.compile(r"\bSENTENÇA\b"), "SENTENÇA"),
+    (re.compile(r"\bACÓRDÃO\b"), "ACÓRDÃO"),
+    (re.compile(r"\bEMENTA\b"), "EMENTA"),
+    (re.compile(r"\bRELATÓRIO\b"), "RELATÓRIO"),
+    # Vistos pode aparecer "Vistos" ou "VISTOS" — re.I aqui é OK porque
+    # "vistos" minúsculo no meio de despacho é raro.
     (re.compile(r"\bVistos[,.\s]", re.I), "Vistos"),
 )
 
