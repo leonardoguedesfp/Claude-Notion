@@ -43,6 +43,7 @@ from typing import Any
 
 from notion_bulk_edit.notion_api import NotionClient
 
+from notion_rpadv.services.dje_db import read_flag, set_flag
 from notion_rpadv.services.dje_notion_mapper import lookup_processo_record
 from notion_rpadv.services.dje_notion_mappings import (
     mapear_tipo_comunicacao,
@@ -58,6 +59,18 @@ from notion_rpadv.services.dje_text_pipeline import (
     chunkar_para_rich_text,
     preprocessar_texto_djen,
 )
+
+#: Flag em ``leitor_dje.db.app_flags`` que indica que o backfill
+#: one-shot da limpeza do corpo (Round 11.4) já foi concluído com
+#: sucesso nesta máquina. Quando a flag está setada (``"true"``), o
+#: recálculo PULA a etapa de listar/apagar blocos do corpo —
+#: protegendo qualquer bloco adicionado manualmente pelo operador
+#: depois do backfill.
+#:
+#: Para forçar o backfill novamente (raro), basta passar
+#: ``force_corpo=True`` para :func:`recalcular_alertas_publicacoes` ou
+#: deletar a linha em ``app_flags``.
+FLAG_CORPO_LIMPO_DONE: str = "round_11_4_corpo_limpo_done"
 
 logger = logging.getLogger("dje.recalcular_alertas")
 
@@ -273,6 +286,7 @@ def recalcular_alertas_publicacoes(
     always_update: bool = False,
     limite: int | None = None,
     skip_corpo: bool = False,
+    force_corpo: bool = False,
     on_progress: Callable[[int, int], None] | None = None,
     on_loading: Callable[[int], None] | None = None,
 ) -> ResultadoRecalculo:
@@ -282,21 +296,33 @@ def recalcular_alertas_publicacoes(
     11/11.3) + apaga blocos legados do corpo da página (Round 11.4) em
     todas as publicações já enviadas ao Notion.
 
+    A etapa de corpo é **one-shot por máquina**: na primeira passada
+    bem-sucedida (sem falhas, sem ``--limite``, sem ``--dry-run``,
+    sem ``skip_corpo``), a flag :data:`FLAG_CORPO_LIMPO_DONE` é
+    gravada em ``app_flags`` e as próximas execuções pulam a etapa
+    completamente — preservando qualquer bloco adicionado manualmente
+    pelo operador depois disso.
+
     Args:
         notion_client: cliente Notion autenticado.
         dje_conn: conexão para ``leitor_dje.db``.
         cache_conn: conexão para ``cache.db``.
         data_source_id: UUID da data source 📬 Publicações.
         dry_run: calcula tudo mas não chama ``update_page`` nem
-            ``delete_block``.
+            ``delete_block``. Não marca a flag de corpo limpo.
         always_update: força ``update_page`` mesmo sem diff em tags ou
             Texto (rebuild histórico). A limpeza do corpo só ocorre
             quando há blocos legados para apagar — ``always_update``
             não cria trabalho extra para corpos já vazios.
-        limite: processa só as N primeiras pubs.
+        limite: processa só as N primeiras pubs. Não marca a flag de
+            corpo limpo (passada parcial).
         skip_corpo: pula a etapa de listar/apagar blocos do corpo da
             página. Útil pra re-rodar só as tags + Texto quando o
-            backfill de blocos estiver com problema.
+            backfill de blocos estiver com problema. Não marca a flag.
+        force_corpo: força a etapa do corpo mesmo se a flag
+            :data:`FLAG_CORPO_LIMPO_DONE` já estiver setada. Usar
+            quando o operador adicionou blocos legados manualmente e
+            quer rerodar o backfill.
         on_progress: callback ``(processadas, total)``.
         on_loading: callback ``(n_paginas_acumuladas)`` durante o
             carregamento do estado atual.
@@ -305,6 +331,19 @@ def recalcular_alertas_publicacoes(
         :class:`ResultadoRecalculo` com contadores e amostra de diffs.
     """
     resultado = ResultadoRecalculo()
+
+    # Round 11.4 — flag one-shot: se o backfill do corpo já foi
+    # concluído nesta máquina, pular toda a etapa de listar/apagar
+    # blocos. ``force_corpo`` quebra o opt-out (raro). ``skip_corpo``
+    # é o opt-out manual desta execução.
+    corpo_limpo_done = read_flag(dje_conn, FLAG_CORPO_LIMPO_DONE) == "true"
+    pular_etapa_corpo = skip_corpo or (corpo_limpo_done and not force_corpo)
+    if corpo_limpo_done and not force_corpo:
+        logger.info(
+            "Round 11.4: flag '%s' setada — pulando etapa de corpo. "
+            "Use force_corpo=True para re-rodar.",
+            FLAG_CORPO_LIMPO_DONE,
+        )
 
     # Fase 1: estado atual no Notion
     logger.info(
@@ -420,7 +459,7 @@ def recalcular_alertas_publicacoes(
         corpo_precisa_limpar = False
         blocos_atuais: list[dict[str, Any]] = []
         n_blocos_atuais = 0
-        if not skip_corpo:
+        if not pular_etapa_corpo:
             try:
                 blocos_atuais = notion_client.list_all_block_children(
                     notion_page_id,
@@ -537,5 +576,34 @@ def recalcular_alertas_publicacoes(
 
         if houve_alguma_escrita:
             resultado.total_atualizadas += 1
+
+    # Round 11.4 — marca a flag one-shot quando a passada cobriu a
+    # base inteira sem falhas e a etapa de corpo não foi pulada. A
+    # partir daqui, próximas execuções pulam a etapa por completo
+    # (sem listar/apagar blocos), preservando edições manuais que o
+    # operador venha a fazer no corpo das pubs.
+    pode_marcar_flag = (
+        not pular_etapa_corpo
+        and not dry_run
+        and limite is None
+        and resultado.total_corpo_falhou == 0
+        and not corpo_limpo_done
+    )
+    if pode_marcar_flag:
+        try:
+            set_flag(dje_conn, FLAG_CORPO_LIMPO_DONE, "true")
+            dje_conn.commit()
+            logger.info(
+                "Round 11.4: flag '%s' setada — backfill do corpo "
+                "concluído. Próximas execuções pulam a etapa.",
+                FLAG_CORPO_LIMPO_DONE,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Round 11.4: falha ao setar flag '%s': %s. Próxima "
+                "execução vai re-rodar o backfill (idempotente, "
+                "trabalho extra mínimo).",
+                FLAG_CORPO_LIMPO_DONE, exc,
+            )
 
     return resultado

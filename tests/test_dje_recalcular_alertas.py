@@ -19,7 +19,9 @@ import sqlite3
 from typing import Any
 from unittest.mock import MagicMock
 
+from notion_rpadv.services.dje_db import read_flag, set_flag
 from notion_rpadv.services.dje_recalcular_alertas import (
+    FLAG_CORPO_LIMPO_DONE,
     NOTION_SKIPPED_SENTINEL,
     PROPS_DAS_TAGS,
     ResultadoRecalculo,
@@ -54,6 +56,17 @@ def _abrir_dje_db_em_memoria() -> sqlite3.Connection:
             notion_page_id TEXT,
             notion_attempts INTEGER NOT NULL DEFAULT 0,
             notion_last_error TEXT
+        )
+        """,
+    )
+    # Round 11.4 — recalcular_alertas lê/escreve em app_flags pra
+    # controlar o backfill one-shot do corpo das publicações.
+    conn.execute(
+        """
+        CREATE TABLE app_flags (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            set_at TEXT NOT NULL
         )
         """,
     )
@@ -973,3 +986,164 @@ def test_texto_pub_longa_idempotente_se_chunks_atuais_batem() -> None:
     client.update_page.assert_not_called()
     client.delete_block.assert_not_called()
     client.append_block_children.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Round 11.4 — flag one-shot do backfill do corpo (FLAG_CORPO_LIMPO_DONE)
+# ---------------------------------------------------------------------------
+
+
+def test_flag_pula_etapa_de_corpo_quando_setada() -> None:
+    """Com a flag setada, ``list_all_block_children`` NÃO é chamado e
+    nenhum delete acontece — protege adições manuais no corpo.
+    """
+    texto = "INTIMAÇÃO Fica V. Sa. intimado do despacho."
+    dje, cache = _setup_pub_e_processo_consistentes(texto)
+    set_flag(dje, FLAG_CORPO_LIMPO_DONE, "true")
+
+    client = MagicMock()
+    client.query_all.return_value = [
+        _make_notion_page("page-1", texto=texto),
+    ]
+
+    res = recalcular_alertas_publicacoes(
+        notion_client=client, dje_conn=dje, cache_conn=cache,
+    )
+
+    assert res.total_corpo_reescrito == 0
+    client.list_all_block_children.assert_not_called()
+    client.delete_block.assert_not_called()
+
+
+def test_flag_marca_corpo_limpo_done_apos_passada_completa() -> None:
+    """Sem falhas, sem ``--limite``, sem ``--dry-run``, sem
+    ``skip_corpo`` → flag é gravada após a passada.
+    """
+    texto = "INTIMAÇÃO Fica V. Sa. intimado do despacho."
+    dje, cache = _setup_pub_e_processo_consistentes(texto)
+
+    client = MagicMock()
+    client.query_all.return_value = [
+        _make_notion_page("page-1", texto=texto),
+    ]
+    client.list_all_block_children.return_value = []
+
+    assert read_flag(dje, FLAG_CORPO_LIMPO_DONE) is None
+    res = recalcular_alertas_publicacoes(
+        notion_client=client, dje_conn=dje, cache_conn=cache,
+    )
+    assert res.total_corpo_falhou == 0
+    assert read_flag(dje, FLAG_CORPO_LIMPO_DONE) == "true"
+
+
+def test_flag_nao_marca_se_houve_falha_no_delete() -> None:
+    """``total_corpo_falhou > 0`` → flag NÃO é setada (próxima rodada
+    tenta de novo)."""
+    texto = "INTIMAÇÃO Fica V. Sa. intimado do despacho."
+    dje, cache = _setup_pub_e_processo_consistentes(texto)
+
+    client = MagicMock()
+    client.query_all.return_value = [
+        _make_notion_page("page-1", texto=texto),
+    ]
+    client.list_all_block_children.return_value = [
+        _bloco_paragraph("legado"),
+    ]
+    client.delete_block.side_effect = RuntimeError("boom")
+
+    res = recalcular_alertas_publicacoes(
+        notion_client=client, dje_conn=dje, cache_conn=cache,
+    )
+    assert res.total_corpo_falhou == 1
+    assert read_flag(dje, FLAG_CORPO_LIMPO_DONE) is None
+
+
+def test_flag_nao_marca_em_dry_run() -> None:
+    texto = "INTIMAÇÃO Fica V. Sa. intimado do despacho."
+    dje, cache = _setup_pub_e_processo_consistentes(texto)
+
+    client = MagicMock()
+    client.query_all.return_value = [
+        _make_notion_page("page-1", texto=texto),
+    ]
+    client.list_all_block_children.return_value = []
+
+    recalcular_alertas_publicacoes(
+        notion_client=client, dje_conn=dje, cache_conn=cache,
+        dry_run=True,
+    )
+    assert read_flag(dje, FLAG_CORPO_LIMPO_DONE) is None
+
+
+def test_flag_nao_marca_se_skip_corpo_true() -> None:
+    texto = "INTIMAÇÃO Fica V. Sa. intimado do despacho."
+    dje, cache = _setup_pub_e_processo_consistentes(texto)
+
+    client = MagicMock()
+    client.query_all.return_value = [
+        _make_notion_page("page-1", texto=texto),
+    ]
+
+    recalcular_alertas_publicacoes(
+        notion_client=client, dje_conn=dje, cache_conn=cache,
+        skip_corpo=True,
+    )
+    assert read_flag(dje, FLAG_CORPO_LIMPO_DONE) is None
+
+
+def test_flag_nao_marca_se_limite_setado() -> None:
+    """Passada parcial (``limite=N``) NÃO marca a flag — pode ter
+    deixado pubs fora do range."""
+    texto = "INTIMAÇÃO Fica V. Sa. intimado do despacho."
+    dje, cache = _setup_pub_e_processo_consistentes(texto)
+    _inserir_pub(
+        dje, djen_id=2, cnj="0001737-51.2016.5.10.0015",
+        notion_page_id="page-2",
+        payload={
+            **_payload_intimacao_curta(texto),
+            "numeroprocessocommascara": "0001737-51.2016.5.10.0015",
+        },
+    )
+    _seed_processo_consistente(
+        cache, page_id="proc-2", cnj="0001737-51.2016.5.10.0015",
+    )
+
+    client = MagicMock()
+    client.query_all.return_value = [
+        _make_notion_page("page-1", texto=texto),
+        _make_notion_page("page-2", texto=texto),
+    ]
+    client.list_all_block_children.return_value = []
+
+    recalcular_alertas_publicacoes(
+        notion_client=client, dje_conn=dje, cache_conn=cache,
+        limite=1,
+    )
+    assert read_flag(dje, FLAG_CORPO_LIMPO_DONE) is None
+
+
+def test_force_corpo_ignora_flag_setada() -> None:
+    """Mesmo com a flag setada, ``force_corpo=True`` re-roda a etapa
+    de corpo. A flag não é re-setada (já estava)."""
+    texto = "INTIMAÇÃO Fica V. Sa. intimado do despacho."
+    dje, cache = _setup_pub_e_processo_consistentes(texto)
+    set_flag(dje, FLAG_CORPO_LIMPO_DONE, "true")
+
+    client = MagicMock()
+    client.query_all.return_value = [
+        _make_notion_page("page-1", texto=texto),
+    ]
+    client.list_all_block_children.return_value = [
+        _bloco_paragraph("bloco legado deixado pra trás"),
+    ]
+
+    res = recalcular_alertas_publicacoes(
+        notion_client=client, dje_conn=dje, cache_conn=cache,
+        force_corpo=True,
+    )
+
+    client.list_all_block_children.assert_called_once()
+    assert client.delete_block.call_count == 1
+    assert res.total_corpo_reescrito == 1
+    # Flag continua setada (já estava antes — não foi tocada).
+    assert read_flag(dje, FLAG_CORPO_LIMPO_DONE) == "true"
