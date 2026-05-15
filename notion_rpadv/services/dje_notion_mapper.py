@@ -31,9 +31,9 @@ from notion_rpadv.services.dje_notion_mappings import (
 from notion_rpadv.services.dje_processos import _normaliza_cnj
 from notion_rpadv.services.dje_text_pipeline import (
     aplicar_caso_15,
+    chunkar_para_rich_text,
     preprocessar_texto_djen,
     quebrar_em_blocos,
-    truncar_texto_inline,
 )
 
 logger = logging.getLogger("dje.notion.mapper")
@@ -68,14 +68,15 @@ def _rich_text_prop(text: str | None) -> dict[str, Any]:
 
 
 def _texto_inline_prop(texto_pre: str | None) -> dict[str, Any]:
-    """Property "Texto" — usa truncar_texto_inline (1.8) com corte em
-    fronteira de palavra e marcador " […]"."""
-    if not texto_pre:
-        return {"rich_text": []}
-    truncado = truncar_texto_inline(texto_pre, limite=NOTION_TEXTO_INLINE_LIMIT)
-    return {
-        "rich_text": [{"type": "text", "text": {"content": truncado}}],
-    }
+    """Property "Texto" — quebra ``texto_pre`` em até 100 itens
+    ``rich_text`` de até 1.990 chars cada (Round 11.3, 2026-05-14).
+
+    Antes: 1 item truncado em ~2.000 chars com marcador ``[…]`` —
+    99% dos acórdãos do TRT10 cortados, 90% TST, 74% TJDFT.
+    Agora: até 100 itens ≈ 199.000 chars de texto integral. STJ
+    permanece limitado pelo DJEN de origem (publica só dispositivo).
+    """
+    return {"rich_text": chunkar_para_rich_text(texto_pre)}
 
 
 def _select_prop(name: str | None) -> dict[str, Any]:

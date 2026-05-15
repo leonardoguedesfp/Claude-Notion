@@ -35,3 +35,10 @@ NOTION_RETRY_BACKOFFS_SECONDS: Final[tuple[float, ...]] = (1.0, 2.0, 4.0)
 # Notion oficialmente aceita 2000 chars por rich_text item.
 NOTION_TEXTO_INLINE_LIMIT: Final[int] = 2000
 NOTION_BLOCK_TEXT_LIMIT: Final[int] = 2000
+
+# Round 11.3 (2026-05-14): a propriedade ``rich_text`` aceita um array
+# de até 100 itens. Concatenados, eles aparecem como texto único na
+# interface do Notion. A integração agora monta a propriedade ``Texto``
+# como múltiplos itens (até 100 × 1990 chars ≈ 199k chars), não mais
+# como um único item truncado em 2000 chars.
+NOTION_RICH_TEXT_MAX_ITEMS_PER_PROP: Final[int] = 100

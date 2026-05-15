@@ -135,6 +135,10 @@ def truncar_texto_inline(
     intacto.
 
     O marcador conta dentro do limite (output total ≤ ``limite``).
+
+    Round 11.3 (2026-05-14): preserved as legacy helper. Production
+    code agora usa :func:`chunkar_para_rich_text` — propriedade ``Texto``
+    aceita até 100 itens, totalizando ~199.000 chars.
     """
     if not texto:
         return ""
@@ -155,6 +159,116 @@ def truncar_texto_inline(
     else:
         ponto_corte = corte_max
     return s[:ponto_corte].rstrip() + marcador
+
+
+# ===========================================================================
+# 1.9 — Chunkagem em múltiplos itens rich_text (Round 11.3, 2026-05-14)
+# ===========================================================================
+
+#: Margem de segurança em relação ao limite duro de 2.000 chars por item
+#: rich_text — evita disputas com cálculo de tamanho da API.
+RICH_TEXT_CHUNK_MAX_DEFAULT: int = 1990
+
+#: Notion permite até 100 itens em um array ``rich_text`` de uma
+#: propriedade. ``100 * 1990 ≈ 199.000`` chars suportados — comporta
+#: acórdãos completos do TRT10/TST/TJDFT (max observado em produção:
+#: 231.025 chars de uma pub STJ extrema; pubs assim sofrem overflow).
+RICH_TEXT_MAX_ITEMS_DEFAULT: int = 100
+
+#: Janela (em chars antes do limite) onde a função procura uma fronteira
+#: natural pra cortar. 200 chars cobrem parágrafos típicos sem
+#: prejudicar acórdãos com seções longas.
+RICH_TEXT_JANELA_CORTE_DEFAULT: int = 200
+
+
+def chunkar_para_rich_text(
+    texto: str | None,
+    *,
+    chunk_max: int = RICH_TEXT_CHUNK_MAX_DEFAULT,
+    max_items: int = RICH_TEXT_MAX_ITEMS_DEFAULT,
+    marcador_overflow: str = TEXTO_INLINE_MARCADOR_DEFAULT,
+    janela_corte: int = RICH_TEXT_JANELA_CORTE_DEFAULT,
+) -> list[dict]:
+    """Quebra ``texto`` em itens ``rich_text`` da API Notion preservando
+    a integridade visual quando concatenados.
+
+    A propriedade ``rich_text`` aceita até 100 elementos, cada um
+    limitado a 2.000 chars. Concatenados, eles aparecem como texto
+    único na interface — sem separadores visíveis. Antes do Round 11.3
+    o app gravava 1 único item truncado em ~2.000 chars; agora grava
+    até 100 itens com até 1.990 chars cada (margem de 10 chars), o que
+    suporta ~199.000 chars de texto integral.
+
+    Estratégia de corte (em ordem de preferência, dentro de uma janela
+    de ``janela_corte`` chars antes do limite duro):
+
+        1. Quebra de parágrafo (``\\n\\n``)
+        2. Quebra de linha (``\\n``)
+        3. Fim de frase (``. ``)
+        4. Espaço entre palavras
+        5. Corte cru (último recurso)
+
+    O whitespace na fronteira é preservado — ele acompanha o chunk em
+    que estiver — para garantir que ``"".join(chunks)`` reproduza o
+    texto original sem perda. Quando o texto excede
+    ``chunk_max * max_items`` (~199.000 chars), o último item recebe
+    ``marcador_overflow`` para sinalizar truncamento — análogo ao
+    comportamento legado de :func:`truncar_texto_inline`.
+
+    Args:
+        texto: conteúdo a chunkar. ``None``/vazio → ``[]``.
+        chunk_max: máximo de chars por item (default 1990).
+        max_items: máximo de itens (default 100, limite da API).
+        marcador_overflow: sufixo aplicado ao último item se o texto
+            estourou ``chunk_max * max_items``.
+        janela_corte: tamanho da janela (chars antes do limite) onde
+            buscar fronteira natural.
+
+    Returns:
+        Lista de dicts no formato ``{"type": "text", "text": {"content": ...}}``
+        prontos pra ser usados em ``properties[X].rich_text``.
+    """
+    if not texto:
+        return []
+    s = str(texto)
+    chunks: list[str] = []
+    pos = 0
+    while pos < len(s) and len(chunks) < max_items:
+        restante = s[pos:]
+        if len(restante) <= chunk_max:
+            chunks.append(restante)
+            pos = len(s)
+            break
+        end = pos + chunk_max
+        # Janela de busca: pelo menos 1 char a partir de pos+1, até end.
+        ini_janela = max(end - janela_corte, pos + 1)
+        janela = s[ini_janela:end]
+        cut_rel = -1
+        for sep in ("\n\n", "\n", ". "):
+            i = janela.rfind(sep)
+            if i >= 0:
+                cut_rel = i + len(sep)
+                break
+        if cut_rel < 0:
+            i = janela.rfind(" ")
+            if i >= 0:
+                cut_rel = i + 1
+        cut_abs = ini_janela + cut_rel if cut_rel >= 0 else end
+        chunks.append(s[pos:cut_abs])
+        pos = cut_abs
+
+    # Texto sobrou (estourou max_items): marca overflow no último item.
+    if pos < len(s) and len(chunks) == max_items:
+        ultimo = chunks[-1]
+        marcador = marcador_overflow
+        if len(ultimo) + len(marcador) > chunk_max:
+            ultimo = ultimo[: chunk_max - len(marcador)]
+        chunks[-1] = ultimo + marcador
+
+    return [
+        {"type": "text", "text": {"content": c}}
+        for c in chunks if c
+    ]
 
 
 # ===========================================================================

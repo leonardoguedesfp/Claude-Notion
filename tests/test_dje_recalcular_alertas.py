@@ -966,3 +966,125 @@ def test_corpo_falha_em_delete_loga_e_segue_pipeline() -> None:
     assert any(
         "reescrever_corpo" in e["error"] for e in res.erros
     )
+
+
+# ---------------------------------------------------------------------------
+# Round 11.3 — backfill da propriedade Texto em múltiplos rich_text
+# ---------------------------------------------------------------------------
+
+
+def test_texto_pub_longa_pre_round_11_3_vira_multiplos_chunks() -> None:
+    """Pub longa que ANTES gravava 1 item ``rich_text`` truncado em
+    ~2.000 chars com '[…]'. O backfill deve detectar diff (texto
+    integral != texto truncado) e reescrever a propriedade ``Texto``
+    com múltiplos itens preservando o conteúdo na íntegra.
+    """
+    cabecalho = "INTIMAÇÃO Fica V. Sa. intimado.\n\n"
+    # ~5.400 chars de corpo — sobra muito do limite de 2.000.
+    corpo = ("Lorem ipsum dolor sit amet. " * 200).rstrip()
+    texto_integral = cabecalho + corpo
+
+    dje, cache = _setup_pub_e_processo_consistentes(texto_integral)
+
+    # Estado atual no Notion: 1 item truncado em ~2.000 chars com
+    # marcador "[…]" (comportamento pré-Round 11.3).
+    texto_truncado_atual = texto_integral[:1995] + " […]"
+    page = _make_notion_page("page-1")
+    page["properties"]["Texto"] = {
+        "rich_text": [
+            {
+                "plain_text": texto_truncado_atual,
+                "text": {"content": texto_truncado_atual},
+            },
+        ],
+    }
+
+    client = MagicMock()
+    client.query_all.return_value = [page]
+    # Corpo da página vazio simplifica o teste — a reescrita de blocos
+    # já está coberta nos testes de Round 11.2.
+    client.list_all_block_children.return_value = []
+
+    res = recalcular_alertas_publicacoes(
+        notion_client=client, dje_conn=dje, cache_conn=cache,
+    )
+
+    assert res.total_atualizadas == 1
+    assert res.total_texto_limpo == 1
+    # update_page foi chamado com Texto contendo múltiplos chunks.
+    update_calls = [
+        c for c in client.update_page.call_args_list
+        if "Texto" in c[0][1]
+    ]
+    assert len(update_calls) == 1
+    chunks = update_calls[0][0][1]["Texto"]["rich_text"]
+    assert len(chunks) >= 2
+    # Cada item respeita o limite duro da API Notion.
+    for it in chunks:
+        assert len(it["text"]["content"]) <= 2000
+    # Reconstrução exata: texto integral aparece na propriedade.
+    reconstruido = "".join(c["text"]["content"] for c in chunks)
+    assert reconstruido == texto_integral
+
+
+def test_texto_pub_longa_idempotente_se_chunks_atuais_batem() -> None:
+    """Pub longa cujo estado atual no Notion JÁ está em múltiplos
+    chunks reconstruindo o texto integral — sem diff, sem update da
+    propriedade Texto.
+    """
+    cabecalho = "INTIMAÇÃO Fica V. Sa. intimado.\n\n"
+    corpo = ("Lorem ipsum dolor sit amet. " * 200).rstrip()
+    texto_integral = cabecalho + corpo
+
+    dje, cache = _setup_pub_e_processo_consistentes(texto_integral)
+
+    # Estado atual: chunks reproduzem texto_integral exatamente.
+    from notion_rpadv.services.dje_text_pipeline import (
+        chunkar_para_rich_text,
+    )
+    chunks_atuais = chunkar_para_rich_text(texto_integral)
+    page = _make_notion_page("page-1")
+    page["properties"]["Texto"] = {
+        "rich_text": [
+            {
+                "plain_text": c["text"]["content"],
+                "text": c["text"],
+            }
+            for c in chunks_atuais
+        ],
+    }
+
+    client = MagicMock()
+    client.query_all.return_value = [page]
+    # Corpo da página simulado consistente com os blocos esperados —
+    # texto_paragraphs do esperado bate com o atual.
+    from notion_rpadv.services.dje_notion_mapper import (
+        _build_corpo_blocks_full,
+    )
+    pub_payload = {
+        "tipoComunicacao": "Intimação",
+        "tipoDocumento": "Decisão",
+        "siglaTribunal": "TRT10",
+        "nomeOrgao": "14ª Vara do Trabalho de Brasília - DF",
+        "numeroprocessocommascara": "0001736-51.2016.5.10.0014",
+        "nomeClasse": "AÇÃO TRABALHISTA - RITO ORDINÁRIO",
+        "texto": texto_integral,
+    }
+    blocos_esperados, _, _ = _build_corpo_blocks_full(
+        pub_payload, tipo_documento_canonico="Decisão",
+    )
+    # Adapta os blocos ao formato com id (como vêm da API Notion).
+    for i, b in enumerate(blocos_esperados):
+        b["id"] = f"sim-blk-{i}"
+    client.list_all_block_children.return_value = blocos_esperados
+
+    res = recalcular_alertas_publicacoes(
+        notion_client=client, dje_conn=dje, cache_conn=cache,
+    )
+
+    assert res.total_inalteradas == 1
+    assert res.total_texto_limpo == 0
+    assert res.total_corpo_reescrito == 0
+    client.update_page.assert_not_called()
+    client.delete_block.assert_not_called()
+    client.append_block_children.assert_not_called()

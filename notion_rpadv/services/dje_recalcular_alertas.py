@@ -58,8 +58,8 @@ from notion_rpadv.services.dje_regras import (
 )
 from notion_rpadv.services.dje_text_limpeza import limpar_cabecalho_trailer
 from notion_rpadv.services.dje_text_pipeline import (
+    chunkar_para_rich_text,
     preprocessar_texto_djen,
-    truncar_texto_inline,
 )
 
 #: Texto exato do placeholder "Observações" emitido pelo app antes do
@@ -457,9 +457,14 @@ def recalcular_alertas_publicacoes(
             tipo_documento=tipo_doc_canonico,
             tipo_comunicacao=tipo_com_canonico,
         )
-        # Mesma transformação que o mapper aplica antes de gravar:
-        # trunca em 2000 chars com word-boundary.
-        texto_limpo_inline = truncar_texto_inline(texto_limpo_full)
+        # Round 11.3 — propriedade Texto agora aceita até 100 itens
+        # rich_text (≈ 199.000 chars). Mesma chunkagem do mapper de
+        # criação. ``texto_limpo_inline`` é a string concatenada
+        # equivalente — usada pra detecção de diff vs estado atual.
+        texto_chunks_novos = chunkar_para_rich_text(texto_limpo_full)
+        texto_limpo_inline = "".join(
+            c["text"]["content"] for c in texto_chunks_novos
+        )
 
         # Round 11.2 — calcula blocos esperados do corpo (mesma pipeline
         # do mapper de criação) e lista os blocos atuais para detectar
@@ -587,11 +592,7 @@ def recalcular_alertas_publicacoes(
                 for prop in PROPS_DAS_TAGS
             }
             if texto_mudou or always_update:
-                update_props["Texto"] = {
-                    "rich_text": [
-                        {"type": "text", "text": {"content": texto_limpo_inline}}
-                    ] if texto_limpo_inline else [],
-                }
+                update_props["Texto"] = {"rich_text": texto_chunks_novos}
             try:
                 notion_client.update_page(notion_page_id, update_props)
                 houve_alguma_escrita = True

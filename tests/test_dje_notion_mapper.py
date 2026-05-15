@@ -394,22 +394,30 @@ def test_payload_titulo_sequencial_incrementa(dje_conn, cache_conn) -> None:
     assert titulo2 == "TRT10___2026-04-30___2"
 
 
-def test_payload_texto_truncado_em_inline_corpo_completo(
+def test_payload_texto_grande_vira_multiplos_itens_rich_text(
     dje_conn, cache_conn,
 ) -> None:
-    """Texto > 2000 chars: propriedade "Texto" trunca; corpo da página
-    tem TODO o texto em múltiplos blocos."""
+    """Round 11.3 — texto > 2000 chars vira múltiplos itens rich_text
+    na propriedade 'Texto' (cada item ≤ 1990 chars, total reconstrói o
+    texto original). Antes: 1 item truncado em 2000 com marcador
+    '[…]'. Agora: até 100 itens × 1990 = ~199k chars suportados.
+    """
     texto_grande = "X" * 5000
     pub = _publicacao_basica(texto=texto_grande)
     payload = montar_payload_publicacao(
         pub, dje_conn=dje_conn, cache_conn=cache_conn,
     )
-    inline = payload["properties"]["Texto"]["rich_text"][0]["text"]["content"]
-    assert len(inline) <= 2000
-    # Round 1 (1.8): marcador agora é " […]" (corte limpo em fronteira
-    # de palavra), substitui o "..." cru da Fase 5.
-    assert inline.endswith(" […]")
-    # Children: pelo menos 3 blocks (5000 / 2000 ≈ 3 chunks).
+    rich_text = payload["properties"]["Texto"]["rich_text"]
+    # 5000 / 1990 ≈ 3 itens (sem espaços, corta cru no chunk_max).
+    assert len(rich_text) >= 3
+    # Cada item respeita o limite duro da API.
+    for item in rich_text:
+        assert len(item["text"]["content"]) <= 2000
+    # Concatenação reproduz o texto original na íntegra (sem marcador
+    # de truncamento — cabe nos 199k chars).
+    reconstruido = "".join(it["text"]["content"] for it in rich_text)
+    assert reconstruido == texto_grande
+    # Corpo da página continua com todo o texto em múltiplos blocks.
     paragraphs = [b for b in payload["children"] if b["type"] == "paragraph"]
     assert len(paragraphs) >= 3
 
