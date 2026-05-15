@@ -30,7 +30,6 @@ from notion_rpadv.services.dje_notion_mappings import (
 )
 from notion_rpadv.services.dje_processos import _normaliza_cnj
 from notion_rpadv.services.dje_text_pipeline import (
-    aplicar_caso_15,
     chunkar_para_rich_text,
     preprocessar_texto_djen,
     quebrar_em_blocos,
@@ -198,54 +197,24 @@ def _build_corpo_blocks_full(
     *,
     tipo_documento_canonico: str,
 ) -> tuple[list[dict[str, Any]], str, list[dict[str, Any]]]:
-    """Pipeline completa de blocos do corpo da página (1.7 → 1.5 → 1.4).
+    """Round 11.4 (2026-05-14): o corpo da página deixou de ser
+    populado pelo app. O texto integral vive na propriedade ``Texto``
+    (até ~199.000 chars em até 100 itens ``rich_text``, suficiente
+    para 99,9% das publicações). Esta função sobreviveu apenas para
+    preservar a interface dos callers — devolve ``children`` e
+    ``callouts`` vazios e expõe ``texto_pre`` (pré-processamento
+    HTML) usado tanto pela propriedade ``Texto`` quanto pela chave
+    canônica do dedup.
 
-    Retorna:
-
-    - ``children``: lista pronta de blocos (heading_2 wrappers + filtrado/
-      truncado + callout opcional + observações).
-    - ``texto_pre``: texto após pré-processamento HTML — útil pra dedup
-      (chave canônica usa este string) e pra inline "Texto" property.
-    - ``callouts``: blocos callout que foram anexados (geralmente 0 ou 1).
-      Exposto separadamente em ``_meta`` pra debug.
+    O parâmetro ``tipo_documento_canonico`` continua na assinatura
+    apenas para compatibilidade com chamadas existentes — o filtro
+    de Pauta TJDFT/Ata "57" só era útil para escolher o que ia para
+    os blocos do corpo.
     """
+    del tipo_documento_canonico  # parâmetro mantido só por compat
     texto_bruto = publicacao.get("texto")
-    tribunal = publicacao.get("siglaTribunal") or ""
-    hash_djen = publicacao.get("hash") or ""
-    # Round 4.5 frente 2 — passa tipoDocumento bruto e CNJ pro filtro de
-    # Ata TJDFT tipo "57" (que vira "Outros" canônico, então o filtro
-    # precisa do bruto).
-    tipo_documento_bruto = publicacao.get("tipoDocumento")
-    cnj_escritorio = (
-        publicacao.get("numeroprocessocommascara")
-        or publicacao.get("numero_processo")
-        or None
-    )
-
     texto_pre = preprocessar_texto_djen(texto_bruto)
-    texto_corpo, callouts = aplicar_caso_15(
-        tribunal=tribunal,
-        tipo_documento=tipo_documento_canonico,
-        texto=texto_pre,
-        hash_djen=hash_djen,
-        tipo_documento_bruto=tipo_documento_bruto,
-        cnj_escritorio=cnj_escritorio,
-    )
-
-    blocos_texto = quebrar_em_blocos(texto_corpo) if texto_corpo else []
-    if not blocos_texto:
-        blocos_texto = [_paragraph_block("(texto vazio)")]
-
-    children: list[dict[str, Any]] = [_heading2_block("Texto da publicação")]
-    children.extend(blocos_texto)
-    children.extend(callouts)
-
-    obs_pre = preprocessar_texto_djen(publicacao.get("observacoes"))
-    if obs_pre:
-        children.append(_heading2_block("Observações"))
-        children.extend(quebrar_em_blocos(obs_pre))
-
-    return children, texto_pre, callouts
+    return [], texto_pre, []
 
 
 # ---------------------------------------------------------------------------

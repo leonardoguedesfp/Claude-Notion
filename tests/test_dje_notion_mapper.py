@@ -309,8 +309,10 @@ def test_payload_happy_path_18_propriedades(dje_conn, cache_conn) -> None:
     assert nomes == ["Ricardo (15523/DF)"]
     # Status sempre "Nova"
     assert props["Status"]["select"]["name"] == "Nova"
-    # Children não-vazio
-    assert len(payload["children"]) > 0
+    # Round 11.4 (2026-05-14): corpo da página é mantido vazio.
+    # O texto integral vive na propriedade Texto (até 199k chars em
+    # múltiplos itens rich_text).
+    assert payload["children"] == []
 
 
 def test_payload_processo_nao_cadastrado_marca_alerta(
@@ -401,6 +403,9 @@ def test_payload_texto_grande_vira_multiplos_itens_rich_text(
     na propriedade 'Texto' (cada item ≤ 1990 chars, total reconstrói o
     texto original). Antes: 1 item truncado em 2000 com marcador
     '[…]'. Agora: até 100 itens × 1990 = ~199k chars suportados.
+
+    Round 11.4 — corpo da página fica vazio; o texto vive só na
+    propriedade.
     """
     texto_grande = "X" * 5000
     pub = _publicacao_basica(texto=texto_grande)
@@ -417,9 +422,8 @@ def test_payload_texto_grande_vira_multiplos_itens_rich_text(
     # de truncamento — cabe nos 199k chars).
     reconstruido = "".join(it["text"]["content"] for it in rich_text)
     assert reconstruido == texto_grande
-    # Corpo da página continua com todo o texto em múltiplos blocks.
-    paragraphs = [b for b in payload["children"] if b["type"] == "paragraph"]
-    assert len(paragraphs) >= 3
+    # Round 11.4: corpo permanece vazio.
+    assert payload["children"] == []
 
 
 def test_payload_status_sempre_nova(dje_conn, cache_conn) -> None:
