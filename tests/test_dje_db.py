@@ -521,6 +521,55 @@ def test_F5_reset_failed_attempts_volta_pra_fila(db_path: Path) -> None:
         conn.close()
 
 
+def test_R12_rollback_failure_attempts_decrementa_e_floor_zero(
+    db_path: Path,
+) -> None:
+    """``rollback_notion_failure_attempts`` decrementa ``notion_attempts``
+    em 1 e limpa ``notion_last_error`` pra cada djen_id da lista. Faz
+    floor em 0 (não desce abaixo)."""
+    conn = dje_db.get_connection(db_path)
+    try:
+        for i in (1, 2, 3):
+            dje_db.insert_publicacao(conn, **_insert_kwargs(djen_id=i))
+        # pub 1: 2 falhas; pub 2: 1 falha; pub 3: 0 falhas (floor test).
+        for err in ("E1", "E2"):
+            dje_db.mark_publicacao_notion_failure(conn, 1, err)
+        dje_db.mark_publicacao_notion_failure(conn, 2, "E1")
+        affected = dje_db.rollback_notion_failure_attempts(conn, [1, 2, 3])
+        assert affected == 3
+        rows = {
+            r["djen_id"]: dict(r) for r in conn.execute(
+                "SELECT djen_id, notion_attempts, notion_last_error "
+                "FROM publicacoes WHERE djen_id IN (1, 2, 3)",
+            )
+        }
+        assert rows[1]["notion_attempts"] == 1
+        assert rows[2]["notion_attempts"] == 0
+        assert rows[3]["notion_attempts"] == 0  # floor
+        assert rows[1]["notion_last_error"] is None
+        assert rows[2]["notion_last_error"] is None
+    finally:
+        conn.close()
+
+
+def test_R12_rollback_failure_attempts_lista_vazia_noop(
+    db_path: Path,
+) -> None:
+    """Chamar com lista vazia não toca no banco e retorna 0."""
+    conn = dje_db.get_connection(db_path)
+    try:
+        dje_db.insert_publicacao(conn, **_insert_kwargs(djen_id=1))
+        dje_db.mark_publicacao_notion_failure(conn, 1, "E1")
+        affected = dje_db.rollback_notion_failure_attempts(conn, [])
+        assert affected == 0
+        row = conn.execute(
+            "SELECT notion_attempts FROM publicacoes WHERE djen_id=1",
+        ).fetchone()
+        assert row["notion_attempts"] == 1  # inalterado
+    finally:
+        conn.close()
+
+
 def test_F5_count_sequencial_titulo(db_path: Path) -> None:
     """``count_sequencial_titulo`` calcula N+1 contando pubs já enviadas
     com mesma combinação tribunal+data."""

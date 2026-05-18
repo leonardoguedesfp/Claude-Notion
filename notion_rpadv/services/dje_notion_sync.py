@@ -76,6 +76,21 @@ class NotionSyncOutcome:
     duplicates_supprimidas: int = 0  # publicações detectadas como duplicatas (sem nova página)
     canonicas_atualizadas: int = 0   # canônicas que receberam flush de pendentes
     canonicas_404: int = 0           # canônicas deletadas manualmente do Notion (D-8)
+    # Round 12 (2026-05-18) — fast-abort em erro de schema repetido.
+    # Quando ``SCHEMA_ABORT_THRESHOLD`` chamadas consecutivas falham com
+    # o mesmo HTTP 400 (ex.: "X is not a property that exists"), o loop
+    # aborta o restante das pendentes pra não queimar API e attempts em
+    # erro de configuração. As publicações que dispararam o padrão têm
+    # ``notion_attempts`` decrementado de volta (não é culpa delas).
+    schema_error_aborted: bool = False
+    schema_error_message: str = ""
+    aborted_remaining: int = 0
+
+
+# Round 12: depois de N falhas consecutivas com o mesmo HTTP 400, assume
+# erro determinístico (schema/payload) e aborta o restante. 3 é
+# suficiente pra não falsar em "azar" e mantém o desperdício baixo.
+SCHEMA_ABORT_THRESHOLD: int = 3
 
 
 def _sleep_ms(ms: int) -> None:
@@ -199,6 +214,13 @@ def sincronizar_pendentes(
     if on_log is not None:
         on_log(f"Notion: iniciando envio de {total} publicação(ões)...")
 
+    # Round 12 (2026-05-18) — fast-abort: rastreia chamadas API consecutivas
+    # que falharam com o MESMO HTTP 400. Após ``SCHEMA_ABORT_THRESHOLD``
+    # idênticas, assume erro determinístico (configuração/schema) e
+    # aborta o restante. Reset em sucesso ou erro diferente.
+    schema_signature: str | None = None
+    schema_failure_ids: list[int] = []
+
     first_request = True
     for idx, pub in enumerate(pendentes, start=1):
         if is_cancelled is not None and is_cancelled():
@@ -281,6 +303,9 @@ def sincronizar_pendentes(
                     dje_conn, djen_id=djen_id, chave=destino.chave,
                 )
             outcome.sent += 1
+            # Round 12: reset da janela de fast-abort em qualquer sucesso.
+            schema_signature = None
+            schema_failure_ids = []
             if on_log is not None:
                 titulo = payload["_meta"]["titulo"]
                 on_log(f"Notion: ✓ {titulo} → {page_id[:8]}…")
@@ -295,6 +320,54 @@ def sincronizar_pendentes(
             if on_log is not None:
                 on_log(f"Notion: ⚠ token Notion inválido — abortando: {exc}")
             break
+        except NotionAPIError as exc:
+            outcome.failed += 1
+            err_msg = f"{type(exc).__name__}: {exc}"
+            dje_db.mark_publicacao_notion_failure(dje_conn, djen_id, err_msg)
+            if len(outcome.errors_sample) < 5:
+                outcome.errors_sample.append(err_msg)
+            if on_log is not None:
+                on_log(f"Notion: ⚠ falha em djen_id={djen_id}: {err_msg}")
+            # Round 12: fast-abort em HTTP 400 repetido (erro determinístico
+            # — schema/payload). 429/503/500 ficam de fora porque são
+            # transient e já têm retry próprio.
+            if exc.status_code == 400:
+                if schema_signature is None or schema_signature == exc.message:
+                    schema_signature = exc.message
+                    schema_failure_ids.append(djen_id)
+                    if len(schema_failure_ids) >= SCHEMA_ABORT_THRESHOLD:
+                        rolled = dje_db.rollback_notion_failure_attempts(
+                            dje_conn, schema_failure_ids,
+                        )
+                        # As N falhas que dispararam o padrão são revertidas
+                        # — não eram culpa das publicações.
+                        outcome.failed -= rolled
+                        outcome.schema_error_aborted = True
+                        outcome.schema_error_message = exc.message
+                        outcome.aborted_remaining = total - idx
+                        if on_log is not None:
+                            on_log(
+                                f"Notion: ⚠ {SCHEMA_ABORT_THRESHOLD} falhas "
+                                f"consecutivas com a mesma mensagem "
+                                f"('{exc.message}'). Provável erro de "
+                                f"configuração no schema da database — "
+                                f"abortando envio das "
+                                f"{outcome.aborted_remaining} restantes. "
+                                f"Tentativas das {rolled} já testadas foram "
+                                f"revertidas; corrija no Notion e rode "
+                                f"novamente.",
+                            )
+                        if on_progress is not None:
+                            on_progress(idx, total)
+                        break
+                else:
+                    # 400 com mensagem diferente — recomeça janela do zero.
+                    schema_signature = exc.message
+                    schema_failure_ids = [djen_id]
+            else:
+                # 429/503/500/etc — transient, reseta janela.
+                schema_signature = None
+                schema_failure_ids = []
         except Exception as exc:  # noqa: BLE001
             outcome.failed += 1
             err_msg = f"{type(exc).__name__}: {exc}"
@@ -303,6 +376,9 @@ def sincronizar_pendentes(
                 outcome.errors_sample.append(err_msg)
             if on_log is not None:
                 on_log(f"Notion: ⚠ falha em djen_id={djen_id}: {err_msg}")
+            # Erro não-API (sqlite, mapper, etc) — não é padrão de schema.
+            schema_signature = None
+            schema_failure_ids = []
 
         if on_progress is not None:
             on_progress(idx, total)
@@ -340,6 +416,10 @@ def sincronizar_pendentes(
             f"{outcome.failed} falharam",
             f"{outcome.stuck_after} presas",
         ]
+        if outcome.schema_error_aborted:
+            partes_resumo.append(
+                f"{outcome.aborted_remaining} abortadas por erro de schema",
+            )
         on_log(
             f"Notion: envio concluído — {', '.join(partes_resumo)} "
             f"(em {outcome.elapsed_seconds:.1f}s)",

@@ -622,6 +622,32 @@ def reset_notion_failed_attempts(conn: sqlite3.Connection) -> int:
     return affected
 
 
+def rollback_notion_failure_attempts(
+    conn: sqlite3.Connection,
+    djen_ids: list[int],
+) -> int:
+    """Decrementa ``notion_attempts`` em 1 e limpa ``notion_last_error``
+    para as publicações listadas. Usado quando o sync detecta padrão de
+    erro de schema (fast-abort) — as falhas foram causadas por
+    configuração ruim, não pela publicação em si, então não devem
+    queimar tentativas.
+
+    Floor em 0 (nunca decrementa abaixo). Retorna número de linhas
+    afetadas."""
+    if not djen_ids:
+        return 0
+    placeholders = ",".join("?" * len(djen_ids))
+    cur = conn.execute(
+        f"UPDATE publicacoes SET "
+        f"notion_attempts = MAX(notion_attempts - 1, 0), "
+        f"notion_last_error = NULL "
+        f"WHERE djen_id IN ({placeholders})",
+        djen_ids,
+    )
+    conn.commit()
+    return cur.rowcount
+
+
 def count_sequencial_titulo(
     conn: sqlite3.Connection,
     sigla_tribunal: str,

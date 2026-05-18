@@ -236,6 +236,15 @@ class WorkerOutcome:
     notion_failed: int = 0
     notion_stuck_after: int = 0
     notion_skipped: bool = False  # True = sync nem foi tentada (transient)
+    # Round 12 (2026-05-18) — fast-abort: True quando o sync detectou
+    # 3+ falhas idênticas (HTTP 400) e abortou o restante. UI usa pra
+    # surface banner amarelo com mensagem acionável + total abortado.
+    notion_schema_aborted: bool = False
+    notion_schema_error_message: str = ""
+    notion_aborted_remaining: int = 0
+    # Round 12 — total de publicações que a sync tentou processar nesta
+    # execução. Banner usa pra detectar falha catastrófica (failed ≥ sent).
+    notion_total: int = 0
 
 
 class _DJEWorker(QObject):
@@ -757,6 +766,15 @@ class _DJEWorker(QObject):
         outcome.notion_failed = sync_outcome.failed
         outcome.notion_stuck_after = sync_outcome.stuck_after
         outcome.notion_skipped = False
+        outcome.notion_schema_aborted = sync_outcome.schema_error_aborted
+        outcome.notion_schema_error_message = sync_outcome.schema_error_message
+        outcome.notion_aborted_remaining = sync_outcome.aborted_remaining
+        outcome.notion_total = (
+            sync_outcome.sent
+            + sync_outcome.failed
+            + sync_outcome.duplicates_supprimidas
+            + sync_outcome.aborted_remaining
+        )
         return outcome
 
     def _emit_progress_notion(self, idx: int, total: int) -> None:
@@ -2255,7 +2273,33 @@ class LeitorDJEPage(QWidget):
                 )
 
         # Pós-Fase 5: bloco de status do envio Notion (se aplicável).
-        if not outcome.notion_skipped and (
+        # Round 12 (2026-05-18): banner ganha duas variações de aviso —
+        # (1) schema_aborted: 3+ falhas idênticas, sync abortou cedo;
+        # (2) falha catastrófica: ≥50% das tentativas falharam.
+        # Ambos pedem ação do usuário (corrigir Notion e rodar de novo).
+        notion_catastrophic = (
+            not outcome.notion_skipped
+            and outcome.notion_failed > 0
+            and outcome.notion_total > 0
+            and outcome.notion_failed >= outcome.notion_total / 2
+        )
+        if outcome.notion_schema_aborted:
+            partes.append(
+                f"⚠ Notion: padrão de erro detectado "
+                f"('{outcome.notion_schema_error_message}'). "
+                f"{outcome.notion_aborted_remaining} publicações ficaram "
+                f"sem enviar. Corrija a configuração no Notion e clique "
+                f"\"Baixar publicações novas\" de novo — a próxima execução "
+                f"retentará automaticamente",
+            )
+        elif notion_catastrophic:
+            partes.append(
+                f"⚠ Notion: {outcome.notion_failed}/{outcome.notion_total} "
+                f"falharam. Verifique o erro acima, corrija no Notion e "
+                f"clique \"Baixar publicações novas\" de novo — a próxima "
+                f"execução retentará as pendentes",
+            )
+        elif not outcome.notion_skipped and (
             outcome.notion_sent
             or outcome.notion_failed
             or outcome.notion_stuck_after
@@ -2274,6 +2318,7 @@ class LeitorDJEPage(QWidget):
         has_warning = (
             outcome.cancelled or outcome.errors or outcome.skipped_count
             or outcome.historico_locked or outcome.notion_stuck_after
+            or outcome.notion_schema_aborted or notion_catastrophic
         )
         if has_warning:
             self._set_warning(msg)
@@ -2388,7 +2433,15 @@ class LeitorDJEPage(QWidget):
             cache_conn=self._conn,
             on_log=self._append_log_line,
         )
-        if sync_outcome.failed == 0 and sync_outcome.stuck_after == 0:
+        if sync_outcome.schema_error_aborted:
+            self._set_warning(
+                f"⚠ Notion: padrão de erro detectado "
+                f"('{sync_outcome.schema_error_message}'). Reenvio abortado "
+                f"após {sync_outcome.aborted_remaining} publicações restantes. "
+                f"Corrija a configuração no Notion e clique em 'Tentar reenviar' "
+                f"de novo.",
+            )
+        elif sync_outcome.failed == 0 and sync_outcome.stuck_after == 0:
             self._set_info(
                 f"Notion: {sync_outcome.sent} publicações reenviadas com sucesso.",
             )

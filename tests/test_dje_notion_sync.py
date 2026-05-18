@@ -373,3 +373,186 @@ def test_sync_resposta_sem_page_id_eh_falha(dje_conn, cache_conn) -> None:
     )
     assert out.sent == 0
     assert out.failed == 1
+
+
+# ---------------------------------------------------------------------------
+# Round 12 (2026-05-18) — fast-abort em erro de schema repetido
+# ---------------------------------------------------------------------------
+
+
+def test_sync_fast_abort_em_400_identico_repetido(dje_conn, cache_conn) -> None:
+    """3 falhas consecutivas com a mesma mensagem HTTP 400 → aborta o
+    restante e reverte ``notion_attempts`` das 3 que dispararam."""
+    for i in range(1, 6):  # 5 publicações
+        _seed_publicacao(dje_conn, i)
+    client = _client_raising(
+        NotionAPIError(400, "Observações is not a property that exists."),
+    )
+    logs: list[str] = []
+    out = sincronizar_pendentes(
+        client=client,
+        dje_conn=dje_conn,
+        cache_conn=cache_conn,
+        sleep_ms=lambda _: None,
+        sleep=lambda _: None,
+        on_log=logs.append,
+    )
+    # Threshold é 3 publicações — cada uma faz 3 chamadas internas (retry
+    # do _create_page_with_retry), totalizando 9 chamadas. Fast-abort
+    # impede pubs 4 e 5 de serem tentadas.
+    assert client.create_page_in_data_source.call_count == 9
+    assert out.schema_error_aborted is True
+    assert "Observações" in out.schema_error_message
+    assert out.aborted_remaining == 2  # 5 total - 3 testadas = 2 restantes
+    # As 3 que dispararam têm attempts revertidos.
+    assert out.failed == 0
+    for djen_id in (1, 2, 3):
+        row = dje_conn.execute(
+            "SELECT notion_attempts, notion_last_error "
+            "FROM publicacoes WHERE djen_id=?",
+            (djen_id,),
+        ).fetchone()
+        assert row["notion_attempts"] == 0
+        assert row["notion_last_error"] is None
+    # As 2 restantes nunca foram tentadas.
+    for djen_id in (4, 5):
+        row = dje_conn.execute(
+            "SELECT notion_attempts FROM publicacoes WHERE djen_id=?",
+            (djen_id,),
+        ).fetchone()
+        assert row["notion_attempts"] == 0
+    # Log com mensagem acionável.
+    assert any("configuração" in log.lower() or "schema" in log.lower()
+               for log in logs)
+
+
+def test_sync_fast_abort_nao_dispara_em_400_diferente(
+    dje_conn, cache_conn,
+) -> None:
+    """3 falhas consecutivas com mensagens HTTP 400 diferentes → NÃO
+    aborta. Cada uma reseta a janela de detecção."""
+    for i in range(1, 4):
+        _seed_publicacao(dje_conn, i)
+    client = MagicMock(spec=NotionClient)
+    # Cada pub falha 3× internamente (retry), depois propaga. Mensagens
+    # diferentes entre publicações.
+    client.create_page_in_data_source.side_effect = [
+        NotionAPIError(400, "Erro A"),
+        NotionAPIError(400, "Erro A"),
+        NotionAPIError(400, "Erro A"),
+        NotionAPIError(400, "Erro B"),
+        NotionAPIError(400, "Erro B"),
+        NotionAPIError(400, "Erro B"),
+        NotionAPIError(400, "Erro C"),
+        NotionAPIError(400, "Erro C"),
+        NotionAPIError(400, "Erro C"),
+    ]
+    out = sincronizar_pendentes(
+        client=client,
+        dje_conn=dje_conn,
+        cache_conn=cache_conn,
+        sleep_ms=lambda _: None,
+        sleep=lambda _: None,
+    )
+    assert out.schema_error_aborted is False
+    assert out.failed == 3  # todas falharam, mas sem abort
+    assert out.aborted_remaining == 0
+
+
+def test_sync_fast_abort_nao_dispara_em_429(dje_conn, cache_conn) -> None:
+    """429 não dispara fast-abort — é transient, tem seu próprio retry."""
+    for i in range(1, 6):
+        _seed_publicacao(dje_conn, i)
+    client = _client_raising(NotionRateLimitError(429, "rate limit"))
+    out = sincronizar_pendentes(
+        client=client,
+        dje_conn=dje_conn,
+        cache_conn=cache_conn,
+        sleep_ms=lambda _: None,
+        sleep=lambda _: None,
+    )
+    assert out.schema_error_aborted is False
+    # Todas as 5 foram tentadas (não houve abort).
+    assert out.failed == 5
+
+
+def test_sync_fast_abort_nao_dispara_em_500(dje_conn, cache_conn) -> None:
+    """HTTP 500 também é transient — não dispara fast-abort mesmo
+    repetido."""
+    for i in range(1, 6):
+        _seed_publicacao(dje_conn, i)
+    client = _client_raising(NotionAPIError(500, "internal error"))
+    out = sincronizar_pendentes(
+        client=client,
+        dje_conn=dje_conn,
+        cache_conn=cache_conn,
+        sleep_ms=lambda _: None,
+        sleep=lambda _: None,
+    )
+    assert out.schema_error_aborted is False
+    assert out.failed == 5
+
+
+def test_sync_fast_abort_reset_em_sucesso_intermediario(
+    dje_conn, cache_conn,
+) -> None:
+    """Sucesso no meio da janela reseta o contador: 2 falhas + sucesso +
+    2 falhas = nenhuma sequência de 3 consecutivas → sem abort."""
+    for i in range(1, 6):
+        _seed_publicacao(dje_conn, i)
+    client = MagicMock(spec=NotionClient)
+    # Cada pub tem 3 slots (retry interno). Layout:
+    # pub1: fail A × 3
+    # pub2: fail A × 3
+    # pub3: success
+    # pub4: fail A × 3
+    # pub5: fail A × 3
+    err_a = NotionAPIError(400, "Erro A")
+    client.create_page_in_data_source.side_effect = [
+        err_a, err_a, err_a,
+        err_a, err_a, err_a,
+        {"id": "ok-3"},
+        err_a, err_a, err_a,
+        err_a, err_a, err_a,
+    ]
+    out = sincronizar_pendentes(
+        client=client,
+        dje_conn=dje_conn,
+        cache_conn=cache_conn,
+        sleep_ms=lambda _: None,
+        sleep=lambda _: None,
+    )
+    # Pubs 1-2 falham com Erro A consecutivo → contador = 2 (não atinge 3)
+    # Pub 3 succeed → contador zera
+    # Pubs 4-5 falham com Erro A → contador volta a 2 (não atinge 3)
+    # Nenhum abort.
+    assert out.schema_error_aborted is False
+    assert out.sent == 1
+    assert out.failed == 4
+
+
+def test_sync_fast_abort_summary_log_inclui_abortadas(
+    dje_conn, cache_conn,
+) -> None:
+    """Log final menciona as publicações abortadas quando fast-abort
+    dispara."""
+    for i in range(1, 6):
+        _seed_publicacao(dje_conn, i)
+    client = _client_raising(
+        NotionAPIError(400, "Tipo X is not a property that exists."),
+    )
+    logs: list[str] = []
+    sincronizar_pendentes(
+        client=client,
+        dje_conn=dje_conn,
+        cache_conn=cache_conn,
+        sleep_ms=lambda _: None,
+        sleep=lambda _: None,
+        on_log=logs.append,
+    )
+    # Última linha do log é o resumo "envio concluído".
+    summary = next(
+        (log for log in logs if "envio concluído" in log), None,
+    )
+    assert summary is not None
+    assert "abortadas por erro de schema" in summary

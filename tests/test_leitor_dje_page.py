@@ -1594,3 +1594,89 @@ def test_F5_retry_zera_attempts_e_dispara_sync(tmp_path: Path) -> None:
         mock_sync.assert_called_once()
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Round 12 (2026-05-18) — banner do _on_finished com schema_aborted / catastrofe
+# ---------------------------------------------------------------------------
+
+
+def _make_worker_outcome(**overrides):
+    """Helper pra construir WorkerOutcome com defaults realísticos."""
+    from notion_rpadv.pages.leitor_dje import MODE_PADRAO, WorkerOutcome
+
+    base = dict(
+        excel_path=None, historico_path=None, historico_locked=False,
+        count_antes=100, novas_inseridas=50, mode=MODE_PADRAO,
+    )
+    base.update(overrides)
+    return WorkerOutcome(**base)
+
+
+def test_R12_banner_schema_aborted_dispara_warning_com_mensagem_acionavel(
+    tmp_path: Path,
+) -> None:
+    """``notion_schema_aborted=True`` → banner amarelo (_set_warning) com
+    texto que menciona o erro de schema E pede pra rodar de novo."""
+    page, conn = _make_page_with_dje_conn(tmp_path)
+    try:
+        outcome = _make_worker_outcome(
+            novas_inseridas=146,
+            notion_sent=0, notion_failed=0, notion_total=146,
+            notion_schema_aborted=True,
+            notion_schema_error_message="Observações is not a property that exists.",
+            notion_aborted_remaining=143,
+        )
+        page._on_finished(outcome)  # noqa: SLF001
+
+        banner_text = page._warning_lbl.text()  # noqa: SLF001
+        # Acionabilidade: menciona o erro + pede ação.
+        assert "Observações" in banner_text
+        assert "143" in banner_text
+        assert "Baixar publicações novas" in banner_text
+        # Estilo de warning (border-left com cor de warning) — basta
+        # verificar que tem "border-left" sem assumir cor exata.
+        style = page._warning_lbl.styleSheet()  # noqa: SLF001
+        assert "border-left" in style
+    finally:
+        conn.close()
+
+
+def test_R12_banner_falha_catastrofica_dispara_warning(tmp_path: Path) -> None:
+    """notion_failed ≥ 50% do total → banner warning acionável."""
+    page, conn = _make_page_with_dje_conn(tmp_path)
+    try:
+        outcome = _make_worker_outcome(
+            novas_inseridas=10,
+            notion_sent=2, notion_failed=8, notion_total=10,
+            notion_schema_aborted=False,
+        )
+        page._on_finished(outcome)  # noqa: SLF001
+
+        banner_text = page._warning_lbl.text()  # noqa: SLF001
+        assert "8/10" in banner_text
+        assert "Baixar publicações novas" in banner_text
+    finally:
+        conn.close()
+
+
+def test_R12_banner_falha_minoritaria_continua_info(tmp_path: Path) -> None:
+    """Poucas falhas relativas (< 50%) NÃO disparam warning catastrófico
+    — usa o banner de info regular com a linha de Notion."""
+    page, conn = _make_page_with_dje_conn(tmp_path)
+    try:
+        outcome = _make_worker_outcome(
+            novas_inseridas=100,
+            notion_sent=98, notion_failed=2, notion_total=100,
+            notion_schema_aborted=False,
+        )
+        page._on_finished(outcome)  # noqa: SLF001
+
+        banner_text = page._warning_lbl.text()  # noqa: SLF001
+        # Mensagem regular do envio Notion (não a catastrófica).
+        assert "98 enviadas, 2 falharam" in banner_text
+        # NÃO inclui a string acionável da catástrofe.
+        assert "8/10" not in banner_text  # sanity
+        assert "Baixar publicações novas" not in banner_text
+    finally:
+        conn.close()
